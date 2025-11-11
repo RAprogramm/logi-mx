@@ -148,6 +148,7 @@ async fn main() -> Result<()> {
     {
         info!("Initializing system tray...");
         use std::sync::Arc;
+
         use crate::tray::spawn_tray;
 
         match spawn_tray() {

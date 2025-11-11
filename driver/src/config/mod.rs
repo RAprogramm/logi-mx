@@ -71,8 +71,9 @@ pub fn save_config(config: &Config) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::env;
+
+    use super::*;
 
     #[test]
     fn test_default_config() {

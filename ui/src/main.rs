@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-use gtk4::{glib, prelude::*, Application, Box, Button, Label, Orientation, Scale, Switch};
+use gtk4::{Application, Box, Button, Label, Orientation, Scale, Switch, glib, prelude::*};
 use libadwaita::{
-    self as adw, prelude::*, ActionRow, ApplicationWindow, HeaderBar, PreferencesGroup,
-    PreferencesPage
+    self as adw, ActionRow, ApplicationWindow, HeaderBar, PreferencesGroup, PreferencesPage,
+    prelude::*
 };
 use logi_mx_driver::prelude::*;
 
@@ -205,9 +205,15 @@ fn create_smartshift_group() -> PreferencesGroup {
         let threshold = ts.value() as u8;
 
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
-            let config = SmartShiftConfig { enabled, threshold };
+            let config = SmartShiftConfig {
+                enabled,
+                threshold
+            };
             if device.set_smartshift(config).is_ok() {
-                println!("SmartShift configured: enabled={}, threshold={}", enabled, threshold);
+                println!(
+                    "SmartShift configured: enabled={}, threshold={}",
+                    enabled, threshold
+                );
             }
         }
     });
@@ -258,9 +264,15 @@ fn create_scroll_group() -> PreferencesGroup {
         let inverted = is.is_active();
 
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
-            let config = HiResScrollConfig { enabled, inverted };
+            let config = HiResScrollConfig {
+                enabled,
+                inverted
+            };
             if device.set_hires_scroll(config).is_ok() {
-                println!("Scroll configured: hi-res={}, inverted={}", enabled, inverted);
+                println!(
+                    "Scroll configured: hi-res={}, inverted={}",
+                    enabled, inverted
+                );
             }
         }
     });
