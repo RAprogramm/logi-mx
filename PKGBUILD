@@ -15,12 +15,12 @@ build() {
     cd "$pkgname-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
-    cargo build --release --locked
+    cargo build --release --locked --all-features
 }
 
 check() {
     cd "$pkgname-$pkgver"
-    cargo test --release --locked
+    cargo test --release --locked --all-features
 }
 
 package() {
@@ -39,7 +39,6 @@ package() {
 
     # Install documentation
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-    install -Dm644 ARCHITECTURE.md "$pkgdir/usr/share/doc/$pkgname/ARCHITECTURE.md"
 
     # Install license
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
