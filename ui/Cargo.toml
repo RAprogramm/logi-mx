@@ -1,0 +1,18 @@
+[package]
+name = "logi-mx-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+logi-mx-driver = { path = "../driver" }
+masterror.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true

@@ -1,0 +1,46 @@
+# Maintainer: RAprogramm <andrey.rozanov.vl@gmail.com>
+pkgname=logi-mx
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Logitech MX Master 3S configuration tool and daemon with system tray"
+arch=('x86_64')
+url="https://github.com/RAprogramm/logi-mx"
+license=('MIT')
+depends=('hidapi' 'systemd' 'gtk4' 'libadwaita')
+makedepends=('cargo' 'rust>=1.91')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/RAprogramm/logi-mx/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --release --locked
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    # Install binaries
+    install -Dm755 target/release/logi-mx "$pkgdir/usr/bin/logi-mx"
+    install -Dm755 target/release/logi-mx-daemon "$pkgdir/usr/bin/logi-mx-daemon"
+    install -Dm755 target/release/logi-mx-ui "$pkgdir/usr/bin/logi-mx-ui"
+
+    # Install udev rules
+    install -Dm644 90-logi-mx.rules "$pkgdir/usr/lib/udev/rules.d/90-logi-mx.rules"
+
+    # Install systemd user service
+    install -Dm644 logi-mx-daemon.service "$pkgdir/usr/lib/systemd/user/logi-mx-daemon.service"
+
+    # Install documentation
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 ARCHITECTURE.md "$pkgdir/usr/share/doc/$pkgname/ARCHITECTURE.md"
+
+    # Install license
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

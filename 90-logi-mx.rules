@@ -1,0 +1,14 @@
+# Logitech MX Mouse HID++ access rules
+# Copy to /etc/udev/rules.d/ and reload: sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# Logitech Bolt Receiver
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c548", MODE="0666", TAG+="uaccess"
+
+# Logitech MX Master 3S USB
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="4082", MODE="0666", TAG+="uaccess"
+
+# Logitech MX Master 3S Bluetooth
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="b034", MODE="0666", TAG+="uaccess"
+
+# Logitech Unifying Receiver (for compatibility)
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c52b", MODE="0666", TAG+="uaccess"
