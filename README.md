@@ -7,6 +7,7 @@
 
 **Blazing fast Logitech MX series mouse driver and configuration tool for Linux**
 
+
 Professional-grade, production-ready HID++ driver written in pure Rust with zero-cost abstractions.
 
 ## Features
