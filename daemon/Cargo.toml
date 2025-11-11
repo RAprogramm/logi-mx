@@ -20,4 +20,4 @@ tracing-subscriber.workspace = true
 serde.workspace = true
 toml.workspace = true
 udev.workspace = true
-ksni = { version = "0.2", optional = true }
+ksni = { version = "0.3", optional = true }
