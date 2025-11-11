@@ -99,6 +99,7 @@ impl DeviceManager {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn monitor_battery(&mut self) {
         loop {
             sleep(Duration::from_secs(300)).await;
@@ -159,8 +160,8 @@ async fn main() -> Result<()> {
                 tokio::spawn(async move {
                     loop {
                         sleep(Duration::from_secs(30)).await;
-                        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
-                            if let Ok(mut status) = tray_status_clone.lock() {
+                        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
+                            && let Ok(mut status) = tray_status_clone.lock() {
                                 status.connected = true;
                                 if let Ok(battery) = device.get_battery_info() {
                                     status.battery_level = battery.level;
@@ -175,7 +176,6 @@ async fn main() -> Result<()> {
                                 }
                                 debug!("Tray status auto-updated");
                             }
-                        }
                     }
                 });
             }
@@ -245,8 +245,8 @@ fn monitor_udev_events_sync(tx: mpsc::Sender<UdevEvent>) -> Result<()> {
 
     info!("Monitoring udev events for hidraw devices");
 
-    let mut iter = monitor.iter();
-    while let Some(event) = iter.next() {
+    let iter = monitor.iter();
+    for event in iter {
         let device_path = event
             .device()
             .devnode()
@@ -260,12 +260,11 @@ fn monitor_udev_events_sync(tx: mpsc::Sender<UdevEvent>) -> Result<()> {
                 _ => None
             };
 
-            if let Some(evt) = udev_event {
-                if tx.blocking_send(evt).is_err() {
+            if let Some(evt) = udev_event
+                && tx.blocking_send(evt).is_err() {
                     error!("Failed to send udev event");
                     break;
                 }
-            }
         }
     }
 

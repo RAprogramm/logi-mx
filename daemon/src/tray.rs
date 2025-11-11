@@ -208,7 +208,7 @@ impl Tray for LogiTrayIcon {
     }
 }
 
-pub fn spawn_tray() -> Result<Arc<Mutex<DeviceStatus>>, String> {
+pub fn spawn_tray() -> std::result::Result<Arc<Mutex<DeviceStatus>>, String> {
     let tray_icon = LogiTrayIcon::new();
     let status_handle = tray_icon.get_status_handle();
 

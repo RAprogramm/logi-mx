@@ -95,11 +95,10 @@ fn create_battery_group() -> PreferencesGroup {
     let refresh_btn = Button::with_label("Refresh");
     let br = battery_row.clone();
     refresh_btn.connect_clicked(move |_| {
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
-            if let Ok(battery) = device.get_battery_info() {
+        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
+            && let Ok(battery) = device.get_battery_info() {
                 br.set_subtitle(&format!("{}% - {:?}", battery.level, battery.status));
             }
-        }
     });
 
     let button_row = ActionRow::new();
@@ -142,11 +141,10 @@ fn create_dpi_group() -> PreferencesGroup {
     let sc = scale.clone();
     apply_btn.connect_clicked(move |_| {
         let dpi = sc.value() as u16;
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
-            if device.set_dpi(dpi).is_ok() {
+        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
+            && device.set_dpi(dpi).is_ok() {
                 println!("DPI set to {}", dpi);
             }
-        }
     });
 
     let button_row = ActionRow::new();

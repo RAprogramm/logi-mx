@@ -43,6 +43,7 @@ pub enum ButtonId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum Action {
     Keypress { keys: Vec<String> },
     Gestures { gestures: Vec<Gesture> },
