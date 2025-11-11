@@ -51,16 +51,18 @@ impl HidppDevice {
 
         let mut target_path = None;
         for device_info in api.device_list() {
-            if device_info.vendor_id() == vendor_id && device_info.product_id() == product_id
-                && (device_info.interface_number() == 2 || device_info.interface_number() == -1) {
-                    target_path = Some(device_info.path().to_owned());
-                    debug!(
-                        "Found HID++ device at interface {}: {:?}",
-                        device_info.interface_number(),
-                        device_info.path()
-                    );
-                    break;
-                }
+            if device_info.vendor_id() == vendor_id
+                && device_info.product_id() == product_id
+                && (device_info.interface_number() == 2 || device_info.interface_number() == -1)
+            {
+                target_path = Some(device_info.path().to_owned());
+                debug!(
+                    "Found HID++ device at interface {}: {:?}",
+                    device_info.interface_number(),
+                    device_info.path()
+                );
+                break;
+            }
         }
 
         let path = target_path
@@ -121,14 +123,15 @@ impl HidppDevice {
             match self.send_packet_with_response(&packet) {
                 Ok(response) => {
                     if response.is_error()
-                        && let Some(error_code) = response.get_error_code() {
-                            if error_code == ERROR_BUSY && attempt < RETRY_COUNT - 1 {
-                                warn!("Device busy, retrying... (attempt {})", attempt + 1);
-                                std::thread::sleep(Duration::from_millis(50));
-                                continue;
-                            }
-                            return Err(self.map_hidpp_error(error_code));
+                        && let Some(error_code) = response.get_error_code()
+                    {
+                        if error_code == ERROR_BUSY && attempt < RETRY_COUNT - 1 {
+                            warn!("Device busy, retrying... (attempt {})", attempt + 1);
+                            std::thread::sleep(Duration::from_millis(50));
+                            continue;
                         }
+                        return Err(self.map_hidpp_error(error_code));
+                    }
                     trace!("Received response: {:?}", response);
                     return Ok(response);
                 }

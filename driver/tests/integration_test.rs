@@ -76,11 +76,13 @@ fn test_action_keypress() {
 
 #[test]
 fn test_gesture_direction() {
-    let directions = [GestureDirection::Up,
+    let directions = [
+        GestureDirection::Up,
         GestureDirection::Down,
         GestureDirection::Left,
         GestureDirection::Right,
-        GestureDirection::None];
+        GestureDirection::None
+    ];
 
     assert_eq!(directions.len(), 5);
 }

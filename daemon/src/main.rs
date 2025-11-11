@@ -161,21 +161,22 @@ async fn main() -> Result<()> {
                     loop {
                         sleep(Duration::from_secs(30)).await;
                         if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
-                            && let Ok(mut status) = tray_status_clone.lock() {
-                                status.connected = true;
-                                if let Ok(battery) = device.get_battery_info() {
-                                    status.battery_level = battery.level;
-                                    status.battery_status = format!("{:?}", battery.status);
-                                }
-                                if let Ok(dpi) = device.get_dpi() {
-                                    status.dpi = dpi;
-                                }
-                                if let Ok(ss) = device.get_smartshift() {
-                                    status.smartshift = ss.enabled;
-                                    status.smartshift_threshold = ss.threshold;
-                                }
-                                debug!("Tray status auto-updated");
+                            && let Ok(mut status) = tray_status_clone.lock()
+                        {
+                            status.connected = true;
+                            if let Ok(battery) = device.get_battery_info() {
+                                status.battery_level = battery.level;
+                                status.battery_status = format!("{:?}", battery.status);
                             }
+                            if let Ok(dpi) = device.get_dpi() {
+                                status.dpi = dpi;
+                            }
+                            if let Ok(ss) = device.get_smartshift() {
+                                status.smartshift = ss.enabled;
+                                status.smartshift_threshold = ss.threshold;
+                            }
+                            debug!("Tray status auto-updated");
+                        }
                     }
                 });
             }
@@ -261,10 +262,11 @@ fn monitor_udev_events_sync(tx: mpsc::Sender<UdevEvent>) -> Result<()> {
             };
 
             if let Some(evt) = udev_event
-                && tx.blocking_send(evt).is_err() {
-                    error!("Failed to send udev event");
-                    break;
-                }
+                && tx.blocking_send(evt).is_err()
+            {
+                error!("Failed to send udev event");
+                break;
+            }
         }
     }
 
