@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+  build-release:
+    name: Build Release
+    needs: create-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev
+
+      - name: Build release
+        run: cargo build --release --all-features --target ${{ matrix.target }}
+
+      - name: Strip binaries
+        run: |
+          strip target/${{ matrix.target }}/release/logi-mx
+          strip target/${{ matrix.target }}/release/logi-mx-daemon
+          strip target/${{ matrix.target }}/release/logi-mx-ui
+
+      - name: Create archive
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/logi-mx release/
+          cp target/${{ matrix.target }}/release/logi-mx-daemon release/
+          cp target/${{ matrix.target }}/release/logi-mx-ui release/
+          cp 90-logi-mx.rules release/
+          cp logi-mx-daemon.service release/
+          cp README.md release/
+          cp LICENSE release/
+          tar -czf logi-mx-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz -C release .
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./logi-mx-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
+          asset_name: logi-mx-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
+          asset_content_type: application/gzip
+
+  publish-aur:
+    name: Publish to AUR
+    needs: [create-release, build-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate .SRCINFO
+        run: |
+          docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
+            pacman -Sy --noconfirm base-devel &&
+            cd /pkg &&
+            makepkg --printsrcinfo > .SRCINFO
+          "
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v2.7.0
+        with:
+          pkgname: logi-mx
+          pkgbuild: ./PKGBUILD
+          commit_username: RAprogramm
+          commit_email: andrey.rozanov.vl@gmail.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to version ${{ needs.create-release.outputs.version }}"

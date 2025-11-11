@@ -1,5 +1,10 @@
 # logi-mx
 
+[![CI](https://github.com/RAprogramm/logi-mx/workflows/CI/badge.svg)](https://github.com/RAprogramm/logi-mx/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/RAprogramm/logi-mx/branch/main/graph/badge.svg)](https://codecov.io/gh/RAprogramm/logi-mx)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org)
+
 **Blazing fast Logitech MX series mouse driver and configuration tool for Linux**
 
 Professional-grade, production-ready HID++ driver written in pure Rust with zero-cost abstractions.
