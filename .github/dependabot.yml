@@ -4,20 +4,38 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "RAprogramm"
+      day: "monday"
+      time: "03:00"
+    open-pull-requests-limit: 3
+    groups:
+      rust-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     labels:
       - "dependencies"
       - "rust"
+      - "automerge"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
-    reviewers:
-      - "RAprogramm"
+      day: "monday"
+      time: "03:00"
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     labels:
       - "dependencies"
       - "ci"
+      - "automerge"
+    commit-message:
+      prefix: "ci"
