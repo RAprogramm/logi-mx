@@ -11,7 +11,7 @@ env:
 jobs:
   create-release:
     name: Create Release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
@@ -34,7 +34,7 @@ jobs:
   build-release:
     name: Build Release
     needs: create-release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         target:
@@ -86,7 +86,7 @@ jobs:
   publish-aur:
     name: Publish to AUR
     needs: [create-release, build-release]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 

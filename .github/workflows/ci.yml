@@ -13,7 +13,7 @@ env:
 jobs:
   format:
     name: Format
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +27,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -45,11 +45,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features --workspace --exclude ui --exclude daemon -- -D warnings
+        run: cargo clippy --all-targets --all-features --workspace -- -D warnings
 
   test:
     name: Test
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -65,11 +65,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        run: cargo test --all-features --workspace --exclude ui --exclude daemon
+        run: cargo test --all-features --workspace
 
   coverage:
     name: Coverage
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -88,7 +88,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Generate coverage
-        run: cargo tarpaulin --all-features --workspace --exclude ui --exclude daemon --timeout 300 --out Xml
+        run: cargo tarpaulin --all-features --workspace --timeout 300 --out Xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -99,7 +99,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         target:
@@ -121,7 +121,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release
-        run: cargo build --release --all-features --workspace --exclude ui --exclude daemon --target ${{ matrix.target }}
+        run: cargo build --release --all-features --workspace --target ${{ matrix.target }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -134,7 +134,7 @@ jobs:
 
   audit:
     name: Security Audit
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -149,7 +149,7 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -165,7 +165,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build documentation
-        run: cargo doc --no-deps --all-features --workspace --exclude ui --exclude daemon --document-private-items
+        run: cargo doc --no-deps --all-features --workspace --document-private-items
 
       - name: Upload documentation
         uses: actions/upload-artifact@v4
