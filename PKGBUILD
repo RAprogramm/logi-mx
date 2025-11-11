@@ -9,7 +9,7 @@ license=('MIT')
 depends=('hidapi' 'systemd' 'gtk4' 'libadwaita')
 makedepends=('cargo' 'rust>=1.91')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/RAprogramm/logi-mx/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('a67662d5e208853e088b873efe2be4e59004972e5d29b258701c0f283d3d1428')
 
 build() {
     cd "$pkgname-$pkgver"
