@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -59,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -79,7 +79,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
@@ -115,7 +115,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -159,7 +159,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2

@@ -105,12 +105,12 @@ systemctl --user enable --now logi-mx-daemon
 
 **Arch Linux:**
 ```bash
-sudo pacman -S rust hidapi systemd gtk4 libadwaita
+sudo pacman -S rust hidapi systemd gtk4 libadwaita dbus
 ```
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt install cargo libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev
+sudo apt install cargo libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
 ```
 
 ### Hyprland Configuration

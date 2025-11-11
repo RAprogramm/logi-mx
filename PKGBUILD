@@ -6,7 +6,7 @@ pkgdesc="Logitech MX Master 3S configuration tool and daemon with system tray"
 arch=('x86_64')
 url="https://github.com/RAprogramm/logi-mx"
 license=('MIT')
-depends=('hidapi' 'systemd' 'gtk4' 'libadwaita')
+depends=('hidapi' 'systemd' 'gtk4' 'libadwaita' 'dbus')
 makedepends=('cargo' 'rust>=1.91')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/RAprogramm/logi-mx/archive/v$pkgver.tar.gz")
 sha256sums=('a67662d5e208853e088b873efe2be4e59004972e5d29b258701c0f283d3d1428')
