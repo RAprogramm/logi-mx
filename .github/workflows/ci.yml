@@ -13,7 +13,7 @@ env:
 jobs:
   format:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +27,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -49,7 +49,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -59,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -69,7 +69,7 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -79,7 +79,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
@@ -99,7 +99,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         target:
@@ -115,7 +115,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -134,7 +134,7 @@ jobs:
 
   audit:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -149,7 +149,7 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -159,7 +159,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
