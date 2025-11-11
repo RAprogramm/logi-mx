@@ -42,7 +42,16 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+          sudo apt-get install -y libhidapi-dev libudev-dev pkg-config
+          # Check if libadwaita 1.6+ is available
+          if ! pkg-config --exists 'libadwaita-1 >= 1.6' 2>/dev/null; then
+            echo "libadwaita 1.6+ not available, trying to add repository"
+            sudo add-apt-repository -y ppa:ubuntu-desktop/ubuntu-make || true
+            sudo apt-get update || true
+          fi
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          echo "Installed versions:"
+          pkg-config --modversion libadwaita-1 gtk4 || echo "pkg-config check failed"
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -62,7 +71,16 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+          sudo apt-get install -y libhidapi-dev libudev-dev pkg-config
+          # Check if libadwaita 1.6+ is available
+          if ! pkg-config --exists 'libadwaita-1 >= 1.6' 2>/dev/null; then
+            echo "libadwaita 1.6+ not available, trying to add repository"
+            sudo add-apt-repository -y ppa:ubuntu-desktop/ubuntu-make || true
+            sudo apt-get update || true
+          fi
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          echo "Installed versions:"
+          pkg-config --modversion libadwaita-1 gtk4 || echo "pkg-config check failed"
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -82,7 +100,16 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+          sudo apt-get install -y libhidapi-dev libudev-dev pkg-config
+          # Check if libadwaita 1.6+ is available
+          if ! pkg-config --exists 'libadwaita-1 >= 1.6' 2>/dev/null; then
+            echo "libadwaita 1.6+ not available, trying to add repository"
+            sudo add-apt-repository -y ppa:ubuntu-desktop/ubuntu-make || true
+            sudo apt-get update || true
+          fi
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          echo "Installed versions:"
+          pkg-config --modversion libadwaita-1 gtk4 || echo "pkg-config check failed"
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
@@ -118,7 +145,16 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+          sudo apt-get install -y libhidapi-dev libudev-dev pkg-config
+          # Check if libadwaita 1.6+ is available
+          if ! pkg-config --exists 'libadwaita-1 >= 1.6' 2>/dev/null; then
+            echo "libadwaita 1.6+ not available, trying to add repository"
+            sudo add-apt-repository -y ppa:ubuntu-desktop/ubuntu-make || true
+            sudo apt-get update || true
+          fi
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          echo "Installed versions:"
+          pkg-config --modversion libadwaita-1 gtk4 || echo "pkg-config check failed"
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -182,7 +218,16 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+          sudo apt-get install -y libhidapi-dev libudev-dev pkg-config
+          # Check if libadwaita 1.6+ is available
+          if ! pkg-config --exists 'libadwaita-1 >= 1.6' 2>/dev/null; then
+            echo "libadwaita 1.6+ not available, trying to add repository"
+            sudo add-apt-repository -y ppa:ubuntu-desktop/ubuntu-make || true
+            sudo apt-get update || true
+          fi
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          echo "Installed versions:"
+          pkg-config --modversion libadwaita-1 gtk4 || echo "pkg-config check failed"
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -271,7 +316,16 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+          sudo apt-get install -y libhidapi-dev libudev-dev pkg-config
+          # Check if libadwaita 1.6+ is available
+          if ! pkg-config --exists 'libadwaita-1 >= 1.6' 2>/dev/null; then
+            echo "libadwaita 1.6+ not available, trying to add repository"
+            sudo add-apt-repository -y ppa:ubuntu-desktop/ubuntu-make || true
+            sudo apt-get update || true
+          fi
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev
+          echo "Installed versions:"
+          pkg-config --modversion libadwaita-1 gtk4 || echo "pkg-config check failed"
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
