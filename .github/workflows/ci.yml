@@ -34,6 +34,14 @@ jobs:
     container:
       image: archlinux:latest
     steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-pacman-
+
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
@@ -48,23 +56,70 @@ jobs:
         run: cargo clippy --all-targets --all-features --workspace -- -D warnings
 
   test:
-    name: Test
+    name: Test (${{ matrix.rust }}, ${{ matrix.features }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, beta, nightly]
+        features: ['--all-features', '--no-default-features']
     container:
       image: archlinux:latest
     steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-pacman-
+
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
+          pacman -S --noconfirm base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+          rustup default ${{ matrix.rust }}
 
       - uses: actions/checkout@v5
 
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
+      - name: Cache cargo binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-bin-nextest-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bin-nextest-
+            ${{ runner.os }}-cargo-bin-
 
-      - name: Run tests
-        run: cargo test --all-features --workspace
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust }}-${{ matrix.features }}
+
+      - name: Install cargo-nextest
+        run: |
+          if ! command -v cargo-nextest &> /dev/null; then
+            cargo install cargo-nextest --locked
+          fi
+
+      - name: Run tests with JUnit output
+        run: |
+          echo "::group::Running tests with nextest"
+          cargo nextest run ${{ matrix.features }} --workspace --no-fail-fast
+          echo "::endgroup::"
+
+          echo "::group::Generating JUnit report"
+          cargo nextest run ${{ matrix.features }} --workspace --no-fail-fast --message-format junit > junit.xml || true
+          echo "::endgroup::"
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./junit.xml
+          flags: tests-${{ matrix.rust }}
+          name: tests-${{ matrix.rust }}-${{ matrix.features }}
 
   coverage:
     name: Coverage
@@ -72,28 +127,61 @@ jobs:
     container:
       image: archlinux:latest
     steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-pacman-
+
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm base-devel rustup gtk4 libadwaita hidapi systemd dbus git
           rustup default stable
           rustup component add llvm-tools-preview
-          cargo install cargo-llvm-cov
 
       - uses: actions/checkout@v5
 
-      - name: Setup cache
+      - name: Cache cargo binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-bin-llvm-cov-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bin-llvm-cov-
+            ${{ runner.os }}-cargo-bin-
+
+      - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Generate coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - name: Install cargo-llvm-cov
+        run: |
+          if ! command -v cargo-llvm-cov &> /dev/null; then
+            cargo install cargo-llvm-cov --locked
+          fi
+
+      - name: Generate coverage report
+        run: |
+          echo "::group::Running cargo-llvm-cov"
+          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+          echo "::endgroup::"
+
+          echo "::group::Coverage summary"
+          cargo llvm-cov --all-features --workspace --summary-only
+          echo "::endgroup::"
 
       - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
           files: ./lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+          flags: coverage
+          name: rust-coverage
+          verbose: true
 
   build:
     name: Build
@@ -105,6 +193,14 @@ jobs:
         target:
           - x86_64-unknown-linux-gnu
     steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-pacman-
+
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
@@ -168,6 +264,14 @@ jobs:
     container:
       image: archlinux:latest
     steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-pacman-
+
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
@@ -255,6 +359,14 @@ jobs:
         target:
           - x86_64-unknown-linux-gnu
     steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-pacman-
+
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
