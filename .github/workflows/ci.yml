@@ -414,9 +414,11 @@ jobs:
       - name: Generate .SRCINFO
         run: |
           docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
-            pacman -Sy --noconfirm base-devel &&
+            pacman -Sy --noconfirm base-devel sudo &&
+            useradd -m builder &&
+            chown -R builder:builder /pkg &&
             cd /pkg &&
-            makepkg --printsrcinfo > .SRCINFO
+            sudo -u builder makepkg --printsrcinfo > .SRCINFO
           "
 
       - name: Publish to AUR

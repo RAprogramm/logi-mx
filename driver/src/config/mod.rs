@@ -168,11 +168,23 @@ mod tests {
 
     #[test]
     fn test_config_path_no_env() {
+        let orig_xdg = env::var("XDG_CONFIG_HOME").ok();
+        let orig_home = env::var("HOME").ok();
+
         unsafe {
             env::remove_var("XDG_CONFIG_HOME");
             env::remove_var("HOME");
         }
         let result = get_config_path();
         assert!(result.is_err());
+
+        unsafe {
+            if let Some(val) = orig_xdg {
+                env::set_var("XDG_CONFIG_HOME", val);
+            }
+            if let Some(val) = orig_home {
+                env::set_var("HOME", val);
+            }
+        }
     }
 }
