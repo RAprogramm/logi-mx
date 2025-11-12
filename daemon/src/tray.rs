@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex}
 };
 
-use ksni::{Category, MenuItem, Tray, TrayService, menu::StandardItem};
+use ksni::{Category, MenuItem, Tray, TrayMethods, menu::StandardItem};
 use logi_mx_driver::prelude::*;
 use tracing::{debug, error};
 
@@ -208,14 +208,16 @@ impl Tray for LogiTrayIcon {
     }
 }
 
-pub fn spawn_tray() -> std::result::Result<Arc<Mutex<DeviceStatus>>, String> {
+pub async fn spawn_tray() -> std::result::Result<Arc<Mutex<DeviceStatus>>, String> {
     let tray_icon = LogiTrayIcon::new();
     let status_handle = tray_icon.get_status_handle();
 
     tray_icon.update_status();
 
-    let service = TrayService::new(tray_icon);
-    service.spawn();
+    tray_icon
+        .spawn()
+        .await
+        .map_err(|e| format!("Failed to spawn tray: {}", e))?;
 
     Ok(status_handle)
 }
