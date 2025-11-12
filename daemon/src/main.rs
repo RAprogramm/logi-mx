@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
 
         use crate::tray::spawn_tray;
 
-        match spawn_tray() {
+        match spawn_tray().await {
             Ok(tray_status) => {
                 info!("System tray initialized");
 
