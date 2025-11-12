@@ -75,7 +75,8 @@ jobs:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
+          pacman -S --noconfirm base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+          rustup default stable
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov
 

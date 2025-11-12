@@ -91,26 +91,48 @@ mod tests {
 
     #[test]
     fn test_get_config_path_with_xdg() {
+        let orig_xdg = env::var("XDG_CONFIG_HOME").ok();
+        let orig_home = env::var("HOME").ok();
+
         unsafe {
             env::set_var("XDG_CONFIG_HOME", "/tmp/test_xdg");
         }
         let path = get_config_path().unwrap();
         assert_eq!(path, PathBuf::from("/tmp/test_xdg/logi-mx.toml"));
+
         unsafe {
-            env::remove_var("XDG_CONFIG_HOME");
+            if let Some(val) = orig_xdg {
+                env::set_var("XDG_CONFIG_HOME", val);
+            } else {
+                env::remove_var("XDG_CONFIG_HOME");
+            }
+            if let Some(val) = orig_home {
+                env::set_var("HOME", val);
+            }
         }
     }
 
     #[test]
     fn test_get_config_path_with_home() {
+        let orig_xdg = env::var("XDG_CONFIG_HOME").ok();
+        let orig_home = env::var("HOME").ok();
+
         unsafe {
             env::remove_var("XDG_CONFIG_HOME");
             env::set_var("HOME", "/tmp/test_home");
         }
         let path = get_config_path().unwrap();
         assert_eq!(path, PathBuf::from("/tmp/test_home/.config/logi-mx.toml"));
+
         unsafe {
-            env::remove_var("HOME");
+            if let Some(val) = orig_xdg {
+                env::set_var("XDG_CONFIG_HOME", val);
+            }
+            if let Some(val) = orig_home {
+                env::set_var("HOME", val);
+            } else {
+                env::remove_var("HOME");
+            }
         }
     }
 
