@@ -7,6 +7,26 @@
 
 **Blazing fast Logitech MX series mouse driver and configuration tool for Linux**
 
+<details>
+<summary>📊 Code Coverage Graphs</summary>
+
+### Sunburst
+The inner-most circle is the entire project, moving away from the center are folders then, finally, a single file. The size and color of each slice is representing the number of statements and the coverage, respectively.
+
+![Sunburst](https://codecov.io/github/RAprogramm/logi-mx/graphs/sunburst.svg?token=QMBZCQZJxN)
+
+### Grid
+Each block represents a single file in the project. The size and color of each block is represented by the number of statements and the coverage, respectively.
+
+![Grid](https://codecov.io/github/RAprogramm/logi-mx/graphs/tree.svg?token=QMBZCQZJxN)
+
+### Icicle
+The top section represents the entire project. Proceeding with folders and finally individual files. The size and color of each slice is representing the number of statements and the coverage, respectively.
+
+![Icicle](https://codecov.io/github/RAprogramm/logi-mx/graphs/icicle.svg?token=QMBZCQZJxN)
+
+</details>
+
 
 Professional-grade, production-ready HID++ driver written in pure Rust with zero-cost abstractions.
 
