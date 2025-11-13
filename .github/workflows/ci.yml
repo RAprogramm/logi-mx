@@ -430,3 +430,51 @@ jobs:
           commit_email: andrey.rozanov.vl@gmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: "Update to version ${{ needs.create-release.outputs.version }}"
+
+  publish-aur-bin:
+    name: Publish to AUR (binary)
+    needs: [create-release, build-release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download release archive
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          ARCHIVE_URL="https://github.com/RAprogramm/logi-mx/releases/download/v${VERSION}/logi-mx-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+
+          echo "Downloading ${ARCHIVE_URL}"
+          curl -sSL -o archive.tar.gz "${ARCHIVE_URL}"
+
+          echo "Calculating sha256sum"
+          SHA256SUM=$(sha256sum archive.tar.gz | cut -d' ' -f1)
+          echo "SHA256: ${SHA256SUM}"
+          echo "sha256sum=${SHA256SUM}" >> $GITHUB_ENV
+
+      - name: Generate PKGBUILD for binary package
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          chmod +x scripts/generate-pkgbuild-bin.sh
+          ./scripts/generate-pkgbuild-bin.sh "${VERSION}" "${sha256sum}"
+
+      - name: Generate .SRCINFO for binary package
+        run: |
+          docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
+            pacman -Sy --noconfirm base-devel sudo &&
+            useradd -m builder &&
+            chown -R builder:builder /pkg &&
+            cd /pkg &&
+            sudo -u builder makepkg --printsrcinfo -p PKGBUILD.bin > .SRCINFO.bin
+          "
+
+      - name: Publish binary package to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: logi-mx-bin
+          pkgbuild: ./PKGBUILD.bin
+          srcinfo: ./.SRCINFO.bin
+          commit_username: RAprogramm
+          commit_email: andrey.rozanov.vl@gmail.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY_BIN }}
+          commit_message: "Update to version ${{ needs.create-release.outputs.version }}"
