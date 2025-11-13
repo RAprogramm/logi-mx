@@ -65,56 +65,42 @@ jobs:
           echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
           echo "Bump type: ${BUMP_TYPE}, New version: ${NEW_VERSION}"
 
-      - name: Update Cargo.toml
-        if: steps.bump.outputs.bump_type != 'none'
-        run: |
-          CURRENT_CARGO_VERSION=$(grep "^version = " Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          if [ "$CURRENT_CARGO_VERSION" != "${{ steps.bump.outputs.new_version }}" ]; then
-            sed -i "s/^version = \".*\"/version = \"${{ steps.bump.outputs.new_version }}\"/" Cargo.toml
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add Cargo.toml
-            git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }}"
-            git push
-          else
-            echo "Version already at ${{ steps.bump.outputs.new_version }}, skipping update"
-          fi
-
-      - name: Create tag
-        if: steps.bump.outputs.bump_type != 'none'
-        run: |
-          if ! git rev-parse "v${{ steps.bump.outputs.new_version }}" >/dev/null 2>&1; then
-            git tag "v${{ steps.bump.outputs.new_version }}"
-            git push origin "v${{ steps.bump.outputs.new_version }}"
-          else
-            echo "Tag v${{ steps.bump.outputs.new_version }} already exists, skipping"
-          fi
-
-      - name: Update PKGBUILD
+      - name: Update version files
         if: steps.bump.outputs.bump_type != 'none'
         run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          CURRENT_CARGO_VERSION=$(grep "^version = " Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           CURRENT_PKGVER=$(grep "^pkgver=" PKGBUILD | sed 's/pkgver=//')
 
-          if [ "$CURRENT_PKGVER" != "$NEW_VERSION" ]; then
-            # Update version
-            sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
-
-            # Wait a bit for GitHub to process the tag
-            sleep 5
-
-            # Calculate new sha256sum from the tagged release
-            SHA256=$(curl -sL "https://github.com/RAprogramm/logi-mx/archive/v${NEW_VERSION}.tar.gz" | sha256sum | cut -d' ' -f1)
-            sed -i "s/^sha256sums=.*/sha256sums=('${SHA256}')/" PKGBUILD
-
-            git add PKGBUILD
-            git commit -m "build: update PKGBUILD to version ${NEW_VERSION}"
-            git push
-
-            # Update the tag to include PKGBUILD changes
-            git tag -d "v${NEW_VERSION}"
-            git tag "v${NEW_VERSION}"
-            git push origin "v${NEW_VERSION}" --force
-          else
-            echo "PKGBUILD already at version ${NEW_VERSION}, skipping update"
+          if [ "$CURRENT_CARGO_VERSION" = "$NEW_VERSION" ] && [ "$CURRENT_PKGVER" = "$NEW_VERSION" ]; then
+            echo "All version files already at ${NEW_VERSION}, skipping update"
+            exit 0
           fi
+
+          # Update Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
+
+          # Create temporary tag to calculate PKGBUILD sha256sum
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
+
+          # Wait for GitHub to process the tag
+          sleep 5
+
+          # Update PKGBUILD with calculated sha256sum
+          sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
+          SHA256=$(curl -sL "https://github.com/RAprogramm/logi-mx/archive/v${NEW_VERSION}.tar.gz" | sha256sum | cut -d' ' -f1)
+          sed -i "s/^sha256sums=.*/sha256sums=('${SHA256}')/" PKGBUILD
+
+          # Amend commit to include PKGBUILD
+          git add PKGBUILD
+          git commit --amend --no-edit
+
+          # Update tag and push
+          git tag -f "v${NEW_VERSION}"
+          git push --force
+          git push origin "v${NEW_VERSION}" --force
