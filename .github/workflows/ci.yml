@@ -303,6 +303,116 @@ jobs:
           name: docs
           path: target/doc/
 
+  # Version management - only run on push to main
+  version-bump:
+    name: Bump version based on commits
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+          echo "Latest tag: ${LATEST_TAG}"
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          COMMITS=$(git log ${{ steps.get_tag.outputs.latest_tag }}..HEAD --pretty=format:"%s")
+
+          HAS_BREAKING=false
+          HAS_FEAT=false
+          HAS_FIX=false
+
+          while IFS= read -r commit; do
+            if echo "$commit" | grep -qE "^[^:]+!:|BREAKING CHANGE"; then
+              HAS_BREAKING=true
+            elif echo "$commit" | grep -qE "^(feat|#[0-9]+ feat):"; then
+              HAS_FEAT=true
+            elif echo "$commit" | grep -qE "^(fix|#[0-9]+ fix):"; then
+              HAS_FIX=true
+            fi
+          done <<< "$COMMITS"
+
+          CURRENT_VERSION="${{ steps.get_tag.outputs.latest_tag }}"
+          CURRENT_VERSION="${CURRENT_VERSION#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          if [ "$HAS_BREAKING" = true ]; then
+            NEW_VERSION="$((MAJOR + 1)).0.0"
+            BUMP_TYPE="major"
+          elif [ "$HAS_FEAT" = true ]; then
+            NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+            BUMP_TYPE="minor"
+          elif [ "$HAS_FIX" = true ]; then
+            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            BUMP_TYPE="patch"
+          else
+            NEW_VERSION="$CURRENT_VERSION"
+            BUMP_TYPE="none"
+          fi
+
+          echo "bump_type=${BUMP_TYPE}" >> $GITHUB_OUTPUT
+          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "Bump type: ${BUMP_TYPE}, New version: ${NEW_VERSION}"
+
+      - name: Install git-cliff
+        if: steps.bump.outputs.bump_type != 'none'
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: git-cliff
+
+      - name: Update version files
+        if: steps.bump.outputs.bump_type != 'none'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          CURRENT_CARGO_VERSION=$(grep "^version = " Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          CURRENT_PKGVER=$(grep "^pkgver=" PKGBUILD | sed 's/pkgver=//')
+
+          if [ "$CURRENT_CARGO_VERSION" = "$NEW_VERSION" ] && [ "$CURRENT_PKGVER" = "$NEW_VERSION" ]; then
+            echo "All version files already at ${NEW_VERSION}, skipping update"
+            exit 0
+          fi
+
+          # Update Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
+
+          # Create temporary tag to calculate PKGBUILD sha256sum
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
+
+          # Wait for GitHub to process the tag
+          sleep 5
+
+          # Update PKGBUILD with calculated sha256sum
+          sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
+          SHA256=$(curl -sL "https://github.com/RAprogramm/logi-mx/archive/v${NEW_VERSION}.tar.gz" | sha256sum | cut -d' ' -f1)
+          sed -i "s/^sha256sums=.*/sha256sums=('${SHA256}')/" PKGBUILD
+
+          # Generate CHANGELOG.md with all versions
+          git-cliff --config cliff.toml --output CHANGELOG.md
+
+          # Amend commit to include PKGBUILD and CHANGELOG
+          git add PKGBUILD CHANGELOG.md
+          git commit --amend --no-edit
+
+          # Update tag and push
+          git tag -f "v${NEW_VERSION}"
+          git push --force
+          git push origin "v${NEW_VERSION}" --force
+
   # Release jobs - only run on version tags
   generate-changelog:
     name: Generate Changelog
