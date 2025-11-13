@@ -9,6 +9,9 @@ Environment="RUST_LOG=info"
 ExecStart=/usr/bin/logi-mx-daemon
 Restart=on-failure
 RestartSec=5
+MemoryMax=256M
+MemoryHigh=192M
+TasksMax=64
 
 [Install]
 WantedBy=default.target

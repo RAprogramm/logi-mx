@@ -5,8 +5,9 @@ mod scroll_handler;
 #[cfg(feature = "tray")]
 mod tray;
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
 
+use fslock::LockFile;
 use logi_mx_driver::prelude::*;
 use masterror::prelude::*;
 use tokio::{
@@ -148,12 +149,77 @@ impl DeviceManager {
     }
 }
 
+fn get_lock_file_path(suffix: Option<&str>) -> PathBuf {
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+        .or_else(|_| std::env::var("TMPDIR"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let filename = match suffix {
+        Some(s) => format!("logi-mx-daemon-{}.lock", s),
+        None => "logi-mx-daemon.lock".to_string()
+    };
+    PathBuf::from(runtime_dir).join(filename)
+}
+
+fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
+    let lock_path = get_lock_file_path(suffix);
+
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| AppError::internal("Failed to create lock directory").with_source(e))?;
+    }
+
+    let mut lockfile = LockFile::open(&lock_path)
+        .map_err(|e| AppError::internal("Failed to open lock file").with_source(e))?;
+
+    if !lockfile
+        .try_lock()
+        .map_err(|e| AppError::internal("Failed to acquire lock").with_source(e))?
+        && let Ok(pid_str) = fs::read_to_string(&lock_path)
+        && let Ok(pid) = pid_str.trim().parse::<i32>()
+    {
+        if pid == std::process::id() as i32 {
+            info!("Lock already held by current process, reusing");
+        } else {
+            info!(
+                "Another instance detected (PID {}), requesting graceful shutdown",
+                pid
+            );
+
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+            info!("Sent SIGTERM to process {}, waiting for shutdown", pid);
+
+            for attempt in 1..=10 {
+                std::thread::sleep(Duration::from_millis(500));
+                if lockfile.try_lock().unwrap_or(false) {
+                    info!("Previous instance stopped, acquired lock");
+                    break;
+                }
+                if attempt == 10 {
+                    return Err(AppError::internal(
+                        "Previous instance did not stop within 5 seconds"
+                    ));
+                }
+            }
+        }
+    }
+
+    fs::write(&lock_path, std::process::id().to_string())
+        .map_err(|e| AppError::internal("Failed to write PID to lock file").with_source(e))?;
+
+    Ok(lockfile)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
+
+    let _lock = acquire_instance_lock(None)?;
+    info!("Acquired instance lock");
 
     info!("Starting logi-mx-daemon");
 
@@ -313,4 +379,43 @@ fn monitor_udev_events_sync(tx: mpsc::Sender<UdevEvent>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_lock_file_path() {
+        let path = get_lock_file_path(None);
+        assert!(path.to_str().unwrap().contains("logi-mx-daemon.lock"));
+
+        let path_with_suffix = get_lock_file_path(Some("test"));
+        assert!(
+            path_with_suffix
+                .to_str()
+                .unwrap()
+                .contains("logi-mx-daemon-test.lock")
+        );
+    }
+
+    #[test]
+    fn test_acquire_instance_lock_basic() {
+        let lock_result = acquire_instance_lock(Some("test1"));
+        assert!(lock_result.is_ok());
+        drop(lock_result);
+    }
+
+    #[test]
+    fn test_lock_file_created_with_pid() {
+        let lock = acquire_instance_lock(Some("test2")).unwrap();
+        let lock_path = get_lock_file_path(Some("test2"));
+        assert!(lock_path.exists());
+
+        let pid_str = fs::read_to_string(&lock_path).unwrap();
+        let pid: u32 = pid_str.trim().parse().unwrap();
+        assert_eq!(pid, std::process::id());
+
+        drop(lock);
+    }
 }

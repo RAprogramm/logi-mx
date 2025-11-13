@@ -65,6 +65,12 @@ jobs:
           echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
           echo "Bump type: ${BUMP_TYPE}, New version: ${NEW_VERSION}"
 
+      - name: Install git-cliff
+        if: steps.bump.outputs.bump_type != 'none'
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: git-cliff
+
       - name: Update version files
         if: steps.bump.outputs.bump_type != 'none'
         run: |
@@ -96,8 +102,11 @@ jobs:
           SHA256=$(curl -sL "https://github.com/RAprogramm/logi-mx/archive/v${NEW_VERSION}.tar.gz" | sha256sum | cut -d' ' -f1)
           sed -i "s/^sha256sums=.*/sha256sums=('${SHA256}')/" PKGBUILD
 
-          # Amend commit to include PKGBUILD
-          git add PKGBUILD
+          # Generate CHANGELOG.md with all versions
+          git-cliff --config cliff.toml --output CHANGELOG.md
+
+          # Amend commit to include PKGBUILD and CHANGELOG
+          git add PKGBUILD CHANGELOG.md
           git commit --amend --no-edit
 
           # Update tag and push
