@@ -339,9 +339,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_constants() {
+        assert_eq!(VID_LOGITECH, 0x046D);
+        assert_eq!(PID_BOLT_RECEIVER, 0xC548);
+        assert_eq!(PID_MX_MASTER_3S_USB, 0x4082);
+        assert_eq!(PID_MX_MASTER_3S_BT, 0xB034);
+    }
+
+    #[test]
     fn test_battery_status_conversion() {
         let status = BatteryStatus::Charging;
         assert_eq!(status, BatteryStatus::Charging);
+    }
+
+    #[test]
+    fn test_all_battery_statuses() {
+        let statuses = [
+            BatteryStatus::Discharging,
+            BatteryStatus::Charging,
+            BatteryStatus::Full,
+            BatteryStatus::Unknown
+        ];
+        assert_eq!(statuses.len(), 4);
+        assert_eq!(statuses[0], BatteryStatus::Discharging);
+        assert_eq!(statuses[1], BatteryStatus::Charging);
+        assert_eq!(statuses[2], BatteryStatus::Full);
+        assert_eq!(statuses[3], BatteryStatus::Unknown);
     }
 
     #[test]
