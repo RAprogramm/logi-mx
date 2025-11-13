@@ -184,6 +184,46 @@ Automatic ratchet-to-free-spin transition:
 
 </details>
 
+## Native vs Daemon Mode
+
+The mouse can operate in two modes:
+
+### Native Mode (Default Linux Drivers)
+
+When the daemon is stopped, your mouse uses the default Linux HID drivers:
+- Basic mouse movement and clicks work normally
+- Scroll wheel functions at default speed
+- No configuration or customization available
+
+### Daemon Mode (logi-mx)
+
+When the daemon is running, you get full control:
+
+| Feature | Native Mode | Daemon Mode |
+|---------|-------------|-------------|
+| Basic mouse movement | ✅ | ✅ |
+| Button clicks | ✅ | ✅ |
+| Scroll wheel | ✅ | ✅ (configurable speed) |
+| Custom DPI | ❌ | ✅ |
+| SmartShift | ❌ | ✅ |
+| Hi-res scrolling | ❌ | ✅ |
+| Thumbwheel speed | ❌ | ✅ |
+| Button remapping | ❌ | ✅ |
+| Battery monitoring | ❌ | ✅ |
+| Per-app settings | ❌ | 🚧 (planned) |
+
+**Starting the daemon:**
+```bash
+systemctl --user start logi-mx-daemon.service
+```
+
+**Stopping the daemon:**
+```bash
+systemctl --user stop logi-mx-daemon.service
+```
+
+When you stop the daemon, all custom settings are reset and the mouse reverts to standard Linux behavior.
+
 ## Architecture
 
 <details>
