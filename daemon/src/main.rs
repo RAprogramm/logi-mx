@@ -149,15 +149,19 @@ impl DeviceManager {
     }
 }
 
-fn get_lock_file_path() -> PathBuf {
+fn get_lock_file_path(suffix: Option<&str>) -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
         .unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(runtime_dir).join("logi-mx-daemon.lock")
+    let filename = match suffix {
+        Some(s) => format!("logi-mx-daemon-{}.lock", s),
+        None => "logi-mx-daemon.lock".to_string()
+    };
+    PathBuf::from(runtime_dir).join(filename)
 }
 
-fn acquire_instance_lock() -> Result<LockFile> {
-    let lock_path = get_lock_file_path();
+fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
+    let lock_path = get_lock_file_path(suffix);
 
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)
@@ -214,7 +218,7 @@ async fn main() -> Result<()> {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let _lock = acquire_instance_lock()?;
+    let _lock = acquire_instance_lock(None)?;
     info!("Acquired instance lock");
 
     info!("Starting logi-mx-daemon");
@@ -383,21 +387,29 @@ mod tests {
 
     #[test]
     fn test_get_lock_file_path() {
-        let path = get_lock_file_path();
+        let path = get_lock_file_path(None);
         assert!(path.to_str().unwrap().contains("logi-mx-daemon.lock"));
+
+        let path_with_suffix = get_lock_file_path(Some("test"));
+        assert!(
+            path_with_suffix
+                .to_str()
+                .unwrap()
+                .contains("logi-mx-daemon-test.lock")
+        );
     }
 
     #[test]
     fn test_acquire_instance_lock_basic() {
-        let lock_result = acquire_instance_lock();
+        let lock_result = acquire_instance_lock(Some("test1"));
         assert!(lock_result.is_ok());
         drop(lock_result);
     }
 
     #[test]
     fn test_lock_file_created_with_pid() {
-        let lock = acquire_instance_lock().unwrap();
-        let lock_path = get_lock_file_path();
+        let lock = acquire_instance_lock(Some("test2")).unwrap();
+        let lock_path = get_lock_file_path(Some("test2"));
         assert!(lock_path.exists());
 
         let pid_str = fs::read_to_string(&lock_path).unwrap();
