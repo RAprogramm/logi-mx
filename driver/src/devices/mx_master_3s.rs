@@ -23,7 +23,9 @@ const PID_MX_MASTER_3S_BT: u16 = 0xB034;
 
 pub struct MxMaster3s {
     hidpp:           HidppDevice,
-    button_mappings: HashMap<ButtonId, Action>
+    button_mappings: HashMap<ButtonId, Action>,
+    scroll_wheel:    ScrollWheelConfig,
+    thumbwheel:      ThumbWheelConfig
 }
 
 impl MxMaster3s {
@@ -39,7 +41,9 @@ impl MxMaster3s {
 
         Ok(Self {
             hidpp,
-            button_mappings: HashMap::new()
+            button_mappings: HashMap::new(),
+            scroll_wheel: ScrollWheelConfig::default(),
+            thumbwheel: ThumbWheelConfig::default()
         })
     }
 
@@ -52,7 +56,9 @@ impl MxMaster3s {
 
         Ok(Self {
             hidpp,
-            button_mappings: HashMap::new()
+            button_mappings: HashMap::new(),
+            scroll_wheel: ScrollWheelConfig::default(),
+            thumbwheel: ThumbWheelConfig::default()
         })
     }
 
@@ -65,7 +71,9 @@ impl MxMaster3s {
 
         Ok(Self {
             hidpp,
-            button_mappings: HashMap::new()
+            button_mappings: HashMap::new(),
+            scroll_wheel: ScrollWheelConfig::default(),
+            thumbwheel: ThumbWheelConfig::default()
         })
     }
 
@@ -295,6 +303,32 @@ impl MouseDevice for MxMaster3s {
             .ok_or_else(|| AppError::not_found("Button action not configured"))
     }
 
+    fn set_scroll_wheel(&mut self, config: ScrollWheelConfig) -> Result<()> {
+        self.scroll_wheel = config;
+        info!(
+            "Scroll wheel configured: vertical_speed={}, horizontal_speed={}, smooth={}",
+            config.vertical_speed, config.horizontal_speed, config.smooth_scrolling
+        );
+        Ok(())
+    }
+
+    fn get_scroll_wheel(&mut self) -> Result<ScrollWheelConfig> {
+        Ok(self.scroll_wheel)
+    }
+
+    fn set_thumb_wheel(&mut self, config: ThumbWheelConfig) -> Result<()> {
+        self.thumbwheel = config;
+        info!(
+            "Thumb wheel configured: speed={}, smooth={}",
+            config.speed, config.smooth_scrolling
+        );
+        Ok(())
+    }
+
+    fn get_thumb_wheel(&mut self) -> Result<ThumbWheelConfig> {
+        Ok(self.thumbwheel)
+    }
+
     fn ping(&mut self) -> Result<()> {
         self.hidpp.ping()
     }
@@ -315,5 +349,65 @@ mod tests {
         let mut mappings = HashMap::new();
         mappings.insert(ButtonId::ThumbGesture, Action::ToggleSmartShift);
         assert!(mappings.contains_key(&ButtonId::ThumbGesture));
+    }
+
+    #[test]
+    fn test_scroll_wheel_config_default() {
+        let config = ScrollWheelConfig::default();
+        assert_eq!(config.vertical_speed, 3);
+        assert_eq!(config.horizontal_speed, 2);
+        assert!(!config.smooth_scrolling);
+    }
+
+    #[test]
+    fn test_scroll_wheel_config_custom() {
+        let config = ScrollWheelConfig {
+            vertical_speed:   10,
+            horizontal_speed: 5,
+            smooth_scrolling: true
+        };
+        assert_eq!(config.vertical_speed, 10);
+        assert_eq!(config.horizontal_speed, 5);
+        assert!(config.smooth_scrolling);
+    }
+
+    #[test]
+    fn test_thumb_wheel_config_default() {
+        let config = ThumbWheelConfig::default();
+        assert_eq!(config.speed, 5);
+        assert!(config.smooth_scrolling);
+    }
+
+    #[test]
+    fn test_thumb_wheel_config_custom() {
+        let config = ThumbWheelConfig {
+            speed:            1,
+            smooth_scrolling: false
+        };
+        assert_eq!(config.speed, 1);
+        assert!(!config.smooth_scrolling);
+    }
+
+    #[test]
+    fn test_scroll_wheel_config_serde() {
+        let config = ScrollWheelConfig {
+            vertical_speed:   8,
+            horizontal_speed: 4,
+            smooth_scrolling: true
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: ScrollWheelConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_thumb_wheel_config_serde() {
+        let config = ThumbWheelConfig {
+            speed:            7,
+            smooth_scrolling: false
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: ThumbWheelConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, deserialized);
     }
 }
