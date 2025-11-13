@@ -156,3 +156,162 @@ pub trait MouseDevice {
 
     fn ping(&mut self) -> Result<()>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_battery_info_creation() {
+        let battery = BatteryInfo {
+            level:  75,
+            status: BatteryStatus::Discharging
+        };
+        assert_eq!(battery.level, 75);
+        assert_eq!(battery.status, BatteryStatus::Discharging);
+    }
+
+    #[test]
+    fn test_battery_status_variants() {
+        let statuses = [
+            BatteryStatus::Discharging,
+            BatteryStatus::Charging,
+            BatteryStatus::Full,
+            BatteryStatus::Unknown
+        ];
+        assert_eq!(statuses.len(), 4);
+    }
+
+    #[test]
+    fn test_smartshift_config_default() {
+        let config = SmartShiftConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.threshold, 0);
+    }
+
+    #[test]
+    fn test_smartshift_config_custom() {
+        let config = SmartShiftConfig {
+            enabled:   true,
+            threshold: 10
+        };
+        assert!(config.enabled);
+        assert_eq!(config.threshold, 10);
+    }
+
+    #[test]
+    fn test_hires_scroll_config_default() {
+        let config = HiResScrollConfig::default();
+        assert!(!config.enabled);
+        assert!(!config.inverted);
+    }
+
+    #[test]
+    fn test_hires_scroll_config_custom() {
+        let config = HiResScrollConfig {
+            enabled:  true,
+            inverted: true
+        };
+        assert!(config.enabled);
+        assert!(config.inverted);
+    }
+
+    #[test]
+    fn test_button_id_variants() {
+        let buttons = [
+            ButtonId::LeftClick,
+            ButtonId::RightClick,
+            ButtonId::MiddleClick,
+            ButtonId::Back,
+            ButtonId::Forward,
+            ButtonId::ThumbGesture,
+            ButtonId::WheelModeShift
+        ];
+        assert_eq!(buttons.len(), 7);
+    }
+
+    #[test]
+    fn test_action_none() {
+        let action = Action::None;
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn test_action_toggle_smartshift() {
+        let action = Action::ToggleSmartShift;
+        assert_eq!(action, Action::ToggleSmartShift);
+    }
+
+    #[test]
+    fn test_action_keypress() {
+        let action = Action::Keypress {
+            keys: vec!["ctrl".to_string(), "c".to_string()]
+        };
+        match action {
+            Action::Keypress {
+                keys
+            } => {
+                assert_eq!(keys.len(), 2);
+                assert_eq!(keys[0], "ctrl");
+                assert_eq!(keys[1], "c");
+            }
+            _ => panic!("Expected Keypress action")
+        }
+    }
+
+    #[test]
+    fn test_gesture_direction_variants() {
+        let directions = [
+            GestureDirection::Up,
+            GestureDirection::Down,
+            GestureDirection::Left,
+            GestureDirection::Right,
+            GestureDirection::None
+        ];
+        assert_eq!(directions.len(), 5);
+    }
+
+    #[test]
+    fn test_gesture_mode_variants() {
+        let modes = [GestureMode::OnRelease, GestureMode::OnPress];
+        assert_eq!(modes.len(), 2);
+    }
+
+    #[test]
+    fn test_gesture_creation() {
+        let gesture = Gesture {
+            direction: GestureDirection::Up,
+            mode:      GestureMode::OnRelease,
+            action:    Box::new(Action::None)
+        };
+        assert_eq!(gesture.direction, GestureDirection::Up);
+        assert_eq!(gesture.mode, GestureMode::OnRelease);
+        assert_eq!(*gesture.action, Action::None);
+    }
+
+    #[test]
+    fn test_default_functions() {
+        assert_eq!(default_scroll_speed(), 1.0);
+        assert_eq!(default_horizontal_speed(), 1.0);
+        assert_eq!(default_thumbwheel_speed(), 1.0);
+    }
+
+    #[test]
+    fn test_battery_status_serde() {
+        let status = BatteryStatus::Charging;
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: BatteryStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, deserialized);
+    }
+
+    #[test]
+    fn test_battery_info_serde() {
+        let battery = BatteryInfo {
+            level:  50,
+            status: BatteryStatus::Full
+        };
+        let json = serde_json::to_string(&battery).unwrap();
+        let deserialized: BatteryInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(battery, deserialized);
+    }
+}
