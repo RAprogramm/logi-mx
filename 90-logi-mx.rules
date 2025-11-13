@@ -1,6 +1,9 @@
-# Logitech MX Mouse HID++ access rules
+# Logitech MX Mouse HID++ and input device access rules
 # Copy to /etc/udev/rules.d/ and reload: sudo udevadm control --reload-rules && sudo udevadm trigger
+# Add your user to the input group: sudo usermod -aG input $USER
+# Then logout and login for group changes to take effect
 
+# HID++ device access (for configuration)
 # Logitech Bolt Receiver
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c548", MODE="0666", TAG+="uaccess"
 
@@ -12,3 +15,7 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="b034", MODE="06
 
 # Logitech Unifying Receiver (for compatibility)
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c52b", MODE="0666", TAG+="uaccess"
+
+# Input device access (for scroll speed multiplier in daemon)
+# Users must be in the 'input' group to access /dev/input/event* devices
+KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0660"

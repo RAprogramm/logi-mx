@@ -55,19 +55,19 @@ enum SetCommands {
     },
 
     ScrollWheel {
-        #[arg(long, default_value_t = 3)]
-        vertical_speed: u8,
+        #[arg(long, default_value_t = 1.0)]
+        vertical_speed: f32,
 
-        #[arg(long, default_value_t = 2)]
-        horizontal_speed: u8,
+        #[arg(long, default_value_t = 1.0)]
+        horizontal_speed: f32,
 
         #[arg(long)]
         smooth: bool
     },
 
     ThumbWheel {
-        #[arg(long, default_value_t = 5)]
-        speed: u8,
+        #[arg(long, default_value_t = 1.0)]
+        speed: f32,
 
         #[arg(long)]
         smooth: bool
