@@ -89,3 +89,32 @@ jobs:
           else
             echo "Tag v${{ steps.bump.outputs.new_version }} already exists, skipping"
           fi
+
+      - name: Update PKGBUILD
+        if: steps.bump.outputs.bump_type != 'none'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          CURRENT_PKGVER=$(grep "^pkgver=" PKGBUILD | sed 's/pkgver=//')
+
+          if [ "$CURRENT_PKGVER" != "$NEW_VERSION" ]; then
+            # Update version
+            sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
+
+            # Wait a bit for GitHub to process the tag
+            sleep 5
+
+            # Calculate new sha256sum from the tagged release
+            SHA256=$(curl -sL "https://github.com/RAprogramm/logi-mx/archive/v${NEW_VERSION}.tar.gz" | sha256sum | cut -d' ' -f1)
+            sed -i "s/^sha256sums=.*/sha256sums=('${SHA256}')/" PKGBUILD
+
+            git add PKGBUILD
+            git commit -m "build: update PKGBUILD to version ${NEW_VERSION}"
+            git push
+
+            # Update the tag to include PKGBUILD changes
+            git tag -d "v${NEW_VERSION}"
+            git tag "v${NEW_VERSION}"
+            git push origin "v${NEW_VERSION}" --force
+          else
+            echo "PKGBUILD already at version ${NEW_VERSION}, skipping update"
+          fi
