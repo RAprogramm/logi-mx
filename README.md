@@ -163,16 +163,16 @@ Automatic ratchet-to-free-spin transition:
 - Button remapping via configuration
 - Daemon with system tray integration
 - GTK4/libadwaita GUI
+- Scroll wheel speed configuration (lines per click)
+- Thumb wheel speed configuration
 
 **In Development:**
 - Enhanced gesture system with visual feedback
-- Thumb wheel customization
 - Mode-shift button configuration
 - Per-application profiles
 - Macro recording and playback
 - Advanced button actions
 - UI gesture configuration interface
-- Scroll wheel speed configuration (lines per click)
 
 **Planned:**
 - Diagonal gesture support
@@ -308,6 +308,12 @@ logi-mx set smartshift --enabled --threshold 20
 # Enable hi-res scroll
 logi-mx set scroll --hires
 
+# Configure scroll wheel speed
+logi-mx set scroll-wheel --vertical-speed 5 --horizontal-speed 3 --smooth
+
+# Configure thumb wheel speed
+logi-mx set thumb-wheel --speed 7 --smooth
+
 # Get battery status
 logi-mx battery
 ```
@@ -328,6 +334,15 @@ threshold = 20
 [devices.hiresscroll]
 enabled = true
 inverted = false
+
+[devices.scroll_wheel]
+vertical_speed = 3
+horizontal_speed = 2
+smooth_scrolling = false
+
+[devices.thumbwheel]
+speed = 5
+smooth_scrolling = true
 
 [devices.buttons.ThumbGesture]
 Gestures = [

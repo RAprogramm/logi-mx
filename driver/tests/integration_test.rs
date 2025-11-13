@@ -118,17 +118,19 @@ fn test_empty_config_devices() {
 fn test_multiple_devices_config() {
     let mut config = Config::default();
     config.devices.push(DeviceConfig {
-        name:        "Second Device".to_string(),
-        dpi:         2000,
-        smartshift:  SmartShiftConfig {
+        name:         "Second Device".to_string(),
+        dpi:          2000,
+        smartshift:   SmartShiftConfig {
             enabled:   true,
             threshold: 30
         },
-        hiresscroll: HiResScrollConfig {
+        hiresscroll:  HiResScrollConfig {
             enabled:  false,
             inverted: true
         },
-        buttons:     std::collections::HashMap::new()
+        scroll_wheel: ScrollWheelConfig::default(),
+        thumbwheel:   ThumbWheelConfig::default(),
+        buttons:      std::collections::HashMap::new()
     });
 
     assert_eq!(config.devices.len(), 2);

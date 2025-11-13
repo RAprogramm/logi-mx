@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::devices::{
-    Action, ButtonId, GestureDirection, GestureMode, HiResScrollConfig, SmartShiftConfig
+    Action, ButtonId, GestureDirection, GestureMode, HiResScrollConfig, ScrollWheelConfig,
+    SmartShiftConfig, ThumbWheelConfig
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +28,12 @@ pub struct DeviceConfig {
 
     #[serde(default)]
     pub hiresscroll: HiResScrollConfig,
+
+    #[serde(default)]
+    pub scroll_wheel: ScrollWheelConfig,
+
+    #[serde(default)]
+    pub thumbwheel: ThumbWheelConfig,
 
     #[serde(default)]
     pub buttons: HashMap<ButtonId, Action>
@@ -104,6 +111,8 @@ impl Default for DeviceConfig {
                 enabled:  true,
                 inverted: false
             },
+            scroll_wheel: ScrollWheelConfig::default(),
+            thumbwheel: ThumbWheelConfig::default(),
             buttons
         }
     }

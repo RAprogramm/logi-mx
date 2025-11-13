@@ -31,6 +31,50 @@ pub struct HiResScrollConfig {
     pub inverted: bool
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScrollWheelConfig {
+    #[serde(default = "default_scroll_speed")]
+    pub vertical_speed: u8,
+
+    #[serde(default = "default_scroll_speed")]
+    pub horizontal_speed: u8,
+
+    #[serde(default)]
+    pub smooth_scrolling: bool
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThumbWheelConfig {
+    #[serde(default = "default_scroll_speed")]
+    pub speed: u8,
+
+    #[serde(default)]
+    pub smooth_scrolling: bool
+}
+
+fn default_scroll_speed() -> u8 {
+    3
+}
+
+impl Default for ScrollWheelConfig {
+    fn default() -> Self {
+        Self {
+            vertical_speed:   3,
+            horizontal_speed: 2,
+            smooth_scrolling: false
+        }
+    }
+}
+
+impl Default for ThumbWheelConfig {
+    fn default() -> Self {
+        Self {
+            speed:            5,
+            smooth_scrolling: true
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ButtonId {
     LeftClick,
@@ -89,6 +133,14 @@ pub trait MouseDevice {
     fn set_hires_scroll(&mut self, config: HiResScrollConfig) -> Result<()>;
 
     fn get_hires_scroll(&mut self) -> Result<HiResScrollConfig>;
+
+    fn set_scroll_wheel(&mut self, config: ScrollWheelConfig) -> Result<()>;
+
+    fn get_scroll_wheel(&mut self) -> Result<ScrollWheelConfig>;
+
+    fn set_thumb_wheel(&mut self, config: ThumbWheelConfig) -> Result<()>;
+
+    fn get_thumb_wheel(&mut self) -> Result<ThumbWheelConfig>;
 
     fn set_button_action(&mut self, button: ButtonId, action: Action) -> Result<()>;
 
