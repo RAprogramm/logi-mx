@@ -172,6 +172,7 @@ Automatic ratchet-to-free-spin transition:
 - Macro recording and playback
 - Advanced button actions
 - UI gesture configuration interface
+- Scroll wheel speed configuration (lines per click)
 
 **Planned:**
 - Diagonal gesture support
