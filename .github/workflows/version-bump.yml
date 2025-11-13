@@ -68,15 +68,24 @@ jobs:
       - name: Update Cargo.toml
         if: steps.bump.outputs.bump_type != 'none'
         run: |
-          sed -i "s/^version = \".*\"/version = \"${{ steps.bump.outputs.new_version }}\"/" Cargo.toml
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
-          git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }}"
-          git push
+          CURRENT_CARGO_VERSION=$(grep "^version = " Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          if [ "$CURRENT_CARGO_VERSION" != "${{ steps.bump.outputs.new_version }}" ]; then
+            sed -i "s/^version = \".*\"/version = \"${{ steps.bump.outputs.new_version }}\"/" Cargo.toml
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml
+            git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }}"
+            git push
+          else
+            echo "Version already at ${{ steps.bump.outputs.new_version }}, skipping update"
+          fi
 
       - name: Create tag
         if: steps.bump.outputs.bump_type != 'none'
         run: |
-          git tag "v${{ steps.bump.outputs.new_version }}"
-          git push origin "v${{ steps.bump.outputs.new_version }}"
+          if ! git rev-parse "v${{ steps.bump.outputs.new_version }}" >/dev/null 2>&1; then
+            git tag "v${{ steps.bump.outputs.new_version }}"
+            git push origin "v${{ steps.bump.outputs.new_version }}"
+          else
+            echo "Tag v${{ steps.bump.outputs.new_version }} already exists, skipping"
+          fi
