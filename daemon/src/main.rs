@@ -170,12 +170,39 @@ fn acquire_instance_lock() -> Result<LockFile> {
     if !lockfile
         .try_lock()
         .map_err(|e| AppError::internal("Failed to acquire lock").with_source(e))?
+        && let Ok(pid_str) = fs::read_to_string(&lock_path)
+        && let Ok(pid) = pid_str.trim().parse::<i32>()
     {
-        return Err(AppError::internal(format!(
-            "Another instance of logi-mx-daemon is already running. Lock file: {}",
-            lock_path.display()
-        )));
+        if pid == std::process::id() as i32 {
+            info!("Lock already held by current process, reusing");
+        } else {
+            info!(
+                "Another instance detected (PID {}), requesting graceful shutdown",
+                pid
+            );
+
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+            info!("Sent SIGTERM to process {}, waiting for shutdown", pid);
+
+            for attempt in 1..=10 {
+                std::thread::sleep(Duration::from_millis(500));
+                if lockfile.try_lock().unwrap_or(false) {
+                    info!("Previous instance stopped, acquired lock");
+                    break;
+                }
+                if attempt == 10 {
+                    return Err(AppError::internal(
+                        "Previous instance did not stop within 5 seconds"
+                    ));
+                }
+            }
+        }
     }
+
+    fs::write(&lock_path, std::process::id().to_string())
+        .map_err(|e| AppError::internal("Failed to write PID to lock file").with_source(e))?;
 
     Ok(lockfile)
 }
@@ -361,24 +388,21 @@ mod tests {
     }
 
     #[test]
-    fn test_acquire_instance_lock() {
+    fn test_acquire_instance_lock_basic() {
         let lock_result = acquire_instance_lock();
         assert!(lock_result.is_ok());
-
-        let second_lock_result = acquire_instance_lock();
-        assert!(second_lock_result.is_err());
-
         drop(lock_result);
-
-        let third_lock_result = acquire_instance_lock();
-        assert!(third_lock_result.is_ok());
     }
 
     #[test]
-    fn test_lock_file_cleanup() {
+    fn test_lock_file_created_with_pid() {
         let lock = acquire_instance_lock().unwrap();
         let lock_path = get_lock_file_path();
         assert!(lock_path.exists());
+
+        let pid_str = fs::read_to_string(&lock_path).unwrap();
+        let pid: u32 = pid_str.trim().parse().unwrap();
+        assert_eq!(pid, std::process::id());
 
         drop(lock);
     }
