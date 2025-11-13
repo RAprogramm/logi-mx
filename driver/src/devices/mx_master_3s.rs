@@ -354,45 +354,45 @@ mod tests {
     #[test]
     fn test_scroll_wheel_config_default() {
         let config = ScrollWheelConfig::default();
-        assert_eq!(config.vertical_speed, 3);
-        assert_eq!(config.horizontal_speed, 2);
+        assert_eq!(config.vertical_speed, 1.0);
+        assert_eq!(config.horizontal_speed, 1.0);
         assert!(!config.smooth_scrolling);
     }
 
     #[test]
     fn test_scroll_wheel_config_custom() {
         let config = ScrollWheelConfig {
-            vertical_speed:   10,
-            horizontal_speed: 5,
+            vertical_speed:   10.0,
+            horizontal_speed: 5.0,
             smooth_scrolling: true
         };
-        assert_eq!(config.vertical_speed, 10);
-        assert_eq!(config.horizontal_speed, 5);
+        assert_eq!(config.vertical_speed, 10.0);
+        assert_eq!(config.horizontal_speed, 5.0);
         assert!(config.smooth_scrolling);
     }
 
     #[test]
     fn test_thumb_wheel_config_default() {
         let config = ThumbWheelConfig::default();
-        assert_eq!(config.speed, 5);
+        assert_eq!(config.speed, 1.0);
         assert!(config.smooth_scrolling);
     }
 
     #[test]
     fn test_thumb_wheel_config_custom() {
         let config = ThumbWheelConfig {
-            speed:            1,
+            speed:            1.0,
             smooth_scrolling: false
         };
-        assert_eq!(config.speed, 1);
+        assert_eq!(config.speed, 1.0);
         assert!(!config.smooth_scrolling);
     }
 
     #[test]
     fn test_scroll_wheel_config_serde() {
         let config = ScrollWheelConfig {
-            vertical_speed:   8,
-            horizontal_speed: 4,
+            vertical_speed:   8.0,
+            horizontal_speed: 4.0,
             smooth_scrolling: true
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn test_thumb_wheel_config_serde() {
         let config = ThumbWheelConfig {
-            speed:            7,
+            speed:            7.0,
             smooth_scrolling: false
         };
         let json = serde_json::to_string(&config).unwrap();
