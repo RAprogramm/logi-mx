@@ -52,6 +52,25 @@ enum SetCommands {
 
         #[arg(long)]
         inverted: bool
+    },
+
+    ScrollWheel {
+        #[arg(long, default_value_t = 3)]
+        vertical_speed: u8,
+
+        #[arg(long, default_value_t = 2)]
+        horizontal_speed: u8,
+
+        #[arg(long)]
+        smooth: bool
+    },
+
+    ThumbWheel {
+        #[arg(long, default_value_t = 5)]
+        speed: u8,
+
+        #[arg(long)]
+        smooth: bool
     }
 }
 
@@ -95,6 +114,8 @@ fn cmd_info() -> Result<()> {
     let dpi = device.get_dpi()?;
     let smartshift = device.get_smartshift()?;
     let scroll = device.get_hires_scroll()?;
+    let scroll_wheel = device.get_scroll_wheel()?;
+    let thumbwheel = device.get_thumb_wheel()?;
 
     println!("Device Information:");
     println!("  Name: {}", name);
@@ -111,6 +132,25 @@ fn cmd_info() -> Result<()> {
     println!(
         "  Hi-Res Scroll: {}",
         if scroll.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "  Scroll Wheel: vertical speed={}, horizontal speed={}, smooth scrolling {}",
+        scroll_wheel.vertical_speed,
+        scroll_wheel.horizontal_speed,
+        if scroll_wheel.smooth_scrolling {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "  Thumb Wheel: speed={}, smooth scrolling {}",
+        thumbwheel.speed,
+        if thumbwheel.smooth_scrolling {
             "enabled"
         } else {
             "disabled"
@@ -175,6 +215,45 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 "Scroll configured: hi-res {}, inverted {}",
                 if hires { "enabled" } else { "disabled" },
                 if inverted { "yes" } else { "no" }
+            );
+        }
+        SetCommands::ScrollWheel {
+            vertical_speed,
+            horizontal_speed,
+            smooth
+        } => {
+            info!(
+                "Configuring scroll wheel: vertical={}, horizontal={}, smooth={}",
+                vertical_speed, horizontal_speed, smooth
+            );
+            device.set_scroll_wheel(ScrollWheelConfig {
+                vertical_speed,
+                horizontal_speed,
+                smooth_scrolling: smooth
+            })?;
+            println!(
+                "Scroll wheel configured: vertical speed={}, horizontal speed={}, smooth scrolling {}",
+                vertical_speed,
+                horizontal_speed,
+                if smooth { "enabled" } else { "disabled" }
+            );
+        }
+        SetCommands::ThumbWheel {
+            speed,
+            smooth
+        } => {
+            info!(
+                "Configuring thumb wheel: speed={}, smooth={}",
+                speed, smooth
+            );
+            device.set_thumb_wheel(ThumbWheelConfig {
+                speed,
+                smooth_scrolling: smooth
+            })?;
+            println!(
+                "Thumb wheel configured: speed={}, smooth scrolling {}",
+                speed,
+                if smooth { "enabled" } else { "disabled" }
             );
         }
     }
