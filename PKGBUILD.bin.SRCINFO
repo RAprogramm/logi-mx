@@ -1,0 +1,18 @@
+pkgbase = logi-mx-bin
+	pkgdesc = Logitech MX Master 3S configuration tool and daemon with system tray (binary package)
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/RAprogramm/logi-mx
+	arch = x86_64
+	license = MIT
+	depends = hidapi
+	depends = systemd
+	depends = gtk4
+	depends = libadwaita
+	depends = dbus
+	provides = logi-mx
+	conflicts = logi-mx
+	source = logi-mx-bin-0.1.1.tar.gz::https://github.com/RAprogramm/logi-mx/releases/download/v0.1.1/logi-mx-0.1.1-x86_64-unknown-linux-gnu.tar.gz
+	sha256sums = 23f33c30e3ea8b78faa7d839822fed020a09b1381ef7bef712ab7b2ae972a623
+
+pkgname = logi-mx-bin
