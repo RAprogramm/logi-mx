@@ -235,3 +235,81 @@ pub async fn spawn_tray() -> std::result::Result<Arc<Mutex<DeviceStatus>>, Strin
 
     Ok(status_handle)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_device_status_default_with_error() {
+        let status = DeviceStatus::default();
+        assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn test_device_status_with_error() {
+        let status = DeviceStatus {
+            connected:            false,
+            battery_level:        0,
+            battery_status:       "Unknown".to_string(),
+            dpi:                  1000,
+            smartshift:           false,
+            smartshift_threshold: 20,
+            error:                Some("Test error".to_string())
+        };
+        assert_eq!(status.error, Some("Test error".to_string()));
+    }
+
+    #[test]
+    fn test_tray_icon_name_disconnected() {
+        let tray = LogiTrayIcon::new();
+        assert_eq!(tray.icon_name(), "input-mouse-symbolic");
+    }
+
+    #[test]
+    fn test_tray_icon_name_connected() {
+        let tray = LogiTrayIcon::new();
+        {
+            let mut status = tray.status.lock().unwrap();
+            status.connected = true;
+        }
+        assert_eq!(tray.icon_name(), "input-mouse");
+    }
+
+    #[test]
+    fn test_tray_icon_name_error() {
+        let tray = LogiTrayIcon::new();
+        {
+            let mut status = tray.status.lock().unwrap();
+            status.error = Some("Test error".to_string());
+        }
+        assert_eq!(tray.icon_name(), "dialog-error");
+    }
+
+    #[test]
+    fn test_tray_title_with_error() {
+        let tray = LogiTrayIcon::new();
+        {
+            let mut status = tray.status.lock().unwrap();
+            status.error = Some("Device failure".to_string());
+        }
+        let title = tray.title();
+        assert!(title.contains("Error: Device failure"));
+    }
+
+    #[test]
+    fn test_tray_title_connected_with_details() {
+        let tray = LogiTrayIcon::new();
+        {
+            let mut status = tray.status.lock().unwrap();
+            status.connected = true;
+            status.battery_level = 85;
+            status.battery_status = "Charging".to_string();
+            status.dpi = 2400;
+        }
+        let title = tray.title();
+        assert!(title.contains("85%"));
+        assert!(title.contains("Charging"));
+        assert!(title.contains("2400"));
+    }
+}
