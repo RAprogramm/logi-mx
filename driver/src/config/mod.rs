@@ -14,11 +14,18 @@ use crate::error::Result;
 const DEFAULT_CONFIG_NAME: &str = "logi-mx.toml";
 
 pub fn get_config_path() -> Result<PathBuf> {
-    if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
+    get_config_path_from_env(|key| std::env::var(key))
+}
+
+fn get_config_path_from_env<F>(env_fn: F) -> Result<PathBuf>
+where
+    F: Fn(&str) -> std::result::Result<String, std::env::VarError>
+{
+    if let Ok(config_home) = env_fn("XDG_CONFIG_HOME") {
         return Ok(PathBuf::from(config_home).join(DEFAULT_CONFIG_NAME));
     }
 
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = env_fn("HOME") {
         return Ok(PathBuf::from(home)
             .join(".config")
             .join(DEFAULT_CONFIG_NAME));
@@ -91,49 +98,30 @@ mod tests {
 
     #[test]
     fn test_get_config_path_with_xdg() {
-        let orig_xdg = env::var("XDG_CONFIG_HOME").ok();
-        let orig_home = env::var("HOME").ok();
-
-        unsafe {
-            env::set_var("XDG_CONFIG_HOME", "/tmp/test_xdg");
-        }
-        let path = get_config_path().unwrap();
-        assert_eq!(path, PathBuf::from("/tmp/test_xdg/logi-mx.toml"));
-
-        unsafe {
-            if let Some(val) = orig_xdg {
-                env::set_var("XDG_CONFIG_HOME", val);
+        // Mock environment with XDG_CONFIG_HOME set
+        let mock_env = |var: &str| {
+            if var == "XDG_CONFIG_HOME" {
+                Ok("/tmp/test_xdg".to_string())
             } else {
-                env::remove_var("XDG_CONFIG_HOME");
+                Err(env::VarError::NotPresent)
             }
-            if let Some(val) = orig_home {
-                env::set_var("HOME", val);
-            }
-        }
+        };
+        let path = get_config_path_from_env(mock_env).unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/test_xdg/logi-mx.toml"));
     }
 
     #[test]
     fn test_get_config_path_with_home() {
-        let orig_xdg = env::var("XDG_CONFIG_HOME").ok();
-        let orig_home = env::var("HOME").ok();
-
-        unsafe {
-            env::remove_var("XDG_CONFIG_HOME");
-            env::set_var("HOME", "/tmp/test_home");
-        }
-        let path = get_config_path().unwrap();
-        assert_eq!(path, PathBuf::from("/tmp/test_home/.config/logi-mx.toml"));
-
-        unsafe {
-            if let Some(val) = orig_xdg {
-                env::set_var("XDG_CONFIG_HOME", val);
-            }
-            if let Some(val) = orig_home {
-                env::set_var("HOME", val);
+        // Mock environment with only HOME set
+        let mock_env = |var: &str| {
+            if var == "HOME" {
+                Ok("/tmp/test_home".to_string())
             } else {
-                env::remove_var("HOME");
+                Err(env::VarError::NotPresent)
             }
-        }
+        };
+        let path = get_config_path_from_env(mock_env).unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/test_home/.config/logi-mx.toml"));
     }
 
     #[test]
@@ -167,25 +155,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Flaky in CI due to environment variable handling
     fn test_config_path_no_env() {
-        let orig_xdg = env::var("XDG_CONFIG_HOME").ok();
-        let orig_home = env::var("HOME").ok();
-
-        unsafe {
-            env::remove_var("XDG_CONFIG_HOME");
-            env::remove_var("HOME");
-        }
-        let result = get_config_path();
+        // Mock environment with no variables set
+        let mock_env = |_: &str| Err(env::VarError::NotPresent);
+        let result = get_config_path_from_env(mock_env);
         assert!(result.is_err());
-
-        unsafe {
-            if let Some(val) = orig_xdg {
-                env::set_var("XDG_CONFIG_HOME", val);
-            }
-            if let Some(val) = orig_home {
-                env::set_var("HOME", val);
-            }
-        }
     }
 }
