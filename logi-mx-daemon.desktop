@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Logitech MX Daemon
+Comment=Configuration daemon for Logitech MX mice
+Exec=systemctl --user start logi-mx-daemon.service
+Icon=input-mouse
+Categories=Settings;HardwareSettings;
+Terminal=false
+StartupNotify=false
