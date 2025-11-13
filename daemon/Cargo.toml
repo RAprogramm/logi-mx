@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [features]
 default = ["tray"]
-tray = ["dep:ksni"]
+tray = ["dep:ksni", "dep:gtk4", "dep:libadwaita"]
 
 [dependencies]
 logi-mx-driver = { path = "../driver" }
@@ -22,3 +22,5 @@ toml.workspace = true
 udev.workspace = true
 evdev.workspace = true
 ksni = { version = "0.3", optional = true }
+gtk4 = { workspace = true, optional = true }
+libadwaita = { workspace = true, optional = true }

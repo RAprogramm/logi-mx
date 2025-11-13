@@ -8,9 +8,11 @@ use std::{
     sync::{Arc, Mutex}
 };
 
+#[cfg(feature = "tray")]
+use gtk4::{AlertDialog, Window, glib};
 use ksni::{Category, MenuItem, Tray, TrayMethods, menu::StandardItem};
 use logi_mx_driver::prelude::*;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct DeviceStatus {
@@ -48,6 +50,39 @@ impl LogiTrayIcon {
 
     pub fn get_status_handle(&self) -> Arc<Mutex<DeviceStatus>> {
         Arc::clone(&self.status)
+    }
+
+    #[cfg(feature = "tray")]
+    fn show_exit_confirmation() -> bool {
+        gtk4::init().ok();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        glib::MainContext::default().spawn_local(async move {
+            let dialog = AlertDialog::builder()
+                .message("Stop Logitech MX Daemon?")
+                .detail(
+                    "The daemon will be stopped and the following features will become unavailable:\n\n\
+                     - Custom scroll wheel speed\n\
+                     - DPI adjustment\n\
+                     - SmartShift configuration\n\
+                     - Hi-res scrolling\n\
+                     - Battery monitoring\n\n\
+                     Your mouse will use default Linux drivers."
+                )
+                .buttons(vec!["Cancel", "Stop Daemon"])
+                .default_button(0)
+                .cancel_button(0)
+                .build();
+
+            let response = dialog.choose_future(None::<&Window>).await;
+            let confirmed = response.map(|r| r == 1).unwrap_or(false);
+            tx.send(confirmed).ok();
+        });
+
+        let result = rx.recv().unwrap_or(false);
+        info!("Exit confirmation dialog result: {}", result);
+        result
     }
 
     pub fn update_status(&self) {
@@ -196,6 +231,16 @@ impl Tray for LogiTrayIcon {
                 label: "Exit".into(),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|_this: &mut Self| {
+                    #[cfg(feature = "tray")]
+                    {
+                        if Self::show_exit_confirmation() {
+                            info!("User confirmed daemon shutdown");
+                            exit(0);
+                        } else {
+                            info!("User cancelled daemon shutdown");
+                        }
+                    }
+                    #[cfg(not(feature = "tray"))]
                     exit(0);
                 }),
                 enabled: true,
