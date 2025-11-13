@@ -198,71 +198,6 @@ Gestures = [
 ]
 ```
 
-### Daemon
-
-```bash
-# Start daemon
-systemctl --user start logi-mx-daemon
-
-# Enable on boot
-systemctl --user enable logi-mx-daemon
-
-# Check status
-systemctl --user status logi-mx-daemon
-```
-
-### GUI
-
-```bash
-# Launch GUI application
-logi-mx-ui
-```
-
-## Development
-
-### Build
-
-```bash
-# Debug build
-cargo build
-
-# Release build with optimizations
-cargo build --release
-
-# Build specific package
-cargo build -p logi-mx-driver
-```
-
-### Test
-
-```bash
-# Run all tests
-cargo test --workspace
-
-# Run with coverage
-cargo tarpaulin --all-features --out Html
-
-# Run specific tests
-cargo test -p logi-mx-driver
-```
-
-### Format
-
-```bash
-# Format code (requires nightly)
-cargo +nightly fmt
-
-# Check formatting
-cargo +nightly fmt -- --check
-```
-
-### Lint
-
-```bash
-# Run clippy
-cargo clippy --all-targets --all-features -- -D warnings
-```
-
 ## HID++ Protocol
 
 This driver implements the Logitech HID++ 2.0 protocol:
@@ -283,31 +218,6 @@ This driver implements the Logitech HID++ 2.0 protocol:
 | 0x2201 | Adjustable DPI | Sensor DPI control |
 | 0x2110 | SmartShift | Ratchet/free-spin control |
 | 0x2121 | Hi-Res Wheel | High-resolution scrolling |
-
-## Technical Specifications
-
-- **Edition**: Rust 2024
-- **MSRV**: 1.91
-- **Profile**: LTO enabled, single codegen unit
-- **Max Line**: 99 characters
-- **Import Style**: StdExternalCrate grouping
-
-## License
-
-MIT License - see LICENSE file for details
-
-## Contributing
-
-Contributions are welcome! Please ensure:
-
-- Code follows rustfmt configuration
-- All tests pass
-- Clippy shows no warnings
-- Test coverage remains ≥95%
-
-## Author
-
-RAprogramm <andrey.rozanov.vl@gmail.com>
 
 ## Acknowledgments
 
