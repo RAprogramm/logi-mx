@@ -65,6 +65,16 @@ impl ScrollHandler {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub fn config(&self) -> &ScrollWheelConfig {
+        &self.config
+    }
+
+    #[cfg(test)]
+    pub fn thumbwheel_config(&self) -> &ThumbWheelConfig {
+        &self.thumbwheel_config
+    }
+
     fn find_device(&self) -> Result<Device> {
         let devices = evdev::enumerate()
             .map(|(_, device)| device)
@@ -236,5 +246,72 @@ impl ScrollHandler {
                     .map_err(|e| AppError::internal("Failed to emit event").with_source(e))?;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scroll_handler_new() {
+        let scroll_config = ScrollWheelConfig {
+            vertical_speed:   2.5,
+            horizontal_speed: 1.5,
+            smooth_scrolling: true
+        };
+        let thumbwheel_config = ThumbWheelConfig {
+            speed:            3.0,
+            smooth_scrolling: false
+        };
+
+        let handler = ScrollHandler::new(scroll_config, thumbwheel_config);
+
+        assert_eq!(handler.config().vertical_speed, 2.5);
+        assert_eq!(handler.config().horizontal_speed, 1.5);
+        assert!(handler.config().smooth_scrolling);
+        assert_eq!(handler.thumbwheel_config().speed, 3.0);
+        assert!(!handler.thumbwheel_config().smooth_scrolling);
+    }
+
+    #[test]
+    fn test_scroll_handler_with_defaults() {
+        let scroll_config = ScrollWheelConfig::default();
+        let thumbwheel_config = ThumbWheelConfig::default();
+
+        let handler = ScrollHandler::new(scroll_config, thumbwheel_config);
+
+        assert_eq!(handler.config().vertical_speed, 1.0);
+        assert_eq!(handler.config().horizontal_speed, 1.0);
+        assert!(!handler.config().smooth_scrolling);
+        assert_eq!(handler.thumbwheel_config().speed, 1.0);
+        assert!(handler.thumbwheel_config().smooth_scrolling);
+    }
+
+    #[test]
+    fn test_scroll_handler_fractional_speeds() {
+        let scroll_config = ScrollWheelConfig {
+            vertical_speed:   0.5,
+            horizontal_speed: 0.7,
+            smooth_scrolling: false
+        };
+        let thumbwheel_config = ThumbWheelConfig {
+            speed:            0.3,
+            smooth_scrolling: true
+        };
+
+        let handler = ScrollHandler::new(scroll_config, thumbwheel_config);
+
+        assert_eq!(handler.config().vertical_speed, 0.5);
+        assert_eq!(handler.config().horizontal_speed, 0.7);
+        assert_eq!(handler.thumbwheel_config().speed, 0.3);
+    }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(VID_LOGITECH, 0x046D);
+        assert_eq!(PID_MX_MASTER_3S_USB, 0x4082);
+        assert_eq!(PID_MX_MASTER_3S_BT, 0xB034);
+        assert_eq!(PID_BOLT_RECEIVER, 0xC548);
     }
 }
