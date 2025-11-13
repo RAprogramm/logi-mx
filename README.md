@@ -212,8 +212,13 @@ paru -S logi-mx
 # or
 yay -S logi-mx
 
+# Add your user to input group (required for scroll speed multiplier)
+sudo usermod -aG input $USER
+
 # Enable and start daemon
 systemctl --user enable --now logi-mx-daemon
+
+# Logout and login for group changes to take effect
 ```
 
 ### From crates.io
@@ -230,11 +235,16 @@ sudo curl -o /etc/udev/rules.d/90-logi-mx.rules \
   https://raw.githubusercontent.com/RAprogramm/logi-mx/main/90-logi-mx.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 
+# Add your user to input group (required for scroll speed multiplier)
+sudo usermod -aG input $USER
+
 # Install systemd service
 mkdir -p ~/.config/systemd/user
 curl -o ~/.config/systemd/user/logi-mx-daemon.service \
   https://raw.githubusercontent.com/RAprogramm/logi-mx/main/logi-mx-daemon.service
 systemctl --user enable --now logi-mx-daemon
+
+# Logout and login for group changes to take effect
 ```
 
 ### From Source
@@ -251,12 +261,19 @@ cargo install --path cli --locked
 cargo install --path daemon --locked
 cargo install --path ui --locked
 
-# Setup (same as above)
+# Setup udev rules and permissions
 sudo cp 90-logi-mx.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# Add your user to input group (required for scroll speed multiplier)
+sudo usermod -aG input $USER
+
+# Install systemd service
 mkdir -p ~/.config/systemd/user
 cp logi-mx-daemon.service ~/.config/systemd/user/
 systemctl --user enable --now logi-mx-daemon
+
+# Logout and login for group changes to take effect
 ```
 
 ### Dependencies
