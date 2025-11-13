@@ -124,6 +124,9 @@ Automatic ratchet-to-free-spin transition:
 
 ## Features
 
+<details>
+<summary>Click to expand</summary>
+
 **High Performance**
 - Zero-cost abstractions
 - Async I/O with tokio
@@ -178,7 +181,12 @@ Automatic ratchet-to-free-spin transition:
 - Profile switching per workspace
 - Cloud profile synchronization
 
+</details>
+
 ## Architecture
+
+<details>
+<summary>Click to expand</summary>
 
 ```
 logi-mx/
@@ -188,7 +196,12 @@ logi-mx/
 └── ui/         # GTK4/libadwaita GUI
 ```
 
+</details>
+
 ## Installation
+
+<details open>
+<summary>Click to expand</summary>
 
 ### Arch Linux (Recommended)
 
@@ -272,7 +285,12 @@ Reload Hyprland config:
 hyprctl reload
 ```
 
+</details>
+
 ## Usage
+
+<details>
+<summary>Click to expand</summary>
 
 ### CLI
 
@@ -319,7 +337,12 @@ Gestures = [
 ]
 ```
 
+</details>
+
 ## HID++ Protocol
+
+<details>
+<summary>Click to expand</summary>
 
 This driver implements the Logitech HID++ 2.0 protocol:
 
@@ -340,8 +363,15 @@ This driver implements the Logitech HID++ 2.0 protocol:
 | 0x2110 | SmartShift | Ratchet/free-spin control |
 | 0x2121 | Hi-Res Wheel | High-resolution scrolling |
 
+</details>
+
 ## Acknowledgments
+
+<details>
+<summary>Click to expand</summary>
 
 - Logitech for HID++ protocol documentation
 - Solaar project for protocol insights
 - logiops for feature reference
+
+</details>
