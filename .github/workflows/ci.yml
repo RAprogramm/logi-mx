@@ -438,6 +438,8 @@ jobs:
     needs: [create-release, build-release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
@@ -450,6 +452,25 @@ jobs:
             cd /pkg &&
             sudo -u builder makepkg --printsrcinfo > .SRCINFO
           "
+
+      - name: Validate SSH key
+        env:
+          SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "❌ ERROR: AUR_SSH_PRIVATE_KEY secret is empty or not set"
+            echo ""
+            echo "Required setup:"
+            echo "1. Go to: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo "2. Add secret 'AUR_SSH_PRIVATE_KEY' with your AUR SSH private key"
+            echo "3. Ensure the key starts with '-----BEGIN OPENSSH PRIVATE KEY-----'"
+            echo ""
+            echo "Current repo: ${{ github.repository }}"
+            echo "Triggered by: ${{ github.event_name }}"
+            echo "Ref: ${{ github.ref }}"
+            exit 1
+          fi
+          echo "✓ SSH key is set (length: ${#SSH_KEY} chars)"
 
       - name: Publish to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
@@ -466,6 +487,8 @@ jobs:
     needs: [create-release, build-release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
