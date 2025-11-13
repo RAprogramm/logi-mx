@@ -85,6 +85,21 @@ impl LogiTrayIcon {
         result
     }
 
+    fn shutdown_daemon() {
+        info!("Initiating daemon shutdown");
+
+        if let Err(e) = Command::new("systemctl")
+            .args(["--user", "stop", "logi-mx-daemon.service"])
+            .status()
+        {
+            error!("Failed to stop systemd service: {}", e);
+            exit(1);
+        }
+
+        info!("Daemon shutdown complete");
+        exit(0);
+    }
+
     pub fn update_status(&self) {
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
             let mut status = self.status.lock().unwrap();
@@ -234,14 +249,13 @@ impl Tray for LogiTrayIcon {
                     #[cfg(feature = "tray")]
                     {
                         if Self::show_exit_confirmation() {
-                            info!("User confirmed daemon shutdown");
-                            exit(0);
+                            Self::shutdown_daemon();
                         } else {
                             info!("User cancelled daemon shutdown");
                         }
                     }
                     #[cfg(not(feature = "tray"))]
-                    exit(0);
+                    Self::shutdown_daemon();
                 }),
                 enabled: true,
                 ..Default::default()
