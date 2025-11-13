@@ -31,36 +31,44 @@ pub struct HiResScrollConfig {
     pub inverted: bool
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ScrollWheelConfig {
     #[serde(default = "default_scroll_speed")]
-    pub vertical_speed: u8,
+    pub vertical_speed: f32,
 
-    #[serde(default = "default_scroll_speed")]
-    pub horizontal_speed: u8,
+    #[serde(default = "default_horizontal_speed")]
+    pub horizontal_speed: f32,
 
     #[serde(default)]
     pub smooth_scrolling: bool
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ThumbWheelConfig {
-    #[serde(default = "default_scroll_speed")]
-    pub speed: u8,
+    #[serde(default = "default_thumbwheel_speed")]
+    pub speed: f32,
 
     #[serde(default)]
     pub smooth_scrolling: bool
 }
 
-fn default_scroll_speed() -> u8 {
-    3
+fn default_scroll_speed() -> f32 {
+    1.0
+}
+
+fn default_horizontal_speed() -> f32 {
+    1.0
+}
+
+fn default_thumbwheel_speed() -> f32 {
+    1.0
 }
 
 impl Default for ScrollWheelConfig {
     fn default() -> Self {
         Self {
-            vertical_speed:   3,
-            horizontal_speed: 2,
+            vertical_speed:   1.0,
+            horizontal_speed: 1.0,
             smooth_scrolling: false
         }
     }
@@ -69,7 +77,7 @@ impl Default for ScrollWheelConfig {
 impl Default for ThumbWheelConfig {
     fn default() -> Self {
         Self {
-            speed:            5,
+            speed:            1.0,
             smooth_scrolling: true
         }
     }
