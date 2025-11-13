@@ -21,6 +21,7 @@ serde.workspace = true
 toml.workspace = true
 udev.workspace = true
 evdev.workspace = true
+fslock = "0.2"
 ksni = { version = "0.3", optional = true }
 gtk4 = { workspace = true, optional = true }
 libadwaita = { workspace = true, optional = true }

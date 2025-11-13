@@ -5,8 +5,9 @@ mod scroll_handler;
 #[cfg(feature = "tray")]
 mod tray;
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
 
+use fslock::LockFile;
 use logi_mx_driver::prelude::*;
 use masterror::prelude::*;
 use tokio::{
@@ -148,12 +149,46 @@ impl DeviceManager {
     }
 }
 
+fn get_lock_file_path() -> PathBuf {
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+        .or_else(|_| std::env::var("TMPDIR"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(runtime_dir).join("logi-mx-daemon.lock")
+}
+
+fn acquire_instance_lock() -> Result<LockFile> {
+    let lock_path = get_lock_file_path();
+
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| AppError::internal("Failed to create lock directory").with_source(e))?;
+    }
+
+    let mut lockfile = LockFile::open(&lock_path)
+        .map_err(|e| AppError::internal("Failed to open lock file").with_source(e))?;
+
+    if !lockfile
+        .try_lock()
+        .map_err(|e| AppError::internal("Failed to acquire lock").with_source(e))?
+    {
+        return Err(AppError::internal(format!(
+            "Another instance of logi-mx-daemon is already running. Lock file: {}",
+            lock_path.display()
+        )));
+    }
+
+    Ok(lockfile)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
+
+    let _lock = acquire_instance_lock()?;
+    info!("Acquired instance lock");
 
     info!("Starting logi-mx-daemon");
 
@@ -313,4 +348,38 @@ fn monitor_udev_events_sync(tx: mpsc::Sender<UdevEvent>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_lock_file_path() {
+        let path = get_lock_file_path();
+        assert!(path.to_str().unwrap().contains("logi-mx-daemon.lock"));
+    }
+
+    #[test]
+    fn test_acquire_instance_lock() {
+        let lock_result = acquire_instance_lock();
+        assert!(lock_result.is_ok());
+
+        let second_lock_result = acquire_instance_lock();
+        assert!(second_lock_result.is_err());
+
+        drop(lock_result);
+
+        let third_lock_result = acquire_instance_lock();
+        assert!(third_lock_result.is_ok());
+    }
+
+    #[test]
+    fn test_lock_file_cleanup() {
+        let lock = acquire_instance_lock().unwrap();
+        let lock_path = get_lock_file_path();
+        assert!(lock_path.exists());
+
+        drop(lock);
+    }
 }
