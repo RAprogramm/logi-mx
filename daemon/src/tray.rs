@@ -371,4 +371,92 @@ mod tests {
         assert!(title.contains("Charging"));
         assert!(title.contains("2400"));
     }
+
+    #[test]
+    fn test_tray_title_disconnected() {
+        let tray = LogiTrayIcon::new();
+        let title = tray.title();
+        assert_eq!(title, "MX Master 3S - Disconnected");
+    }
+
+    #[test]
+    fn test_tray_id() {
+        let tray = LogiTrayIcon::new();
+        assert_eq!(tray.id(), "logi-mx-daemon");
+    }
+
+    #[test]
+    fn test_tray_category() {
+        let tray = LogiTrayIcon::new();
+        assert_eq!(tray.category(), Category::Hardware);
+    }
+
+    #[test]
+    fn test_get_status_handle() {
+        let tray = LogiTrayIcon::new();
+        let handle1 = tray.get_status_handle();
+        let handle2 = tray.get_status_handle();
+
+        // Modify status through handle1
+        {
+            let mut status = handle1.lock().unwrap();
+            status.connected = true;
+            status.battery_level = 50;
+        }
+
+        // Verify change visible through handle2
+        {
+            let status = handle2.lock().unwrap();
+            assert!(status.connected);
+            assert_eq!(status.battery_level, 50);
+        }
+    }
+
+    #[test]
+    fn test_device_status_all_fields() {
+        let status = DeviceStatus {
+            connected:            true,
+            battery_level:        95,
+            battery_status:       "Discharging".to_string(),
+            dpi:                  3200,
+            smartshift:           true,
+            smartshift_threshold: 30,
+            error:                None
+        };
+
+        assert!(status.connected);
+        assert_eq!(status.battery_level, 95);
+        assert_eq!(status.battery_status, "Discharging");
+        assert_eq!(status.dpi, 3200);
+        assert!(status.smartshift);
+        assert_eq!(status.smartshift_threshold, 30);
+        assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn test_icon_name_priority_error_over_connected() {
+        let tray = LogiTrayIcon::new();
+        {
+            let mut status = tray.status.lock().unwrap();
+            status.connected = true;
+            status.error = Some("Test error".to_string());
+        }
+        // Error state should take priority over connected state
+        assert_eq!(tray.icon_name(), "dialog-error");
+    }
+
+    #[test]
+    fn test_title_priority_error_over_connected() {
+        let tray = LogiTrayIcon::new();
+        {
+            let mut status = tray.status.lock().unwrap();
+            status.connected = true;
+            status.battery_level = 90;
+            status.error = Some("Critical failure".to_string());
+        }
+        let title = tray.title();
+        // Error should take priority, should not show battery level
+        assert!(title.contains("Error: Critical failure"));
+        assert!(!title.contains("90%"));
+    }
 }
