@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
+mod scroll_handler;
 #[cfg(feature = "tray")]
 mod tray;
 
@@ -88,6 +89,24 @@ impl DeviceManager {
             error!("Failed to set hi-res scroll: {}", e);
         }
 
+        debug!(
+            "Setting scroll wheel: v={}, h={}, smooth={}",
+            config.scroll_wheel.vertical_speed,
+            config.scroll_wheel.horizontal_speed,
+            config.scroll_wheel.smooth_scrolling
+        );
+        if let Err(e) = device.set_scroll_wheel(config.scroll_wheel) {
+            error!("Failed to set scroll wheel: {}", e);
+        }
+
+        debug!(
+            "Setting thumb wheel: speed={}, smooth={}",
+            config.thumbwheel.speed, config.thumbwheel.smooth_scrolling
+        );
+        if let Err(e) = device.set_thumb_wheel(config.thumbwheel) {
+            error!("Failed to set thumb wheel: {}", e);
+        }
+
         for (button, action) in &config.buttons {
             debug!("Setting button {:?} to action {:?}", button, action);
             if let Err(e) = device.set_button_action(*button, action.clone()) {
@@ -142,6 +161,29 @@ async fn main() -> Result<()> {
         warn!("Failed to load config: {}. Using default.", e);
         Config::default()
     });
+
+    let scroll_config = config
+        .devices
+        .first()
+        .map(|d| d.scroll_wheel)
+        .unwrap_or_default();
+    let thumbwheel_config = config
+        .devices
+        .first()
+        .map(|d| d.thumbwheel)
+        .unwrap_or_default();
+
+    info!(
+        "Starting scroll handler with vertical_speed={}, horizontal_speed={}, thumbwheel_speed={}",
+        scroll_config.vertical_speed, scroll_config.horizontal_speed, thumbwheel_config.speed
+    );
+
+    if let Err(e) = scroll_handler::ScrollHandler::spawn(scroll_config, thumbwheel_config) {
+        warn!(
+            "Failed to start scroll handler: {}. Continuing without scroll multiplier.",
+            e
+        );
+    }
 
     let mut manager = DeviceManager::new(config);
 
