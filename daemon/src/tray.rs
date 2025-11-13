@@ -19,7 +19,8 @@ pub struct DeviceStatus {
     pub battery_status:       String,
     pub dpi:                  u16,
     pub smartshift:           bool,
-    pub smartshift_threshold: u8
+    pub smartshift_threshold: u8,
+    pub error:                Option<String>
 }
 
 impl Default for DeviceStatus {
@@ -30,7 +31,8 @@ impl Default for DeviceStatus {
             battery_status:       "Unknown".to_string(),
             dpi:                  1000,
             smartshift:           false,
-            smartshift_threshold: 20
+            smartshift_threshold: 20,
+            error:                None
         }
     }
 }
@@ -80,13 +82,25 @@ impl LogiTrayIcon {
 
 impl Tray for LogiTrayIcon {
     fn icon_name(&self) -> String {
-        "input-mouse".to_string()
+        let status = self.status.lock().unwrap();
+        if status.error.is_some() {
+            "dialog-error".to_string()
+        } else if status.connected {
+            "input-mouse".to_string()
+        } else {
+            "input-mouse-symbolic".to_string()
+        }
     }
 
     fn title(&self) -> String {
         let status = self.status.lock().unwrap();
-        if status.connected {
-            format!("MX Master 3S - {}%", status.battery_level)
+        if let Some(ref error) = status.error {
+            format!("MX Master 3S - Error: {}", error)
+        } else if status.connected {
+            format!(
+                "MX Master 3S - Battery: {}% ({}), DPI: {}",
+                status.battery_level, status.battery_status, status.dpi
+            )
         } else {
             "MX Master 3S - Disconnected".to_string()
         }
