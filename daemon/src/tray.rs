@@ -232,7 +232,14 @@ impl Tray for LogiTrayIcon {
                             .and_then(|p| p.parent().map(|p| p.join("logi-mx-ui")))
                             .unwrap_or_else(|| PathBuf::from("logi-mx-ui"));
 
-                        if let Err(e) = Command::new(&ui_path).spawn() {
+                        // Launch UI detached from daemon to avoid zombie processes
+                        // Using sh -c with & to completely detach the process
+                        if let Err(e) = Command::new("sh")
+                            .arg("-c")
+                            .arg(format!("{} &", ui_path.display()))
+                            .spawn()
+                            .and_then(|mut child| child.wait())
+                        {
                             error!("Failed to launch UI at {:?}: {}", ui_path, e);
                         }
                     }),
@@ -282,17 +289,53 @@ impl Tray for LogiTrayIcon {
 }
 
 pub async fn spawn_tray() -> std::result::Result<Arc<Mutex<DeviceStatus>>, String> {
-    let tray_icon = LogiTrayIcon::new();
-    let status_handle = tray_icon.get_status_handle();
+    use tokio::time::{Duration, sleep};
 
-    tray_icon.update_status();
+    // Retry logic with exponential backoff
+    const MAX_RETRIES: u32 = 10;
+    const INITIAL_DELAY_MS: u64 = 100;
+    const MAX_DELAY_MS: u64 = 5000;
 
-    tray_icon
-        .spawn()
-        .await
-        .map_err(|e| format!("Failed to spawn tray: {}", e))?;
+    let mut attempt = 0;
+    let mut delay_ms = INITIAL_DELAY_MS;
 
-    Ok(status_handle)
+    loop {
+        attempt += 1;
+
+        let tray_icon = LogiTrayIcon::new();
+        let status_handle = tray_icon.get_status_handle();
+        tray_icon.update_status();
+
+        match tray_icon.spawn().await {
+            Ok(_) => {
+                if attempt > 1 {
+                    info!(
+                        "System tray registered successfully after {} attempts",
+                        attempt
+                    );
+                }
+                return Ok(status_handle);
+            }
+            Err(e) => {
+                if attempt >= MAX_RETRIES {
+                    return Err(format!(
+                        "Failed to spawn tray after {} attempts: {}",
+                        MAX_RETRIES, e
+                    ));
+                }
+
+                debug!(
+                    "Tray registration attempt {}/{} failed: {}. Retrying in {}ms...",
+                    attempt, MAX_RETRIES, e, delay_ms
+                );
+
+                sleep(Duration::from_millis(delay_ms)).await;
+
+                // Exponential backoff with cap
+                delay_ms = (delay_ms * 2).min(MAX_DELAY_MS);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
