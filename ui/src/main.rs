@@ -46,6 +46,16 @@ fn build_ui(app: &Application) {
     main_box.append(&toast_overlay);
 
     window.set_content(Some(&main_box));
+
+    // Ensure application exits when window is closed
+    let app_weak = app.downgrade();
+    window.connect_close_request(move |_| {
+        if let Some(app) = app_weak.upgrade() {
+            app.quit();
+        }
+        glib::Propagation::Proceed
+    });
+
     window.present();
 }
 
