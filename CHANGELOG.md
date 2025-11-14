@@ -5,20 +5,24 @@ All notable changes to logi-mx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - 2025-11-14
 
-### Features
+### Documentation
 
-- Add CHANGELOG.md generation to version bump workflow ([62e0a82](62e0a82b2684c302410c73b6e0ca83ce6f8a171a))
+- Add AUR badges for binary package ([ecf75f7](ecf75f7e0f27c6e696561cb7492ba05d16320642))
 
-### Testing
+### Refactoring
 
-- Fix test isolation by using unique lock file paths ([5e05bfa](5e05bfa72083cbd41f9232749a37217ce9af5b76))
+- Consolidate version-bump into CI workflow ([e4d9069](e4d9069bec8bc467717675fcb1a470e6c5304489))
 
 ### CI/CD
 
 - Auto-update PKGBUILD version and sha256sum in version bump workflow ([b17e7f0](b17e7f008538b465a5583858959192d9a06cd9f2))
 - Consolidate version bumps into single commit ([1fdbb48](1fdbb485800a447692e435af771d6701617f9bbd))
+
+### Miscellaneous
+
+- Bump version to 0.3.1 ([275396d](275396dd0a154f015e3f07cfe1c7da4085dd845f))
 
 ## [0.3.0] - 2025-11-13
 
