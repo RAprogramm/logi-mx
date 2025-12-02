@@ -544,8 +544,7 @@ jobs:
     if: >-
       always() &&
       needs.check-aur-sync.outputs.needs_publish == 'true' &&
-      (needs.create-release.result == 'success' ||
-       needs.create-release.result == 'skipped')
+      needs.create-release.result == 'skipped'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -576,8 +575,7 @@ jobs:
     if: >-
       always() &&
       needs.check-aur-sync.outputs.needs_publish == 'true' &&
-      (needs.create-release.result == 'success' ||
-       needs.create-release.result == 'skipped')
+      needs.create-release.result == 'skipped'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
