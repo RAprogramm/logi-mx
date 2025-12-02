@@ -493,3 +493,37 @@ jobs:
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: >-
             Update to version ${{ needs.release-gate.outputs.version }}
+
+  verify-aur:
+    name: Verify AUR Version
+    needs: [release-gate, publish-aur, publish-aur-bin]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for AUR sync
+        run: sleep 30
+      - name: Check AUR versions
+        run: |
+          VERSION="${{ needs.release-gate.outputs.version }}"
+          echo "Expected version: ${VERSION}"
+
+          echo "Checking logi-mx..."
+          AUR_VER=$(curl -s \
+            "https://aur.archlinux.org/rpc/?v=5&type=info&arg=logi-mx" \
+            | jq -r '.results[0].Version')
+          echo "AUR logi-mx version: ${AUR_VER}"
+          if [ "${AUR_VER}" != "${VERSION}" ]; then
+            echo "::error::logi-mx: ${AUR_VER} != ${VERSION}"
+            exit 1
+          fi
+
+          echo "Checking logi-mx-bin..."
+          AUR_BIN=$(curl -s \
+            "https://aur.archlinux.org/rpc/?v=5&type=info&arg=logi-mx-bin" \
+            | jq -r '.results[0].Version')
+          echo "AUR logi-mx-bin version: ${AUR_BIN}"
+          if [ "${AUR_BIN}" != "${VERSION}" ]; then
+            echo "::error::logi-mx-bin: ${AUR_BIN} != ${VERSION}"
+            exit 1
+          fi
+
+          echo "All AUR versions verified!"
