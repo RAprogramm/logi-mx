@@ -103,21 +103,14 @@ jobs:
           fi
 
       - name: Run tests with JUnit output
-        run: |
-          echo "::group::Running tests with nextest"
-          cargo nextest run ${{ matrix.features }} --workspace --no-fail-fast
-          echo "::endgroup::"
-
-          echo "::group::Generating JUnit report"
-          cargo nextest run ${{ matrix.features }} --workspace --no-fail-fast --message-format junit > junit.xml || true
-          echo "::endgroup::"
+        run: cargo nextest run ${{ matrix.features }} --workspace --profile ci
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
         uses: codecov/test-results-action@v1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./junit.xml
+          files: target/nextest/ci/junit.xml
           flags: tests-${{ matrix.rust }}
           name: tests-${{ matrix.rust }}-${{ matrix.features }}
 
