@@ -17,8 +17,19 @@ jobs:
   # QUALITY CHECKS - run on every push/PR
   # ============================================================================
 
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yamllint
+        run: pip install yamllint
+      - name: Lint YAML files
+        run: yamllint .github/workflows/
+
   format:
     name: Format
+    needs: [yaml-lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,10 +87,10 @@ jobs:
         run: cargo nextest run --all-features --workspace --profile ci
       - name: Upload test results
         if: always()
-        uses: codecov/test-results-action@v1
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/nextest/ci/junit.xml
+          name: test-results
+          path: target/nextest/ci/junit.xml
 
   coverage:
     name: Coverage
@@ -110,11 +121,37 @@ jobs:
         run: command -v cargo-llvm-cov || cargo install cargo-llvm-cov --locked
       - name: Generate coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-      - name: Upload coverage
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data
+          path: lcov.info
+
+  codecov:
+    name: Upload to Codecov
+    needs: [test, coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@v4
+        with:
+          name: test-results
+          path: ./artifacts
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-data
+          path: ./artifacts
+      - name: Upload test results to Codecov
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./artifacts/junit.xml
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: ./lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./artifacts/lcov.info
 
   audit:
     name: Security Audit
@@ -163,7 +200,7 @@ jobs:
   version-bump:
     name: Version Bump
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [format, clippy, test, coverage, audit, docs]
+    needs: [yaml-lint, format, clippy, test, coverage, codecov, audit, docs]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -240,13 +277,17 @@ jobs:
 
   release-gate:
     name: Release Gate
-    needs: [format, clippy, test, coverage, audit, docs, version-bump]
+    needs: [yaml-lint, format, clippy, test, coverage, codecov, audit, docs, version-bump]
     if: |
       always() &&
+      needs.yaml-lint.result == 'success' &&
       needs.format.result == 'success' &&
       needs.clippy.result == 'success' &&
       needs.test.result == 'success' &&
+      needs.coverage.result == 'success' &&
+      needs.codecov.result == 'success' &&
       needs.audit.result == 'success' &&
+      needs.docs.result == 'success' &&
       (
         (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
         needs.version-bump.outputs.version_bumped == 'true'
