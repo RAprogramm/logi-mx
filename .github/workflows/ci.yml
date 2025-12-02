@@ -493,3 +493,163 @@ jobs:
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: >-
             Update to version ${{ needs.release-gate.outputs.version }}
+
+  # ============================================================================
+  # AUR SYNC CHECK - verify AUR is up to date, publish if behind
+  # ============================================================================
+
+  check-aur-sync:
+    name: Check AUR Sync
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - yaml-lint
+      - reuse
+      - format
+      - clippy
+      - test
+      - coverage
+      - codecov
+      - audit
+      - docs
+    runs-on: ubuntu-latest
+    outputs:
+      needs_publish: ${{ steps.check.outputs.needs_publish }}
+      current_version: ${{ steps.check.outputs.current_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check versions
+        id: check
+        run: |
+          CURRENT=$(grep '^version' Cargo.toml | head -1 \
+            | sed 's/.*"\(.*\)".*/\1/')
+          echo "Current version: ${CURRENT}"
+          echo "current_version=${CURRENT}" >> $GITHUB_OUTPUT
+
+          AUR_VER=$(curl -s \
+            "https://aur.archlinux.org/rpc/?v=5&type=info&arg=logi-mx" \
+            | jq -r '.results[0].Version // "0.0.0"')
+          echo "AUR version: ${AUR_VER}"
+
+          if [ "${AUR_VER}" != "${CURRENT}" ]; then
+            echo "AUR is behind, needs publish"
+            echo "needs_publish=true" >> $GITHUB_OUTPUT
+          else
+            echo "AUR is up to date"
+            echo "needs_publish=false" >> $GITHUB_OUTPUT
+          fi
+
+  sync-aur:
+    name: Sync AUR
+    needs: [check-aur-sync, create-release]
+    if: >-
+      always() &&
+      needs.check-aur-sync.outputs.needs_publish == 'true' &&
+      (needs.create-release.result == 'success' ||
+       needs.create-release.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate .SRCINFO
+        run: |
+          docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
+            pacman -Sy --noconfirm base-devel sudo &&
+            useradd -m builder &&
+            chown -R builder:builder /pkg &&
+            cd /pkg &&
+            sudo -u builder makepkg --printsrcinfo > .SRCINFO
+          "
+      - name: Publish logi-mx
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: logi-mx
+          pkgbuild: ./PKGBUILD
+          assets: logi-mx.install
+          commit_username: RAprogramm
+          commit_email: andrey.rozanov.vl@gmail.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: >-
+            Sync to version ${{ needs.check-aur-sync.outputs.current_version }}
+
+  sync-aur-bin:
+    name: Sync AUR Binary
+    needs: [check-aur-sync, create-release]
+    if: >-
+      always() &&
+      needs.check-aur-sync.outputs.needs_publish == 'true' &&
+      (needs.create-release.result == 'success' ||
+       needs.create-release.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and calculate checksum
+        run: |
+          VERSION="${{ needs.check-aur-sync.outputs.current_version }}"
+          BASE="https://github.com/RAprogramm/logi-mx/releases"
+          FILE="logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz"
+          URL="${BASE}/download/v${VERSION}/${FILE}"
+          curl -sSL -o archive.tar.gz "${URL}"
+          SHA=$(sha256sum archive.tar.gz | cut -d' ' -f1)
+          echo "sha256sum=${SHA}" >> $GITHUB_ENV
+      - name: Generate PKGBUILD
+        run: |
+          VERSION="${{ needs.check-aur-sync.outputs.current_version }}"
+          chmod +x scripts/generate-pkgbuild-bin.sh
+          ./scripts/generate-pkgbuild-bin.sh "${VERSION}" "${sha256sum}"
+      - name: Generate .SRCINFO
+        run: |
+          docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
+            pacman -Sy --noconfirm base-devel sudo &&
+            useradd -m builder &&
+            chown -R builder:builder /pkg &&
+            cd /pkg &&
+            sudo -u builder makepkg --printsrcinfo \
+              -p PKGBUILD.bin > .SRCINFO.bin
+          "
+      - name: Publish logi-mx-bin
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: logi-mx-bin
+          pkgbuild: ./PKGBUILD.bin
+          commit_username: RAprogramm
+          commit_email: andrey.rozanov.vl@gmail.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: >-
+            Sync to version ${{ needs.check-aur-sync.outputs.current_version }}
+
+  verify-aur:
+    name: Verify AUR Version
+    needs:
+      - check-aur-sync
+      - sync-aur
+      - sync-aur-bin
+    if: always() && needs.check-aur-sync.outputs.needs_publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for AUR sync
+        run: sleep 30
+      - name: Check AUR versions
+        run: |
+          CURRENT=$(grep '^version' Cargo.toml | head -1 \
+            | sed 's/.*"\(.*\)".*/\1/')
+          echo "Expected version: ${CURRENT}"
+
+          echo "Checking logi-mx..."
+          AUR_VER=$(curl -s \
+            "https://aur.archlinux.org/rpc/?v=5&type=info&arg=logi-mx" \
+            | jq -r '.results[0].Version')
+          echo "AUR logi-mx version: ${AUR_VER}"
+          if [ "${AUR_VER}" != "${CURRENT}" ]; then
+            echo "::warning::logi-mx: ${AUR_VER} != ${CURRENT}"
+          fi
+
+          echo "Checking logi-mx-bin..."
+          AUR_BIN=$(curl -s \
+            "https://aur.archlinux.org/rpc/?v=5&type=info&arg=logi-mx-bin" \
+            | jq -r '.results[0].Version')
+          echo "AUR logi-mx-bin version: ${AUR_BIN}"
+          if [ "${AUR_BIN}" != "${CURRENT}" ]; then
+            echo "::warning::logi-mx-bin: ${AUR_BIN} != ${CURRENT}"
+          fi
+
+          echo "AUR version check complete"
