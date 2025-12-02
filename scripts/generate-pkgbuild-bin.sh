@@ -21,7 +21,7 @@ license=('MIT')
 depends=('hidapi' 'systemd' 'gtk4' 'libadwaita' 'dbus')
 provides=('logi-mx')
 conflicts=('logi-mx')
-source=("\$pkgname-\$pkgver.tar.gz::https://github.com/RAprogramm/logi-mx/releases/download/v\${pkgver}/logi-mx-\${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
+source=("\$pkgname-\$pkgver.tar.gz::https://github.com/RAprogramm/logi-mx/releases/download/v\${pkgver}/logi-mx-\${pkgver}-x86_64-linux-gnu.tar.gz")
 sha256sums=('${SHA256SUM}')
 
 package() {
