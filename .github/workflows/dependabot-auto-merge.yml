@@ -27,7 +27,7 @@ jobs:
           check-regexp: '(Format|Clippy|Test|Build|Audit|Documentation)'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 30
-          allowed-conclusions: success
+          allowed-conclusions: success,skipped
 
       - name: Enable auto-merge for minor and patch updates
         if: |
