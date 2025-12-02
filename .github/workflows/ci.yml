@@ -450,6 +450,7 @@ jobs:
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: >-
             Update to version ${{ needs.release-gate.outputs.version }}
+          force_push: true
 
   publish-aur-bin:
     name: Publish to AUR (binary)
@@ -568,6 +569,7 @@ jobs:
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: >-
             Sync to version ${{ needs.check-aur-sync.outputs.current_version }}
+          force_push: true
 
   sync-aur-bin:
     name: Sync AUR Binary
