@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-use evdev::{Device, EventType, InputEvent, RelativeAxisCode, uinput::VirtualDevice};
+use evdev::{Device, EventType, InputEvent, MiscCode, RelativeAxisCode, uinput::VirtualDevice};
 use logi_mx_driver::prelude::*;
 use masterror::prelude::*;
 use tokio::task;
@@ -34,7 +34,7 @@ impl ScrollHandler {
     ) -> Result<()> {
         task::spawn_blocking(move || {
             if let Err(e) = Self::run_blocking(scroll_config, thumbwheel_config) {
-                error!("Scroll handler error: {}", e);
+                error!("Scroll handler error: {:?}", e);
             }
         });
 
@@ -136,6 +136,10 @@ impl ScrollHandler {
                 RelativeAxisCode::REL_HWHEEL_HI_RES
             ]))
             .map_err(|e| AppError::internal("Failed to add relative axes").with_source(e))?;
+
+        builder = builder
+            .with_msc(&evdev::AttributeSet::from_iter([MiscCode::MSC_SCAN]))
+            .map_err(|e| AppError::internal("Failed to add msc").with_source(e))?;
 
         builder
             .build()

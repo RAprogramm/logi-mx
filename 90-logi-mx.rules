@@ -19,3 +19,6 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c52b", MODE="06
 # Input device access (for scroll speed multiplier in daemon)
 # Users must be in the 'input' group to access /dev/input/event* devices
 KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0660"
+
+# Virtual device for scroll speed control (required for Wayland/libinput recognition)
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{name}=="MX Master 3S Virtual", ENV{ID_INPUT}="1", ENV{ID_INPUT_MOUSE}="1", ENV{LIBINPUT_DEVICE_GROUP}="logi-mx-virtual"
