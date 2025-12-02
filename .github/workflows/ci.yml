@@ -440,17 +440,29 @@ jobs:
             sudo -u builder makepkg --printsrcinfo > .SRCINFO
           "
       - name: Publish
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
-        with:
-          pkgname: logi-mx
-          pkgbuild: ./PKGBUILD
-          assets: logi-mx.install
-          commit_username: RAprogramm
-          commit_email: andrey.rozanov.vl@gmail.com
-          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: >-
-            Update to version ${{ needs.release-gate.outputs.version }}
-          force_push: true
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          VERSION="${{ needs.release-gate.outputs.version }}"
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+
+          git clone ssh://aur@aur.archlinux.org/logi-mx.git /tmp/aur
+          cd /tmp/aur
+          git checkout -B master origin/master || git checkout -b master
+          cp "$GITHUB_WORKSPACE/PKGBUILD" .
+          cp "$GITHUB_WORKSPACE/.SRCINFO" .
+          cp "$GITHUB_WORKSPACE/logi-mx.install" .
+
+          git config user.name "RAprogramm"
+          git config user.email "andrey.rozanov.vl@gmail.com"
+          git add -A
+          git diff --cached --quiet || \
+            git commit -m "Update to version ${VERSION}"
+          git push origin master
 
   publish-aur-bin:
     name: Publish to AUR (binary)
@@ -559,17 +571,29 @@ jobs:
             sudo -u builder makepkg --printsrcinfo > .SRCINFO
           "
       - name: Publish logi-mx
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
-        with:
-          pkgname: logi-mx
-          pkgbuild: ./PKGBUILD
-          assets: logi-mx.install
-          commit_username: RAprogramm
-          commit_email: andrey.rozanov.vl@gmail.com
-          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: >-
-            Sync to version ${{ needs.check-aur-sync.outputs.current_version }}
-          force_push: true
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          VERSION="${{ needs.check-aur-sync.outputs.current_version }}"
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+
+          git clone ssh://aur@aur.archlinux.org/logi-mx.git /tmp/aur
+          cd /tmp/aur
+          git checkout -B master origin/master || git checkout -b master
+          cp "$GITHUB_WORKSPACE/PKGBUILD" .
+          cp "$GITHUB_WORKSPACE/.SRCINFO" .
+          cp "$GITHUB_WORKSPACE/logi-mx.install" .
+
+          git config user.name "RAprogramm"
+          git config user.email "andrey.rozanov.vl@gmail.com"
+          git add -A
+          git diff --cached --quiet || \
+            git commit -m "Sync to version ${VERSION}"
+          git push origin master
 
   sync-aur-bin:
     name: Sync AUR Binary
