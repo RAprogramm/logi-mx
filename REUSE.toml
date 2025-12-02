@@ -1,0 +1,28 @@
+version = 1
+SPDX-PackageName = "logi-mx"
+SPDX-PackageSupplier = "RAprogramm <andrey.rozanov.vl@gmail.com>"
+SPDX-PackageDownloadLocation = "https://github.com/RAprogramm/logi-mx"
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025 RAprogramm <andrey.rozanov.vl@gmail.com>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "Cargo.lock"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025 RAprogramm <andrey.rozanov.vl@gmail.com>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ".github/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025 RAprogramm <andrey.rozanov.vl@gmail.com>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ".config/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025 RAprogramm <andrey.rozanov.vl@gmail.com>"
+SPDX-License-Identifier = "MIT"

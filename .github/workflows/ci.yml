@@ -27,9 +27,17 @@ jobs:
       - name: Lint YAML files
         run: yamllint .github/workflows/
 
+  reuse:
+    name: REUSE Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@v5
+
   format:
     name: Format
-    needs: [yaml-lint]
+    needs: [yaml-lint, reuse]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -200,7 +208,7 @@ jobs:
   version-bump:
     name: Version Bump
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [yaml-lint, format, clippy, test, coverage, codecov, audit, docs]
+    needs: [yaml-lint, reuse, format, clippy, test, coverage, codecov, audit, docs]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -277,10 +285,11 @@ jobs:
 
   release-gate:
     name: Release Gate
-    needs: [yaml-lint, format, clippy, test, coverage, codecov, audit, docs, version-bump]
+    needs: [yaml-lint, reuse, format, clippy, test, coverage, codecov, audit, docs, version-bump]
     if: |
       always() &&
       needs.yaml-lint.result == 'success' &&
+      needs.reuse.result == 'success' &&
       needs.format.result == 'success' &&
       needs.clippy.result == 'success' &&
       needs.test.result == 'success' &&
