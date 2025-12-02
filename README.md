@@ -7,6 +7,7 @@
 [![AUR version (bin)](https://img.shields.io/aur/version/logi-mx-bin)](https://aur.archlinux.org/packages/logi-mx-bin)
 [![AUR votes (bin)](https://img.shields.io/aur/votes/logi-mx-bin)](https://aur.archlinux.org/packages/logi-mx-bin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![REUSE](https://api.reuse.software/badge/github.com/RAprogramm/logi-mx)](https://api.reuse.software/info/github.com/RAprogramm/logi-mx)
 [![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org)
 
 **Blazing fast Logitech MX series mouse driver and configuration tool for Linux**

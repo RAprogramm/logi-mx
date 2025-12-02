@@ -1,35 +1,55 @@
+---
 name: CI
 
-on:
+"on":
   push:
-    branches: [ main ]
+    branches: [main]
     tags:
       - 'v*'
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 
 jobs:
-  format:
-    name: Format
+  # ============================================================================
+  # QUALITY CHECKS - run on every push/PR
+  # ============================================================================
+
+  yaml-lint:
+    name: YAML Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+      - name: Install yamllint
+        run: pip install yamllint
+      - name: Lint YAML files
+        run: yamllint .github/workflows/
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+  reuse:
+    name: REUSE Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: REUSE Compliance Check
+        uses: fsfe/reuse-action@v5
+
+  format:
+    name: Format
+    needs: [yaml-lint, reuse]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
-
-      - name: Check formatting
-        run: cargo +nightly fmt -- --check
+      - run: cargo +nightly fmt -- --check
 
   clippy:
     name: Clippy
+    needs: [format]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -38,31 +58,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/pacman/pkg
-          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-pacman-
-
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
-
-      - uses: actions/checkout@v6
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-
+          pacman -S --noconfirm \
+            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features --workspace -- -D warnings
+        run: >-
+          cargo clippy --all-targets --all-features --workspace
+          -- -D warnings
 
   test:
-    name: Test (${{ matrix.rust }}, ${{ matrix.features }})
+    name: Test
+    needs: [clippy]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [stable, beta, nightly]
-        features: ['--all-features', '--no-default-features']
     container:
       image: archlinux:latest
     steps:
@@ -70,52 +82,33 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/pacman/pkg
-          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-pacman-
-
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel rustup gtk4 libadwaita hidapi systemd dbus git
-          rustup default ${{ matrix.rust }}
-
-      - uses: actions/checkout@v6
-
+          pacman -S --noconfirm \
+            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-bin-nextest-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-bin-nextest-
-            ${{ runner.os }}-cargo-bin-
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.rust }}-${{ matrix.features }}
-
+          key: cargo-bin-nextest
       - name: Install cargo-nextest
-        run: |
-          if [ ! -f ~/.cargo/bin/cargo-nextest ]; then
-            cargo install cargo-nextest --locked
-          fi
-
-      - name: Run tests with JUnit output
-        run: cargo nextest run ${{ matrix.features }} --workspace --profile ci
-
-      - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@v1
+        run: command -v cargo-nextest || cargo install cargo-nextest --locked
+      - name: Run tests
+        run: cargo nextest run --all-features --workspace --profile ci
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/nextest/ci/junit.xml
-          flags: tests-${{ matrix.rust }}
-          name: tests-${{ matrix.rust }}-${{ matrix.features }}
+          name: test-results
+          path: target/nextest/ci/junit.xml
 
   coverage:
     name: Coverage
+    needs: [clippy]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -124,147 +117,78 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/pacman/pkg
-          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-pacman-
-
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+          pacman -S --noconfirm \
+            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
           rustup default stable
           rustup component add llvm-tools-preview
-
-      - uses: actions/checkout@v6
-
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-bin-llvm-cov-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-bin-llvm-cov-
-            ${{ runner.os }}-cargo-bin-
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-
+          key: cargo-bin-llvm-cov
       - name: Install cargo-llvm-cov
-        run: |
-          if [ ! -f ~/.cargo/bin/cargo-llvm-cov ]; then
-            cargo install cargo-llvm-cov --locked
-          fi
+        run: command -v cargo-llvm-cov || cargo install cargo-llvm-cov --locked
+      - name: Generate coverage
+        run: >-
+          cargo llvm-cov --all-features --workspace
+          --lcov --output-path lcov.info
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data
+          path: lcov.info
 
-      - name: Generate coverage report
-        run: |
-          echo "::group::Running cargo-llvm-cov"
-          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-          echo "::endgroup::"
-
-          echo "::group::Coverage summary"
-          cargo llvm-cov --all-features --workspace --summary-only
-          echo "::endgroup::"
-
+  codecov:
+    name: Upload to Codecov
+    needs: [test, coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@v4
+        with:
+          name: test-results
+          path: ./artifacts
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-data
+          path: ./artifacts
+      - name: Upload test results to Codecov
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./artifacts/junit.xml
       - name: Upload coverage to Codecov
-        if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./lcov.info
-          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-          flags: coverage
-          name: rust-coverage
-          verbose: true
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-    steps:
-      - name: Cache pacman packages
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/pacman/pkg
-          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-pacman-
-
-      - name: Install dependencies
-        run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
-
-      - uses: actions/checkout@v6
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release
-        run: cargo build --release --all-features --workspace --target ${{ matrix.target }}
-
-      - name: Strip binaries
-        run: |
-          strip target/${{ matrix.target }}/release/logi-mx
-          strip target/${{ matrix.target }}/release/logi-mx-daemon
-          strip target/${{ matrix.target }}/release/logi-mx-ui
-
-      - name: Create release archive
-        run: |
-          mkdir -p release
-          cp target/${{ matrix.target }}/release/logi-mx release/
-          cp target/${{ matrix.target }}/release/logi-mx-daemon release/
-          cp target/${{ matrix.target }}/release/logi-mx-ui release/
-          cp 90-logi-mx.rules release/
-          cp logi-mx-daemon.service release/
-          cp README.md release/
-          cp LICENSE release/
-          tar -czf logi-mx-test-${{ matrix.target }}.tar.gz -C release .
-          echo "Archive size: $(du -h logi-mx-test-${{ matrix.target }}.tar.gz | cut -f1)"
-          tar -tzf logi-mx-test-${{ matrix.target }}.tar.gz
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v5
-        with:
-          name: logi-mx-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/logi-mx
-            target/${{ matrix.target }}/release/logi-mx-daemon
-            target/${{ matrix.target }}/release/logi-mx-ui
+          files: ./artifacts/lcov.info
 
   audit:
     name: Security Audit
-    runs-on: ubuntu-24.04
+    needs: [clippy]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo binaries
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-bin-audit-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-bin-audit-
-            ${{ runner.os }}-cargo-bin-
-
+          key: cargo-bin-audit
       - name: Install cargo-audit
-        run: |
-          if [ ! -f ~/.cargo/bin/cargo-audit ]; then
-            cargo install cargo-audit --locked
-          fi
-
-      - name: Run audit
-        run: cargo audit
+        run: command -v cargo-audit || cargo install cargo-audit --locked
+      - run: cargo audit
 
   docs:
     name: Documentation
+    needs: [clippy]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -273,56 +197,57 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/pacman/pkg
-          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-pacman-
-
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
-
-      - uses: actions/checkout@v6
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build documentation
-        run: cargo doc --no-deps --all-features --workspace --document-private-items
-
-      - name: Upload documentation
-        uses: actions/upload-artifact@v5
+          pacman -S --noconfirm \
+            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --all-features --workspace
+      - uses: actions/upload-artifact@v4
         with:
           name: docs
           path: target/doc/
 
-  # Version management - only run on push to main
+  # ============================================================================
+  # VERSION BUMP - only on push to main, AFTER all checks pass
+  # ============================================================================
+
   version-bump:
-    name: Bump version based on commits
+    name: Version Bump
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - yaml-lint
+      - reuse
+      - format
+      - clippy
+      - test
+      - coverage
+      - codecov
+      - audit
+      - docs
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
       new_version: ${{ steps.bump.outputs.new_version }}
-      tag_created: ${{ steps.bump.outputs.tag_created }}
+      version_bumped: ${{ steps.bump.outputs.version_bumped }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get latest tag
-        id: get_tag
-        run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
-          echo "Latest tag: ${LATEST_TAG}"
-
-      - name: Determine version bump
+      - name: Analyze commits and bump version
         id: bump
         run: |
-          COMMITS=$(git log ${{ steps.get_tag.outputs.latest_tag }}..HEAD --pretty=format:"%s")
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null \
+            || echo "v0.0.0")
+          echo "Latest tag: $LATEST_TAG"
+
+          COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"%s")
 
           HAS_BREAKING=false
           HAS_FEAT=false
@@ -338,231 +263,173 @@ jobs:
             fi
           done <<< "$COMMITS"
 
-          CURRENT_VERSION="${{ steps.get_tag.outputs.latest_tag }}"
-          CURRENT_VERSION="${CURRENT_VERSION#v}"
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          CURRENT="${LATEST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
           if [ "$HAS_BREAKING" = true ]; then
             NEW_VERSION="$((MAJOR + 1)).0.0"
-            BUMP_TYPE="major"
           elif [ "$HAS_FEAT" = true ]; then
             NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
-            BUMP_TYPE="minor"
           elif [ "$HAS_FIX" = true ]; then
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-            BUMP_TYPE="patch"
           else
-            NEW_VERSION="$CURRENT_VERSION"
-            BUMP_TYPE="none"
-          fi
-
-          echo "bump_type=${BUMP_TYPE}" >> $GITHUB_OUTPUT
-          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-          if [ "$BUMP_TYPE" != "none" ]; then
-            echo "tag_created=true" >> $GITHUB_OUTPUT
-          else
-            echo "tag_created=false" >> $GITHUB_OUTPUT
-          fi
-          echo "Bump type: ${BUMP_TYPE}, New version: ${NEW_VERSION}"
-
-      - name: Install git-cliff
-        if: steps.bump.outputs.bump_type != 'none'
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: git-cliff
-
-      - name: Update version files
-        if: steps.bump.outputs.bump_type != 'none'
-        run: |
-          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
-          CURRENT_CARGO_VERSION=$(grep "^version = " Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          CURRENT_PKGVER=$(grep "^pkgver=" PKGBUILD | sed 's/pkgver=//')
-
-          if [ "$CURRENT_CARGO_VERSION" = "$NEW_VERSION" ] && [ "$CURRENT_PKGVER" = "$NEW_VERSION" ]; then
-            echo "All version files already at ${NEW_VERSION}, skipping update"
+            echo "version_bumped=false" >> $GITHUB_OUTPUT
+            echo "No version bump needed"
             exit 0
           fi
 
-          # Update Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
+          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "version_bumped=true" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
 
-          # Create temporary tag to calculate PKGBUILD sha256sum
+      - name: Update files and create tag
+        if: steps.bump.outputs.version_bumped == 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
+
+          sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
+          sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
+
+          git add Cargo.toml PKGBUILD
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git tag "v${NEW_VERSION}"
+          git push origin main
           git push origin "v${NEW_VERSION}"
 
-          # Wait for GitHub to process the tag
-          sleep 5
+  # ============================================================================
+  # RELEASE PIPELINE - runs after version bump OR on tag push
+  # ============================================================================
 
-          # Update PKGBUILD with calculated sha256sum
-          sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
-          SHA256=$(curl -sL "https://github.com/RAprogramm/logi-mx/archive/v${NEW_VERSION}.tar.gz" | sha256sum | cut -d' ' -f1)
-          sed -i "s/^sha256sums=.*/sha256sums=('${SHA256}')/" PKGBUILD
-
-          # Generate CHANGELOG.md with all versions
-          git-cliff --config cliff.toml --output CHANGELOG.md
-
-          # Amend commit to include PKGBUILD and CHANGELOG
-          git add PKGBUILD CHANGELOG.md
-          git commit --amend --no-edit
-
-          # Update tag and push
-          git tag -f "v${NEW_VERSION}"
-          git push --force
-          git push origin "v${NEW_VERSION}" --force
-
-  # Release jobs - run on version tags or after version-bump creates a tag
-  generate-changelog:
-    name: Generate Changelog
-    needs: version-bump
-    if: always() && (startsWith(github.ref, 'refs/tags/v') || needs.version-bump.outputs.tag_created == 'true')
+  release-gate:
+    name: Release Gate
+    needs:
+      - yaml-lint
+      - reuse
+      - format
+      - clippy
+      - test
+      - coverage
+      - codecov
+      - audit
+      - docs
+      - version-bump
+    if: >-
+      always() &&
+      needs.yaml-lint.result == 'success' &&
+      needs.reuse.result == 'success' &&
+      needs.format.result == 'success' &&
+      needs.clippy.result == 'success' &&
+      needs.test.result == 'success' &&
+      needs.coverage.result == 'success' &&
+      needs.codecov.result == 'success' &&
+      needs.audit.result == 'success' &&
+      needs.docs.result == 'success' &&
+      (
+        (github.event_name == 'push' &&
+          startsWith(github.ref, 'refs/tags/v')) ||
+        needs.version-bump.outputs.version_bumped == 'true'
+      )
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
-      changelog: ${{ steps.git-cliff.outputs.content }}
-      version: ${{ steps.get_version.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.version-bump.outputs.new_version && format('v{0}', needs.version-bump.outputs.new_version) || github.ref_name }}
-
-      - name: Get version from tag
-        id: get_version
+      - name: Determine version
+        id: version
         run: |
           if [ -n "${{ needs.version-bump.outputs.new_version }}" ]; then
-            echo "version=${{ needs.version-bump.outputs.new_version }}" >> $GITHUB_OUTPUT
+            VER="${{ needs.version-bump.outputs.new_version }}"
           else
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            VER="${GITHUB_REF#refs/tags/v}"
           fi
-
-      - name: Generate changelog with git-cliff
-        uses: orhun/git-cliff-action@v4
-        id: git-cliff
-        with:
-          config: cliff.toml
-          args: --verbose --latest --strip header
-        env:
-          OUTPUT: CHANGELOG.md
-
-      - name: Upload CHANGELOG.md
-        uses: actions/upload-artifact@v5
-        with:
-          name: changelog
-          path: CHANGELOG.md
-
-  create-release:
-    name: Create Release
-    needs: generate-changelog
-    if: needs.generate-changelog.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      version: ${{ needs.generate-changelog.outputs.version }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Download changelog
-        uses: actions/download-artifact@v6
-        with:
-          name: changelog
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.generate-changelog.outputs.version }}
-          name: Release v${{ needs.generate-changelog.outputs.version }}
-          body: |
-            ${{ needs.generate-changelog.outputs.changelog }}
-
-            ## Installation
-            ```bash
-            # Arch Linux (AUR)
-            yay -S logi-mx
-            # or
-            paru -S logi-mx
-            ```
-
-            ## Download
-            Download the binary for your platform below.
-          files: CHANGELOG.md
-          draft: false
-          prerelease: false
+          echo "version=${VER}" >> $GITHUB_OUTPUT
 
   build-release:
     name: Build Release
-    needs: create-release
-    if: needs.create-release.result == 'success'
+    needs: [release-gate]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     container:
       image: archlinux:latest
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
     steps:
       - name: Cache pacman packages
         uses: actions/cache@v4
         with:
           path: /var/cache/pacman/pkg
-          key: ${{ runner.os }}-pacman-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-pacman-
-
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
-
-      - uses: actions/checkout@v6
-
-      - name: Setup cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release
-        run: cargo build --release --all-features --target ${{ matrix.target }}
-
+          pacman -S --noconfirm \
+            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release-gate.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --all-features --workspace
       - name: Strip binaries
         run: |
-          strip target/${{ matrix.target }}/release/logi-mx
-          strip target/${{ matrix.target }}/release/logi-mx-daemon
-          strip target/${{ matrix.target }}/release/logi-mx-ui
-
+          strip target/release/logi-mx
+          strip target/release/logi-mx-daemon
+          strip target/release/logi-mx-ui
       - name: Create archive
         run: |
+          VERSION="${{ needs.release-gate.outputs.version }}"
           mkdir -p release
-          cp target/${{ matrix.target }}/release/logi-mx release/
-          cp target/${{ matrix.target }}/release/logi-mx-daemon release/
-          cp target/${{ matrix.target }}/release/logi-mx-ui release/
+          cp target/release/logi-mx release/
+          cp target/release/logi-mx-daemon release/
+          cp target/release/logi-mx-ui release/
           cp 90-logi-mx.rules release/
           cp logi-mx-daemon.service release/
-          cp README.md release/
-          cp LICENSE release/
-          tar -czf logi-mx-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz -C release .
-
-      - name: Upload Release Asset
-        uses: softprops/action-gh-release@v2
+          cp README.md LICENSE release/
+          tar -czf "logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz" -C release .
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ needs.create-release.outputs.version }}
-          files: ./logi-mx-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
+          name: release-archive
+          path: logi-mx-*.tar.gz
 
-  publish-aur:
-    name: Publish to AUR
-    needs: [create-release, build-release]
-    if: needs.build-release.result == 'success'
-    runs-on: ubuntu-24.04
+  create-release:
+    name: Create GitHub Release
+    needs: [release-gate, build-release]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: v${{ needs.release-gate.outputs.version }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-archive
+      - name: Install git-cliff
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: git-cliff
+      - name: Generate changelog
+        run: >-
+          git-cliff --config cliff.toml --latest
+          --strip header -o RELEASE_NOTES.md
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.release-gate.outputs.version }}"
+          gh release create "v${VERSION}" \
+            --title "Release v${VERSION}" \
+            --notes-file RELEASE_NOTES.md \
+            logi-mx-*.tar.gz
 
+  publish-aur:
+    name: Publish to AUR
+    needs: [release-gate, create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release-gate.outputs.version }}
       - name: Generate .SRCINFO
         run: |
           docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
@@ -572,78 +439,51 @@ jobs:
             cd /pkg &&
             sudo -u builder makepkg --printsrcinfo > .SRCINFO
           "
-
-      - name: Validate SSH key
-        env:
-          SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-        run: |
-          if [ -z "$SSH_KEY" ]; then
-            echo "❌ ERROR: AUR_SSH_PRIVATE_KEY secret is empty or not set"
-            echo ""
-            echo "Required setup:"
-            echo "1. Go to: https://github.com/${{ github.repository }}/settings/secrets/actions"
-            echo "2. Add secret 'AUR_SSH_PRIVATE_KEY' with your AUR SSH private key"
-            echo "3. Ensure the key starts with '-----BEGIN OPENSSH PRIVATE KEY-----'"
-            echo ""
-            echo "Current repo: ${{ github.repository }}"
-            echo "Triggered by: ${{ github.event_name }}"
-            echo "Ref: ${{ github.ref }}"
-            exit 1
-          fi
-          echo "✓ SSH key is set (length: ${#SSH_KEY} chars)"
-
-      - name: Publish to AUR
+      - name: Publish
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
         with:
           pkgname: logi-mx
           pkgbuild: ./PKGBUILD
-          assets: |
-            logi-mx.install
+          assets: logi-mx.install
           commit_username: RAprogramm
           commit_email: andrey.rozanov.vl@gmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to version ${{ needs.create-release.outputs.version }}"
+          commit_message: >-
+            Update to version ${{ needs.release-gate.outputs.version }}
 
   publish-aur-bin:
     name: Publish to AUR (binary)
-    needs: [create-release, build-release]
-    if: needs.build-release.result == 'success'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+    needs: [release-gate, create-release]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Download release archive
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release-gate.outputs.version }}
+      - name: Download and calculate checksum
         run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          ARCHIVE_URL="https://github.com/RAprogramm/logi-mx/releases/download/v${VERSION}/logi-mx-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-
-          echo "Downloading ${ARCHIVE_URL}"
-          curl -sSL -o archive.tar.gz "${ARCHIVE_URL}"
-
-          echo "Calculating sha256sum"
-          SHA256SUM=$(sha256sum archive.tar.gz | cut -d' ' -f1)
-          echo "SHA256: ${SHA256SUM}"
-          echo "sha256sum=${SHA256SUM}" >> $GITHUB_ENV
-
-      - name: Generate PKGBUILD for binary package
+          VERSION="${{ needs.release-gate.outputs.version }}"
+          BASE="https://github.com/RAprogramm/logi-mx/releases"
+          FILE="logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz"
+          URL="${BASE}/download/v${VERSION}/${FILE}"
+          curl -sSL -o archive.tar.gz "${URL}"
+          SHA=$(sha256sum archive.tar.gz | cut -d' ' -f1)
+          echo "sha256sum=${SHA}" >> $GITHUB_ENV
+      - name: Generate PKGBUILD
         run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
+          VERSION="${{ needs.release-gate.outputs.version }}"
           chmod +x scripts/generate-pkgbuild-bin.sh
           ./scripts/generate-pkgbuild-bin.sh "${VERSION}" "${sha256sum}"
-
-      - name: Generate .SRCINFO for binary package
+      - name: Generate .SRCINFO
         run: |
           docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
             pacman -Sy --noconfirm base-devel sudo &&
             useradd -m builder &&
             chown -R builder:builder /pkg &&
             cd /pkg &&
-            sudo -u builder makepkg --printsrcinfo -p PKGBUILD.bin > .SRCINFO.bin
+            sudo -u builder makepkg --printsrcinfo \
+              -p PKGBUILD.bin > .SRCINFO.bin
           "
-
-      - name: Publish binary package to AUR
+      - name: Publish
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
         with:
           pkgname: logi-mx-bin
@@ -651,4 +491,5 @@ jobs:
           commit_username: RAprogramm
           commit_email: andrey.rozanov.vl@gmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to version ${{ needs.create-release.outputs.version }}"
+          commit_message: >-
+            Update to version ${{ needs.release-gate.outputs.version }}
