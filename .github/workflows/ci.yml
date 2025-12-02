@@ -18,7 +18,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -47,7 +47,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -80,7 +80,7 @@ jobs:
           pacman -S --noconfirm base-devel rustup gtk4 libadwaita hidapi systemd dbus git
           rustup default ${{ matrix.rust }}
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Cache cargo binaries
         uses: actions/cache@v4
@@ -135,7 +135,7 @@ jobs:
           rustup default stable
           rustup component add llvm-tools-preview
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Cache cargo binaries
         uses: actions/cache@v4
@@ -199,7 +199,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -240,7 +240,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -282,7 +282,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -304,7 +304,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -417,7 +417,7 @@ jobs:
       changelog: ${{ steps.git-cliff.outputs.content }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -450,7 +450,7 @@ jobs:
     outputs:
       version: ${{ needs.generate-changelog.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Download changelog
         uses: actions/download-artifact@v6
@@ -505,7 +505,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm base-devel rust gtk4 libadwaita hidapi systemd dbus git
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
@@ -544,7 +544,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Generate .SRCINFO
         run: |
@@ -595,7 +595,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Download release archive
         run: |
