@@ -29,6 +29,7 @@ jobs:
 
   clippy:
     name: Clippy
+    needs: [format]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -48,6 +49,7 @@ jobs:
 
   test:
     name: Test
+    needs: [clippy]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -81,6 +83,7 @@ jobs:
 
   coverage:
     name: Coverage
+    needs: [clippy]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -115,6 +118,7 @@ jobs:
 
   audit:
     name: Security Audit
+    needs: [clippy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,6 +134,7 @@ jobs:
 
   docs:
     name: Documentation
+    needs: [clippy]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
