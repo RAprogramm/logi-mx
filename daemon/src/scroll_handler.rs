@@ -1,11 +1,19 @@
 // SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering}
+    },
+    time::Duration
+};
+
 use evdev::{Device, EventType, InputEvent, MiscCode, RelativeAxisCode, uinput::VirtualDevice};
 use logi_mx_driver::prelude::*;
 use masterror::prelude::*;
-use tokio::task;
-use tracing::{debug, error, info};
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
 
 type Result<T> = std::result::Result<T, AppError>;
 
@@ -13,6 +21,44 @@ const VID_LOGITECH: u16 = 0x046D;
 const PID_MX_MASTER_3S_USB: u16 = 0x4082;
 const PID_MX_MASTER_3S_BT: u16 = 0xB034;
 const PID_BOLT_RECEIVER: u16 = 0xC548;
+
+const RETRY_DELAY: Duration = Duration::from_secs(2);
+const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollHandlerCommand {
+    #[allow(dead_code)]
+    Restart,
+    Stop
+}
+
+pub struct ScrollHandlerHandle {
+    #[allow(dead_code)]
+    tx:      mpsc::Sender<ScrollHandlerCommand>,
+    #[allow(dead_code)]
+    running: Arc<AtomicBool>
+}
+
+#[allow(dead_code)]
+impl ScrollHandlerHandle {
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    pub async fn restart(&self) -> Result<()> {
+        self.tx
+            .send(ScrollHandlerCommand::Restart)
+            .await
+            .map_err(|_| AppError::internal("Scroll handler channel closed"))
+    }
+
+    pub async fn stop(&self) -> Result<()> {
+        self.tx
+            .send(ScrollHandlerCommand::Stop)
+            .await
+            .map_err(|_| AppError::internal("Scroll handler channel closed"))
+    }
+}
 
 pub struct ScrollHandler {
     config:            ScrollWheelConfig,
@@ -31,19 +77,82 @@ impl ScrollHandler {
     pub fn spawn(
         scroll_config: ScrollWheelConfig,
         thumbwheel_config: ThumbWheelConfig
-    ) -> Result<()> {
-        task::spawn_blocking(move || {
-            if let Err(e) = Self::run_blocking(scroll_config, thumbwheel_config) {
-                error!("Scroll handler error: {:?}", e);
-            }
+    ) -> Result<ScrollHandlerHandle> {
+        let (tx, rx) = mpsc::channel::<ScrollHandlerCommand>(8);
+        let running = Arc::new(AtomicBool::new(false));
+        let running_clone = Arc::clone(&running);
+
+        std::thread::spawn(move || {
+            Self::run_with_restart_loop(scroll_config, thumbwheel_config, rx, running_clone);
         });
 
-        Ok(())
+        Ok(ScrollHandlerHandle {
+            tx,
+            running
+        })
+    }
+
+    fn run_with_restart_loop(
+        scroll_config: ScrollWheelConfig,
+        thumbwheel_config: ThumbWheelConfig,
+        mut rx: mpsc::Receiver<ScrollHandlerCommand>,
+        running: Arc<AtomicBool>
+    ) {
+        let mut consecutive_errors = 0u32;
+
+        loop {
+            if let Ok(cmd) = rx.try_recv() {
+                match cmd {
+                    ScrollHandlerCommand::Stop => {
+                        info!("Scroll handler received stop command");
+                        running.store(false, Ordering::SeqCst);
+                        break;
+                    }
+                    ScrollHandlerCommand::Restart => {
+                        info!("Scroll handler received restart command");
+                        consecutive_errors = 0;
+                    }
+                }
+            }
+
+            match Self::run_blocking(scroll_config, thumbwheel_config, &running) {
+                Ok(()) => {
+                    info!("Scroll handler exited normally");
+                    consecutive_errors = 0;
+                }
+                Err(e) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        error!(
+                            "Scroll handler failed {} times consecutively, backing off: {}",
+                            consecutive_errors, e
+                        );
+                        std::thread::sleep(Duration::from_secs(10));
+                        consecutive_errors = 0;
+                    } else {
+                        warn!(
+                            "Scroll handler error (attempt {}), restarting in {:?}: {}",
+                            consecutive_errors, RETRY_DELAY, e
+                        );
+                        std::thread::sleep(RETRY_DELAY);
+                    }
+                }
+            }
+
+            if let Ok(cmd) = rx.try_recv()
+                && cmd == ScrollHandlerCommand::Stop
+            {
+                info!("Scroll handler received stop command during restart");
+                running.store(false, Ordering::SeqCst);
+                break;
+            }
+        }
     }
 
     fn run_blocking(
         scroll_config: ScrollWheelConfig,
-        thumbwheel_config: ThumbWheelConfig
+        thumbwheel_config: ThumbWheelConfig,
+        running: &Arc<AtomicBool>
     ) -> Result<()> {
         let handler = Self::new(scroll_config, thumbwheel_config);
 
@@ -60,9 +169,11 @@ impl ScrollHandler {
         let virtual_device = handler.create_virtual_device(&device)?;
         info!("Virtual device created");
 
-        handler.process_events(device, virtual_device)?;
+        running.store(true, Ordering::SeqCst);
+        let result = handler.process_events(device, virtual_device);
+        running.store(false, Ordering::SeqCst);
 
-        Ok(())
+        result
     }
 
     #[cfg(test)]
@@ -84,12 +195,10 @@ impl ScrollHandler {
             let input_id = device.input_id();
             let name = device.name().unwrap_or("");
 
-            // Skip virtual devices created by this daemon
             if name.contains("Virtual") {
                 continue;
             }
 
-            // Only consider Mouse or Pointer devices (not Consumer Control, Keyboard, etc.)
             if !name.contains("Mouse") && !name.contains("Pointer") {
                 continue;
             }
@@ -151,7 +260,6 @@ impl ScrollHandler {
         mut device: Device,
         mut virtual_device: evdev::uinput::VirtualDevice
     ) -> Result<()> {
-        // Accumulators for fractional scroll speed support
         let mut vertical_accumulator = 0.0f32;
         let mut horizontal_accumulator = 0.0f32;
 
@@ -166,7 +274,6 @@ impl ScrollHandler {
 
                     if code == RelativeAxisCode::REL_WHEEL.0 {
                         let value = event.value();
-                        // Normalize to ±1 per event (one detent = one line)
                         let normalized = if value > 0 {
                             1.0
                         } else if value < 0 {
@@ -175,10 +282,8 @@ impl ScrollHandler {
                             0.0
                         };
 
-                        // Accumulate fractional scroll amount
                         vertical_accumulator += normalized * self.config.vertical_speed;
 
-                        // Extract integer part to emit, keep fractional remainder
                         let emit_value = vertical_accumulator.trunc() as i32;
                         vertical_accumulator = vertical_accumulator.fract();
 
@@ -191,7 +296,6 @@ impl ScrollHandler {
                             vertical_accumulator
                         );
 
-                        // Only emit if we have a non-zero value
                         if emit_value != 0 {
                             let modified_event =
                                 InputEvent::new(event.event_type().0, code, emit_value);
@@ -202,7 +306,6 @@ impl ScrollHandler {
                         continue;
                     } else if code == RelativeAxisCode::REL_HWHEEL.0 {
                         let value = event.value();
-                        // Normalize to ±1 per event
                         let normalized = if value > 0 {
                             1.0
                         } else if value < 0 {
@@ -211,10 +314,8 @@ impl ScrollHandler {
                             0.0
                         };
 
-                        // Accumulate fractional scroll amount
                         horizontal_accumulator += normalized * self.config.horizontal_speed;
 
-                        // Extract integer part to emit, keep fractional remainder
                         let emit_value = horizontal_accumulator.trunc() as i32;
                         horizontal_accumulator = horizontal_accumulator.fract();
 
@@ -227,7 +328,6 @@ impl ScrollHandler {
                             horizontal_accumulator
                         );
 
-                        // Only emit if we have a non-zero value
                         if emit_value != 0 {
                             let modified_event =
                                 InputEvent::new(event.event_type().0, code, emit_value);
@@ -239,12 +339,10 @@ impl ScrollHandler {
                     } else if code == RelativeAxisCode::REL_WHEEL_HI_RES.0
                         || code == RelativeAxisCode::REL_HWHEEL_HI_RES.0
                     {
-                        // Skip hi-res events to avoid duplication (regular REL_WHEEL is enough)
                         continue;
                     }
                 }
 
-                // Forward all other events unchanged
                 virtual_device
                     .emit(&[event])
                     .map_err(|e| AppError::internal("Failed to emit event").with_source(e))?;
@@ -317,5 +415,103 @@ mod tests {
         assert_eq!(PID_MX_MASTER_3S_USB, 0x4082);
         assert_eq!(PID_MX_MASTER_3S_BT, 0xB034);
         assert_eq!(PID_BOLT_RECEIVER, 0xC548);
+    }
+
+    #[test]
+    fn test_retry_constants() {
+        assert_eq!(RETRY_DELAY, Duration::from_secs(2));
+        assert_eq!(MAX_CONSECUTIVE_ERRORS, 5);
+    }
+
+    #[test]
+    fn test_scroll_handler_command_eq() {
+        assert_eq!(ScrollHandlerCommand::Restart, ScrollHandlerCommand::Restart);
+        assert_eq!(ScrollHandlerCommand::Stop, ScrollHandlerCommand::Stop);
+        assert_ne!(ScrollHandlerCommand::Restart, ScrollHandlerCommand::Stop);
+    }
+
+    #[test]
+    fn test_scroll_handler_handle_initial_state() {
+        let (tx, _rx) = mpsc::channel::<ScrollHandlerCommand>(8);
+        let running = Arc::new(AtomicBool::new(false));
+
+        let handle = ScrollHandlerHandle {
+            tx,
+            running: Arc::clone(&running)
+        };
+
+        assert!(!handle.is_running());
+
+        running.store(true, Ordering::SeqCst);
+        assert!(handle.is_running());
+
+        running.store(false, Ordering::SeqCst);
+        assert!(!handle.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_scroll_handler_handle_restart_closed_channel() {
+        let (tx, rx) = mpsc::channel::<ScrollHandlerCommand>(8);
+        let running = Arc::new(AtomicBool::new(false));
+
+        let handle = ScrollHandlerHandle {
+            tx,
+            running: Arc::clone(&running)
+        };
+
+        drop(rx);
+
+        let result = handle.restart().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_scroll_handler_handle_stop_closed_channel() {
+        let (tx, rx) = mpsc::channel::<ScrollHandlerCommand>(8);
+        let running = Arc::new(AtomicBool::new(false));
+
+        let handle = ScrollHandlerHandle {
+            tx,
+            running: Arc::clone(&running)
+        };
+
+        drop(rx);
+
+        let result = handle.stop().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_scroll_handler_handle_restart_success() {
+        let (tx, mut rx) = mpsc::channel::<ScrollHandlerCommand>(8);
+        let running = Arc::new(AtomicBool::new(false));
+
+        let handle = ScrollHandlerHandle {
+            tx,
+            running: Arc::clone(&running)
+        };
+
+        let result = handle.restart().await;
+        assert!(result.is_ok());
+
+        let cmd = rx.recv().await;
+        assert_eq!(cmd, Some(ScrollHandlerCommand::Restart));
+    }
+
+    #[tokio::test]
+    async fn test_scroll_handler_handle_stop_success() {
+        let (tx, mut rx) = mpsc::channel::<ScrollHandlerCommand>(8);
+        let running = Arc::new(AtomicBool::new(false));
+
+        let handle = ScrollHandlerHandle {
+            tx,
+            running: Arc::clone(&running)
+        };
+
+        let result = handle.stop().await;
+        assert!(result.is_ok());
+
+        let cmd = rx.recv().await;
+        assert_eq!(cmd, Some(ScrollHandlerCommand::Stop));
     }
 }

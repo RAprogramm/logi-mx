@@ -244,12 +244,17 @@ async fn main() -> Result<()> {
         scroll_config.vertical_speed, scroll_config.horizontal_speed, thumbwheel_config.speed
     );
 
-    if let Err(e) = scroll_handler::ScrollHandler::spawn(scroll_config, thumbwheel_config) {
-        warn!(
-            "Failed to start scroll handler: {}. Continuing without scroll multiplier.",
-            e
-        );
-    }
+    let _scroll_handle =
+        match scroll_handler::ScrollHandler::spawn(scroll_config, thumbwheel_config) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                warn!(
+                    "Failed to start scroll handler: {}. Continuing without scroll multiplier.",
+                    e
+                );
+                None
+            }
+        };
 
     let mut manager = DeviceManager::new(config);
 
