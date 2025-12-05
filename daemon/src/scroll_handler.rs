@@ -1,19 +1,16 @@
 // SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering}
-    },
-    time::Duration
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering}
 };
 
 use evdev::{Device, EventType, InputEvent, MiscCode, RelativeAxisCode, uinput::VirtualDevice};
 use logi_mx_driver::prelude::*;
 use masterror::prelude::*;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 type Result<T> = std::result::Result<T, AppError>;
 
@@ -21,9 +18,6 @@ const VID_LOGITECH: u16 = 0x046D;
 const PID_MX_MASTER_3S_USB: u16 = 0x4082;
 const PID_MX_MASTER_3S_BT: u16 = 0xB034;
 const PID_BOLT_RECEIVER: u16 = 0xC548;
-
-const RETRY_DELAY: Duration = Duration::from_secs(2);
-const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollHandlerCommand {
@@ -83,7 +77,7 @@ impl ScrollHandler {
         let running_clone = Arc::clone(&running);
 
         std::thread::spawn(move || {
-            Self::run_with_restart_loop(scroll_config, thumbwheel_config, rx, running_clone);
+            Self::run_event_loop(scroll_config, thumbwheel_config, rx, running_clone);
         });
 
         Ok(ScrollHandlerHandle {
@@ -92,59 +86,32 @@ impl ScrollHandler {
         })
     }
 
-    fn run_with_restart_loop(
+    fn run_event_loop(
         scroll_config: ScrollWheelConfig,
         thumbwheel_config: ThumbWheelConfig,
         mut rx: mpsc::Receiver<ScrollHandlerCommand>,
         running: Arc<AtomicBool>
     ) {
-        let mut consecutive_errors = 0u32;
+        // Try initial run
+        if let Err(e) = Self::run_blocking(scroll_config, thumbwheel_config, &running) {
+            debug!("Initial scroll handler start failed: {}", e);
+        }
 
-        loop {
-            if let Ok(cmd) = rx.try_recv() {
-                match cmd {
-                    ScrollHandlerCommand::Stop => {
-                        info!("Scroll handler received stop command");
-                        running.store(false, Ordering::SeqCst);
-                        break;
-                    }
-                    ScrollHandlerCommand::Restart => {
-                        info!("Scroll handler received restart command");
-                        consecutive_errors = 0;
-                    }
+        // Wait for commands
+        while let Some(cmd) = rx.blocking_recv() {
+            match cmd {
+                ScrollHandlerCommand::Stop => {
+                    info!("Scroll handler stopped");
+                    running.store(false, Ordering::SeqCst);
+                    break;
                 }
-            }
-
-            match Self::run_blocking(scroll_config, thumbwheel_config, &running) {
-                Ok(()) => {
-                    info!("Scroll handler exited normally");
-                    consecutive_errors = 0;
-                }
-                Err(e) => {
-                    consecutive_errors += 1;
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                        error!(
-                            "Scroll handler failed {} times consecutively, backing off: {}",
-                            consecutive_errors, e
-                        );
-                        std::thread::sleep(Duration::from_secs(10));
-                        consecutive_errors = 0;
-                    } else {
-                        warn!(
-                            "Scroll handler error (attempt {}), restarting in {:?}: {}",
-                            consecutive_errors, RETRY_DELAY, e
-                        );
-                        std::thread::sleep(RETRY_DELAY);
+                ScrollHandlerCommand::Restart => {
+                    debug!("Scroll handler restarting");
+                    if let Err(e) = Self::run_blocking(scroll_config, thumbwheel_config, &running)
+                    {
+                        debug!("Scroll handler error: {}", e);
                     }
                 }
-            }
-
-            if let Ok(cmd) = rx.try_recv()
-                && cmd == ScrollHandlerCommand::Stop
-            {
-                info!("Scroll handler received stop command during restart");
-                running.store(false, Ordering::SeqCst);
-                break;
             }
         }
     }
@@ -415,12 +382,6 @@ mod tests {
         assert_eq!(PID_MX_MASTER_3S_USB, 0x4082);
         assert_eq!(PID_MX_MASTER_3S_BT, 0xB034);
         assert_eq!(PID_BOLT_RECEIVER, 0xC548);
-    }
-
-    #[test]
-    fn test_retry_constants() {
-        assert_eq!(RETRY_DELAY, Duration::from_secs(2));
-        assert_eq!(MAX_CONSECUTIVE_ERRORS, 5);
     }
 
     #[test]

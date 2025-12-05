@@ -2,6 +2,7 @@
 Description=Logitech MX Master 3S Configuration Daemon
 Documentation=https://github.com/RAprogramm/logi-mx
 After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 Type=simple
@@ -14,4 +15,4 @@ MemoryHigh=192M
 TasksMax=64
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

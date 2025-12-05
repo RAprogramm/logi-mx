@@ -244,7 +244,7 @@ async fn main() -> Result<()> {
         scroll_config.vertical_speed, scroll_config.horizontal_speed, thumbwheel_config.speed
     );
 
-    let _scroll_handle =
+    let scroll_handle =
         match scroll_handler::ScrollHandler::spawn(scroll_config, thumbwheel_config) {
             Ok(handle) => Some(handle),
             Err(e) => {
@@ -321,6 +321,11 @@ async fn main() -> Result<()> {
                     UdevEvent::Add(path) => {
                         if let Err(e) = manager.handle_device_added(path).await {
                             error!("Error handling device add: {}", e);
+                        }
+                        if let Some(ref handle) = scroll_handle
+                            && let Err(e) = handle.restart().await
+                        {
+                            debug!("Failed to restart scroll handler: {}", e);
                         }
                     }
                     UdevEvent::Remove(path) => {
