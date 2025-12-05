@@ -475,4 +475,45 @@ mod tests {
         let cmd = rx.recv().await;
         assert_eq!(cmd, Some(ScrollHandlerCommand::Stop));
     }
+
+    #[test]
+    fn test_event_loop_stops_on_stop_command() {
+        let (tx, rx) = mpsc::channel::<ScrollHandlerCommand>(8);
+        let running = Arc::new(AtomicBool::new(false));
+        let running_clone = Arc::clone(&running);
+
+        let handle = std::thread::spawn(move || {
+            ScrollHandler::run_event_loop(
+                ScrollWheelConfig::default(),
+                ThumbWheelConfig::default(),
+                rx,
+                running_clone
+            );
+        });
+
+        tx.blocking_send(ScrollHandlerCommand::Stop).unwrap();
+        handle.join().unwrap();
+
+        assert!(!running.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_event_loop_handles_restart_command() {
+        let (tx, rx) = mpsc::channel::<ScrollHandlerCommand>(8);
+        let running = Arc::new(AtomicBool::new(false));
+        let running_clone = Arc::clone(&running);
+
+        let handle = std::thread::spawn(move || {
+            ScrollHandler::run_event_loop(
+                ScrollWheelConfig::default(),
+                ThumbWheelConfig::default(),
+                rx,
+                running_clone
+            );
+        });
+
+        tx.blocking_send(ScrollHandlerCommand::Restart).unwrap();
+        tx.blocking_send(ScrollHandlerCommand::Stop).unwrap();
+        handle.join().unwrap();
+    }
 }
