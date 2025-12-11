@@ -232,12 +232,26 @@ impl Tray for LogiTrayIcon {
                             .and_then(|p| p.parent().map(|p| p.join("logi-mx-ui")))
                             .unwrap_or_else(|| PathBuf::from("logi-mx-ui"));
 
-                        if let Err(e) = Command::new("systemd-run")
-                            .args(["--user", "--collect", "--no-block", "--"])
-                            .arg(&ui_path)
-                            .spawn()
-                        {
+                        // Build environment variables for display access
+                        let mut cmd = Command::new(&ui_path);
+
+                        // Propagate display environment variables
+                        for var in [
+                            "DISPLAY",
+                            "WAYLAND_DISPLAY",
+                            "XDG_RUNTIME_DIR",
+                            "XDG_SESSION_TYPE",
+                            "DBUS_SESSION_BUS_ADDRESS"
+                        ] {
+                            if let Ok(val) = std::env::var(var) {
+                                cmd.env(var, val);
+                            }
+                        }
+
+                        if let Err(e) = cmd.spawn() {
                             error!("Failed to launch UI at {:?}: {}", ui_path, e);
+                        } else {
+                            info!("Launched configuration UI");
                         }
                     }),
                     enabled: true,

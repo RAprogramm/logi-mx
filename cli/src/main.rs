@@ -46,31 +46,12 @@ enum SetCommands {
         threshold: u8
     },
 
-    Scroll {
+    Hires {
         #[arg(long)]
-        hires: bool,
+        enabled: bool,
 
         #[arg(long)]
         inverted: bool
-    },
-
-    ScrollWheel {
-        #[arg(long, default_value_t = 1.0)]
-        vertical_speed: f32,
-
-        #[arg(long, default_value_t = 1.0)]
-        horizontal_speed: f32,
-
-        #[arg(long)]
-        smooth: bool
-    },
-
-    ThumbWheel {
-        #[arg(long, default_value_t = 1.0)]
-        speed: f32,
-
-        #[arg(long)]
-        smooth: bool
     }
 }
 
@@ -113,9 +94,7 @@ fn cmd_info() -> Result<()> {
     let name = device.get_device_name()?;
     let dpi = device.get_dpi()?;
     let smartshift = device.get_smartshift()?;
-    let scroll = device.get_hires_scroll()?;
-    let scroll_wheel = device.get_scroll_wheel()?;
-    let thumbwheel = device.get_thumb_wheel()?;
+    let hires = device.get_hires_scroll()?;
 
     println!("Device Information:");
     println!("  Name: {}", name);
@@ -131,30 +110,7 @@ fn cmd_info() -> Result<()> {
     );
     println!(
         "  Hi-Res Scroll: {}",
-        if scroll.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-    println!(
-        "  Scroll Wheel: vertical speed={}, horizontal speed={}, smooth scrolling {}",
-        scroll_wheel.vertical_speed,
-        scroll_wheel.horizontal_speed,
-        if scroll_wheel.smooth_scrolling {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-    println!(
-        "  Thumb Wheel: speed={}, smooth scrolling {}",
-        thumbwheel.speed,
-        if thumbwheel.smooth_scrolling {
-            "enabled"
-        } else {
-            "disabled"
-        }
+        if hires.enabled { "enabled" } else { "disabled" }
     );
 
     Ok(())
@@ -202,58 +158,22 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 threshold
             );
         }
-        SetCommands::Scroll {
-            hires,
+        SetCommands::Hires {
+            enabled,
             inverted
         } => {
-            info!("Configuring scroll: hires={}, inverted={}", hires, inverted);
+            info!(
+                "Configuring hi-res scroll: enabled={}, inverted={}",
+                enabled, inverted
+            );
             device.set_hires_scroll(HiResScrollConfig {
-                enabled: hires,
+                enabled,
                 inverted
             })?;
             println!(
-                "Scroll configured: hi-res {}, inverted {}",
-                if hires { "enabled" } else { "disabled" },
+                "Hi-res scroll: {}, inverted: {}",
+                if enabled { "enabled" } else { "disabled" },
                 if inverted { "yes" } else { "no" }
-            );
-        }
-        SetCommands::ScrollWheel {
-            vertical_speed,
-            horizontal_speed,
-            smooth
-        } => {
-            info!(
-                "Configuring scroll wheel: vertical={}, horizontal={}, smooth={}",
-                vertical_speed, horizontal_speed, smooth
-            );
-            device.set_scroll_wheel(ScrollWheelConfig {
-                vertical_speed,
-                horizontal_speed,
-                smooth_scrolling: smooth
-            })?;
-            println!(
-                "Scroll wheel configured: vertical speed={}, horizontal speed={}, smooth scrolling {}",
-                vertical_speed,
-                horizontal_speed,
-                if smooth { "enabled" } else { "disabled" }
-            );
-        }
-        SetCommands::ThumbWheel {
-            speed,
-            smooth
-        } => {
-            info!(
-                "Configuring thumb wheel: speed={}, smooth={}",
-                speed, smooth
-            );
-            device.set_thumb_wheel(ThumbWheelConfig {
-                speed,
-                smooth_scrolling: smooth
-            })?;
-            println!(
-                "Thumb wheel configured: speed={}, smooth scrolling {}",
-                speed,
-                if smooth { "enabled" } else { "disabled" }
             );
         }
     }

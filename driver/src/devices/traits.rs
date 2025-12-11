@@ -31,58 +31,6 @@ pub struct HiResScrollConfig {
     pub inverted: bool
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct ScrollWheelConfig {
-    #[serde(default = "default_scroll_speed")]
-    pub vertical_speed: f32,
-
-    #[serde(default = "default_horizontal_speed")]
-    pub horizontal_speed: f32,
-
-    #[serde(default)]
-    pub smooth_scrolling: bool
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct ThumbWheelConfig {
-    #[serde(default = "default_thumbwheel_speed")]
-    pub speed: f32,
-
-    #[serde(default)]
-    pub smooth_scrolling: bool
-}
-
-fn default_scroll_speed() -> f32 {
-    1.0
-}
-
-fn default_horizontal_speed() -> f32 {
-    1.0
-}
-
-fn default_thumbwheel_speed() -> f32 {
-    1.0
-}
-
-impl Default for ScrollWheelConfig {
-    fn default() -> Self {
-        Self {
-            vertical_speed:   1.0,
-            horizontal_speed: 1.0,
-            smooth_scrolling: false
-        }
-    }
-}
-
-impl Default for ThumbWheelConfig {
-    fn default() -> Self {
-        Self {
-            speed:            1.0,
-            smooth_scrolling: true
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ButtonId {
     LeftClick,
@@ -141,14 +89,6 @@ pub trait MouseDevice {
     fn set_hires_scroll(&mut self, config: HiResScrollConfig) -> Result<()>;
 
     fn get_hires_scroll(&mut self) -> Result<HiResScrollConfig>;
-
-    fn set_scroll_wheel(&mut self, config: ScrollWheelConfig) -> Result<()>;
-
-    fn get_scroll_wheel(&mut self) -> Result<ScrollWheelConfig>;
-
-    fn set_thumb_wheel(&mut self, config: ThumbWheelConfig) -> Result<()>;
-
-    fn get_thumb_wheel(&mut self) -> Result<ThumbWheelConfig>;
 
     fn set_button_action(&mut self, button: ButtonId, action: Action) -> Result<()>;
 
@@ -287,13 +227,6 @@ mod tests {
         assert_eq!(gesture.direction, GestureDirection::Up);
         assert_eq!(gesture.mode, GestureMode::OnRelease);
         assert_eq!(*gesture.action, Action::None);
-    }
-
-    #[test]
-    fn test_default_functions() {
-        assert_eq!(default_scroll_speed(), 1.0);
-        assert_eq!(default_horizontal_speed(), 1.0);
-        assert_eq!(default_thumbwheel_speed(), 1.0);
     }
 
     #[test]
