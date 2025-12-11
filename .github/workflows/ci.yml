@@ -22,7 +22,7 @@ jobs:
     name: YAML Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install yamllint
         run: pip install yamllint
       - name: Lint YAML files
@@ -32,16 +32,16 @@ jobs:
     name: REUSE Compliance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: REUSE Compliance Check
-        uses: fsfe/reuse-action@v5
+        uses: fsfe/reuse-action@v6
 
   format:
     name: Format
     needs: [yaml-lint, reuse]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
@@ -64,7 +64,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: >-
@@ -88,7 +88,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
         uses: actions/cache@v4
@@ -101,7 +101,7 @@ jobs:
         run: cargo nextest run --all-features --workspace --profile ci
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-results
           path: target/nextest/ci/junit.xml
@@ -125,7 +125,7 @@ jobs:
             base-devel rustup gtk4 libadwaita hidapi systemd dbus git
           rustup default stable
           rustup component add llvm-tools-preview
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
         uses: actions/cache@v4
@@ -139,7 +139,7 @@ jobs:
           cargo llvm-cov --all-features --workspace
           --lcov --output-path lcov.info
       - name: Upload coverage data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-data
           path: lcov.info
@@ -150,12 +150,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download test results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: test-results
           path: ./artifacts
       - name: Download coverage data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: coverage-data
           path: ./artifacts
@@ -175,7 +175,7 @@ jobs:
     needs: [clippy]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo binaries
         uses: actions/cache@v4
@@ -203,10 +203,10 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --all-features --workspace
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: docs
           path: target/doc/
@@ -235,7 +235,7 @@ jobs:
       new_version: ${{ steps.bump.outputs.new_version }}
       version_bumped: ${{ steps.bump.outputs.version_bumped }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -363,7 +363,7 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release-gate.outputs.version }}
       - uses: Swatinem/rust-cache@v2
@@ -385,7 +385,7 @@ jobs:
           cp logi-mx-daemon.service release/
           cp README.md LICENSE release/
           tar -czf "logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz" -C release .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: release-archive
           path: logi-mx-*.tar.gz
@@ -397,11 +397,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: v${{ needs.release-gate.outputs.version }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: release-archive
       - name: Install git-cliff
@@ -427,7 +427,7 @@ jobs:
     needs: [release-gate, create-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release-gate.outputs.version }}
       - name: Generate .SRCINFO
@@ -469,7 +469,7 @@ jobs:
     needs: [release-gate, create-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release-gate.outputs.version }}
       - name: Download and calculate checksum
@@ -529,7 +529,7 @@ jobs:
       needs_publish: ${{ steps.check.outputs.needs_publish }}
       current_version: ${{ steps.check.outputs.current_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check versions
         id: check
         run: |
@@ -560,7 +560,7 @@ jobs:
       needs.create-release.result == 'skipped'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Generate .SRCINFO
         run: |
           docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
@@ -604,7 +604,7 @@ jobs:
       needs.create-release.result == 'skipped'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download and calculate checksum
         run: |
           VERSION="${{ needs.check-aur-sync.outputs.current_version }}"
@@ -649,7 +649,7 @@ jobs:
     if: always() && needs.check-aur-sync.outputs.needs_publish == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Wait for AUR sync
         run: sleep 30
       - name: Check AUR versions
