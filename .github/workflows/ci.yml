@@ -96,7 +96,10 @@ jobs:
           path: ~/.cargo/bin
           key: cargo-bin-nextest
       - name: Install cargo-nextest
-        run: command -v cargo-nextest || cargo install cargo-nextest --locked
+        run: |
+          if ! cargo nextest --version 2>/dev/null; then
+            cargo install cargo-nextest --locked --force
+          fi
       - name: Run tests
         run: cargo nextest run --all-features --workspace --profile ci
       - name: Upload test results
@@ -133,7 +136,10 @@ jobs:
           path: ~/.cargo/bin
           key: cargo-bin-llvm-cov
       - name: Install cargo-llvm-cov
-        run: command -v cargo-llvm-cov || cargo install cargo-llvm-cov --locked
+        run: |
+          if ! cargo llvm-cov --version 2>/dev/null; then
+            cargo install cargo-llvm-cov --locked --force
+          fi
       - name: Generate coverage
         run: >-
           cargo llvm-cov --all-features --workspace
@@ -183,7 +189,10 @@ jobs:
           path: ~/.cargo/bin
           key: cargo-bin-audit
       - name: Install cargo-audit
-        run: command -v cargo-audit || cargo install cargo-audit --locked
+        run: |
+          if ! cargo audit --version 2>/dev/null; then
+            cargo install cargo-audit --locked --force
+          fi
       - run: cargo audit
 
   docs:
