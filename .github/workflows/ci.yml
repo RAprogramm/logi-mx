@@ -55,7 +55,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -79,7 +79,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin
           key: cargo-bin-nextest
@@ -104,7 +104,7 @@ jobs:
         run: cargo nextest run --all-features --workspace --profile ci
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: test-results
           path: target/nextest/ci/junit.xml
@@ -117,7 +117,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -131,7 +131,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin
           key: cargo-bin-llvm-cov
@@ -145,7 +145,7 @@ jobs:
           cargo llvm-cov --all-features --workspace
           --lcov --output-path lcov.info
       - name: Upload coverage data
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-data
           path: lcov.info
@@ -156,12 +156,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download test results
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: test-results
           path: ./artifacts
       - name: Download coverage data
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: coverage-data
           path: ./artifacts
@@ -184,7 +184,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin
           key: cargo-bin-audit
@@ -203,7 +203,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -215,7 +215,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --all-features --workspace
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: docs
           path: target/doc/
@@ -363,7 +363,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -394,7 +394,7 @@ jobs:
           cp logi-mx-daemon.service release/
           cp README.md LICENSE release/
           tar -czf "logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz" -C release .
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: release-archive
           path: logi-mx-*.tar.gz
@@ -410,7 +410,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: v${{ needs.release-gate.outputs.version }}
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v7
         with:
           name: release-archive
       - name: Install git-cliff
