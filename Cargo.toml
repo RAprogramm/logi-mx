@@ -11,7 +11,7 @@ repository = "https://github.com/RAprogramm/logi-mx"
 rust-version = "1.91"
 
 [workspace.dependencies]
-masterror = { version = "0.26.0", default-features = false }
+masterror = { version = "0.27.0", default-features = false }
 hidapi = { version = "2.6", default-features = false, features = ["linux-native"] }
 tokio = { version = "1.48", features = ["full"] }
 tracing = "0.1"
