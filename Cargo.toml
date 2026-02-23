@@ -22,7 +22,7 @@ udev = "0.9"
 evdev = "0.13"
 clap = { version = "4.5", features = ["derive"] }
 gtk4 = { version = "0.10", features = ["v4_14"] }
-libadwaita = { version = "0.8", features = ["v1_6"] }
+libadwaita = { version = "0.9", features = ["v1_6"] }
 
 [profile.dev]
 opt-level = 0
