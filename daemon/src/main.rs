@@ -4,9 +4,15 @@
 #[cfg(feature = "tray")]
 mod tray;
 
-#[cfg(feature = "tray")]
-use std::sync::Arc;
-use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
+mod status;
+mod worker;
+
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration
+};
 
 use fslock::LockFile;
 use logi_mx_driver::prelude::*;
@@ -14,92 +20,20 @@ use masterror::prelude::*;
 use tokio::{
     select,
     signal::unix::{SignalKind, signal},
-    sync::mpsc,
-    time::sleep
+    sync::mpsc
 };
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use udev::MonitorBuilder;
 
 #[cfg(feature = "tray")]
 use crate::tray::spawn_tray;
+use crate::{
+    status::{DeviceStatus, SharedStatus},
+    worker::{DeviceEvent, spawn_device_worker}
+};
 
 type Result<T> = std::result::Result<T, AppError>;
-
-struct DeviceManager {
-    devices: HashMap<String, MxMaster3s>,
-    config:  Config
-}
-
-impl DeviceManager {
-    fn new(config: Config) -> Self {
-        Self {
-            devices: HashMap::new(),
-            config
-        }
-    }
-
-    fn handle_device_added(&mut self, device_path: String) {
-        info!("Device added: {device_path}");
-
-        match MxMaster3s::open_bolt_receiver_discovered() {
-            Ok(mut device) => {
-                if let Ok(name) = device.get_device_name() {
-                    info!("Detected: {name}");
-
-                    if let Some(device_config) =
-                        self.config.devices.iter().find(|d| d.name == name)
-                    {
-                        info!("Applying configuration for {name}");
-                        Self::apply_config(&mut device, device_config);
-                    }
-
-                    self.devices.insert(device_path, device);
-                }
-            }
-            Err(e) => {
-                warn!("Failed to open device: {e}");
-            }
-        }
-    }
-
-    fn handle_device_removed(&mut self, device_path: &str) {
-        info!("Device removed: {device_path}");
-        self.devices.remove(device_path);
-    }
-
-    fn apply_config(device: &mut MxMaster3s, config: &DeviceConfig) {
-        debug!("Setting DPI to {}", config.dpi);
-        if let Err(e) = device.set_dpi(config.dpi) {
-            error!("Failed to set DPI: {e}");
-        }
-
-        debug!(
-            "Setting SmartShift: enabled={}, threshold={}",
-            config.smartshift.enabled, config.smartshift.threshold
-        );
-        if let Err(e) = device.set_smartshift(config.smartshift) {
-            error!("Failed to set SmartShift: {e}");
-        }
-
-        debug!(
-            "Setting hi-res scroll: enabled={}, inverted={}",
-            config.hiresscroll.enabled, config.hiresscroll.inverted
-        );
-        if let Err(e) = device.set_hires_scroll(config.hiresscroll) {
-            error!("Failed to set hi-res scroll: {e}");
-        }
-
-        for (button, action) in &config.buttons {
-            debug!("Setting button {button:?} to action {action:?}");
-            if let Err(e) = device.set_button_action(*button, action.clone()) {
-                error!("Failed to set button action: {e}");
-            }
-        }
-
-        info!("Configuration applied successfully");
-    }
-}
 
 fn get_lock_file_path(suffix: Option<&str>) -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
@@ -183,48 +117,17 @@ async fn main() -> Result<()> {
     info!("Starting logi-mx-daemon");
 
     let config = load_config().unwrap_or_else(|e| {
-        warn!("Failed to load config: {}. Using default.", e);
+        warn!("Failed to load config: {e}. Using default.");
         Config::default()
     });
 
-    let mut manager = DeviceManager::new(config);
+    let status: SharedStatus = Arc::new(Mutex::new(DeviceStatus::default()));
+    let (device_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status));
 
     #[cfg(feature = "tray")]
-    {
-        info!("Initializing system tray...");
-
-        match spawn_tray().await {
-            Ok(tray_status) => {
-                info!("System tray initialized");
-
-                let tray_status_clone = Arc::clone(&tray_status);
-                tokio::spawn(async move {
-                    loop {
-                        sleep(Duration::from_secs(30)).await;
-                        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
-                            && let Ok(mut status) = tray_status_clone.lock()
-                        {
-                            status.connected = true;
-                            if let Ok(battery) = device.get_battery_info() {
-                                status.battery_level = battery.level;
-                                status.battery_status = format!("{:?}", battery.status);
-                            }
-                            if let Ok(dpi) = device.get_dpi() {
-                                status.dpi = dpi;
-                            }
-                            if let Ok(ss) = device.get_smartshift() {
-                                status.smartshift = ss.enabled;
-                                status.smartshift_threshold = ss.threshold;
-                            }
-                            debug!("Tray status auto-updated");
-                        }
-                    }
-                });
-            }
-            Err(e) => {
-                warn!("Failed to initialize tray: {}. Continuing without tray.", e);
-            }
-        }
+    match spawn_tray(Arc::clone(&status)).await {
+        Ok(()) => info!("System tray initialized"),
+        Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
     }
 
     let (tx, mut rx) = mpsc::channel::<UdevEvent>(32);
@@ -245,13 +148,14 @@ async fn main() -> Result<()> {
     loop {
         select! {
             Some(event) = rx.recv() => {
-                match event {
-                    UdevEvent::Add(path) => {
-                        manager.handle_device_added(path);
-                    }
-                    UdevEvent::Remove(path) => {
-                        manager.handle_device_removed(&path);
-                    }
+                let forwarded = match event {
+                    UdevEvent::Add(path) => device_tx.send(DeviceEvent::Added(path)),
+                    UdevEvent::Remove(path) => device_tx.send(DeviceEvent::Removed(path))
+                };
+
+                if forwarded.is_err() {
+                    error!("Device worker stopped, shutting down");
+                    break;
                 }
             }
             _ = sigterm.recv() => {
@@ -264,6 +168,10 @@ async fn main() -> Result<()> {
             }
         }
     }
+
+    drop(device_tx);
+
+    let _ = worker_handle.join();
 
     info!("Daemon stopped");
     Ok(())

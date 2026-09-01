@@ -3,8 +3,9 @@
 
 //! System tray integration for the daemon.
 //!
-//! Exposes the device state through an `ksni` tray icon and offers menu
-//! actions such as status refresh, UI launch and graceful shutdown.
+//! Exposes the device state from [`crate::status`] through an `ksni` tray
+//! icon and offers menu actions such as status refresh, UI launch and
+//! graceful shutdown.
 
 use std::{
     env::current_exe,
@@ -19,42 +20,11 @@ use ksni::{Category, MenuItem, Tray, TrayMethods, menu::StandardItem};
 use logi_mx_driver::prelude::*;
 use tracing::{debug, error, info};
 
-/// Snapshot of device state shared between the tray icon and the daemon.
-#[derive(Clone)]
-pub struct DeviceStatus {
-    /// Whether the mouse is currently reachable.
-    pub connected:            bool,
-    /// Last observed battery charge percentage.
-    pub battery_level:        u8,
-    /// Last observed battery charge state.
-    pub battery_status:       String,
-    /// Last observed DPI setting.
-    pub dpi:                  u16,
-    /// Whether `SmartShift` automatic switching is enabled.
-    pub smartshift:           bool,
-    /// `SmartShift` scroll-speed threshold.
-    pub smartshift_threshold: u8,
-    /// Last fatal error message, if any.
-    pub error:                Option<String>
-}
+use crate::status::{DeviceStatus, SharedStatus};
 
-impl Default for DeviceStatus {
-    fn default() -> Self {
-        Self {
-            connected:            false,
-            battery_level:        0,
-            battery_status:       "Unknown".to_string(),
-            dpi:                  1000,
-            smartshift:           false,
-            smartshift_threshold: 20,
-            error:                None
-        }
-    }
-}
-
-/// Tray icon driven by [`DeviceStatus`].
+/// Tray icon driven by the shared [`DeviceStatus`].
 pub struct LogiTrayIcon {
-    status: Arc<Mutex<DeviceStatus>>
+    status: SharedStatus
 }
 
 impl LogiTrayIcon {
@@ -66,10 +36,12 @@ impl LogiTrayIcon {
         }
     }
 
-    /// Returns a shared handle to the status so the daemon can update it.
+    /// Creates a tray icon sharing an existing status handle.
     #[must_use]
-    pub fn get_status_handle(&self) -> Arc<Mutex<DeviceStatus>> {
-        Arc::clone(&self.status)
+    pub const fn from_status(status: SharedStatus) -> Self {
+        Self {
+            status
+        }
     }
 
     #[cfg(feature = "tray")]
@@ -121,6 +93,9 @@ impl LogiTrayIcon {
     }
 
     /// Queries the device and refreshes the shared status.
+    ///
+    /// Runs on the `ksni` worker thread from the tray menu, so the blocking
+    /// device I/O never stalls the daemon event loop.
     pub fn update_status(&self) {
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered() {
             let battery_level = {
@@ -164,6 +139,12 @@ impl LogiTrayIcon {
         self.status
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl Default for LogiTrayIcon {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -347,46 +328,28 @@ impl LogiTrayIcon {
     }
 }
 
-/// Spawns the tray icon and returns the shared status handle.
+/// Spawns the tray icon bound to the shared status handle.
+///
+/// # Arguments
+///
+/// * `status` - Handle owned by the device worker; the tray only reads it.
 ///
 /// # Errors
 ///
 /// Returns a human-readable error string when the tray cannot be registered.
-pub async fn spawn_tray() -> std::result::Result<Arc<Mutex<DeviceStatus>>, String> {
-    let tray_icon = LogiTrayIcon::new();
-    let status_handle = tray_icon.get_status_handle();
-    tray_icon.update_status();
+pub async fn spawn_tray(status: SharedStatus) -> std::result::Result<(), String> {
+    let tray_icon = LogiTrayIcon::from_status(status);
 
     tray_icon
         .spawn()
         .await
-        .map(|_| status_handle)
+        .map(|_| ())
         .map_err(|e| format!("Failed to spawn tray: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_device_status_default_with_error() {
-        let status = DeviceStatus::default();
-        assert!(status.error.is_none());
-    }
-
-    #[test]
-    fn test_device_status_with_error() {
-        let status = DeviceStatus {
-            connected:            false,
-            battery_level:        0,
-            battery_status:       "Unknown".to_string(),
-            dpi:                  1000,
-            smartshift:           false,
-            smartshift_threshold: 20,
-            error:                Some("Test error".to_string())
-        };
-        assert_eq!(status.error, Some("Test error".to_string()));
-    }
 
     #[test]
     fn test_tray_icon_name_disconnected() {
@@ -463,8 +426,8 @@ mod tests {
     #[test]
     fn test_get_status_handle() {
         let tray = LogiTrayIcon::new();
-        let handle1 = tray.get_status_handle();
-        let handle2 = tray.get_status_handle();
+        let handle1 = Arc::clone(&tray.status);
+        let handle2 = Arc::clone(&tray.status);
 
         {
             let mut status = handle1.lock().unwrap();
@@ -480,24 +443,16 @@ mod tests {
     }
 
     #[test]
-    fn test_device_status_all_fields() {
-        let status = DeviceStatus {
-            connected:            true,
-            battery_level:        95,
-            battery_status:       "Discharging".to_string(),
-            dpi:                  3200,
-            smartshift:           true,
-            smartshift_threshold: 30,
-            error:                None
-        };
+    fn test_from_status_shares_handle() {
+        let status: SharedStatus = Arc::new(Mutex::new(DeviceStatus::default()));
+        let tray = LogiTrayIcon::from_status(Arc::clone(&status));
 
-        assert!(status.connected);
-        assert_eq!(status.battery_level, 95);
-        assert_eq!(status.battery_status, "Discharging");
-        assert_eq!(status.dpi, 3200);
-        assert!(status.smartshift);
-        assert_eq!(status.smartshift_threshold, 30);
-        assert!(status.error.is_none());
+        {
+            let mut guard = status.lock().unwrap();
+            guard.connected = true;
+        }
+
+        assert!(tray.lock_status().connected);
     }
 
     #[test]
