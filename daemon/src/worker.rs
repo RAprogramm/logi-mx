@@ -56,6 +56,18 @@ pub fn spawn_device_worker(
     (tx, handle)
 }
 
+/// Runs the device worker event loop until the command channel closes.
+///
+/// With the `tray` feature the shared status is refreshed on startup and
+/// every [`REFRESH_INTERVAL`]; without it the status handle is accepted but
+/// left untouched because nothing subscribes to it.
+#[cfg_attr(
+    not(feature = "tray"),
+    allow(
+        unused_variables,
+        reason = "the status handle is only consumed by the tray refresh"
+    )
+)]
 fn run_device_worker(config: Config, rx: &mpsc::Receiver<DeviceEvent>, status: &SharedStatus) {
     let manager = DeviceManager::new(config);
 

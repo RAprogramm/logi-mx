@@ -9,6 +9,13 @@
 use std::sync::{Arc, Mutex};
 
 /// Snapshot of device state shared between the worker and UI surfaces.
+///
+/// Readers live behind the `tray` feature; without it the snapshot is only
+/// exercised by tests.
+#[cfg_attr(
+    not(feature = "tray"),
+    allow(dead_code, reason = "fields are read by the tray feature only")
+)]
 #[derive(Clone, Debug)]
 pub struct DeviceStatus {
     /// Whether the mouse is currently reachable.
