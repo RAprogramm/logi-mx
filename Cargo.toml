@@ -11,7 +11,7 @@ repository = "https://github.com/RAprogramm/logi-mx"
 rust-version = "1.98"
 
 [workspace.dependencies]
-masterror = { version = "0.30", default-features = false }
+masterror = { version = "0.30", default-features = false, features = ["std"] }
 hidapi = { version = "2", default-features = false, features = [
   "linux-native",
 ] }
