@@ -140,6 +140,28 @@ jobs:
           cargo +${{ steps.msrv.outputs.version }} check
           --workspace --all-features --locked
 
+  release-build:
+    name: Release Build
+    needs: [clippy]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v5
+        with:
+          path: /var/cache/pacman/pkg
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm \
+            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release
+        run: cargo build --release --all-features --workspace
+
   test:
     name: Test
     needs: [clippy]
@@ -171,6 +193,8 @@ jobs:
           fi
       - name: Run tests
         run: cargo nextest run --all-features --workspace --profile ci
+      - name: Run doctests
+        run: cargo test --doc --all-features --workspace
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v6
@@ -303,6 +327,7 @@ jobs:
       - clippy
       - deny
       - msrv
+      - release-build
       - test
       - coverage
       - codecov
@@ -396,6 +421,7 @@ jobs:
       - clippy
       - deny
       - msrv
+      - release-build
       - test
       - coverage
       - codecov
@@ -410,6 +436,7 @@ jobs:
       needs.clippy.result == 'success' &&
       needs.deny.result == 'success' &&
       needs.msrv.result == 'success' &&
+      needs.release-build.result == 'success' &&
       needs.test.result == 'success' &&
       needs.coverage.result == 'success' &&
       needs.codecov.result == 'success' &&
@@ -618,6 +645,7 @@ jobs:
       - clippy
       - deny
       - msrv
+      - release-build
       - test
       - coverage
       - codecov
