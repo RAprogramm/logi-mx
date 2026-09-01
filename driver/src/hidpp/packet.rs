@@ -329,3 +329,7 @@ mod tests {
 #[cfg(test)]
 #[path = "packet_tests.rs"]
 mod packet_tests;
+
+#[cfg(test)]
+#[path = "packet_proptests.rs"]
+mod packet_proptests;

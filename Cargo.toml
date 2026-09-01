@@ -23,6 +23,7 @@ toml = "1"
 udev = "0.9"
 evdev = "0.13"
 clap = { version = "4", features = ["derive"] }
+proptest = "1"
 gtk4 = { version = "0.11", features = ["v4_14"] }
 libadwaita = { version = "0.9", features = ["v1_6"] }
 
