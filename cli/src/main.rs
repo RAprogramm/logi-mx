@@ -89,7 +89,7 @@ fn main() -> Result<()> {
 fn cmd_info() -> Result<()> {
     info!("Opening device...");
 
-    let mut device = MxMaster3s::open_bolt_receiver(2)?;
+    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
 
     let name = device.get_device_name()?;
     let dpi = device.get_dpi()?;
@@ -119,7 +119,7 @@ fn cmd_info() -> Result<()> {
 fn cmd_battery() -> Result<()> {
     info!("Checking battery...");
 
-    let mut device = MxMaster3s::open_bolt_receiver(2)?;
+    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
     let battery = device.get_battery_info()?;
 
     println!("Battery Status:");
@@ -130,7 +130,7 @@ fn cmd_battery() -> Result<()> {
 }
 
 fn cmd_set(setting: SetCommands) -> Result<()> {
-    let mut device = MxMaster3s::open_bolt_receiver(2)?;
+    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
 
     match setting {
         SetCommands::Dpi {

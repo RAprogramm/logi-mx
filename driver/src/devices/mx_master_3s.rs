@@ -22,6 +22,7 @@ const VID_LOGITECH: u16 = 0x046D;
 const PID_BOLT_RECEIVER: u16 = 0xC548;
 const PID_MX_MASTER_3S_USB: u16 = 0x4082;
 const PID_MX_MASTER_3S_BT: u16 = 0xB034;
+const RECEIVER_SLOTS: [u8; 6] = [1, 2, 3, 4, 5, 6];
 
 /// Logitech MX Master 3S connected via Bolt receiver, USB or Bluetooth.
 ///
@@ -132,6 +133,38 @@ impl MxMaster3s {
             hidpp,
             button_mappings: HashMap::new()
         })
+    }
+
+    /// Opens the first MX Master 3S paired to a Logi Bolt receiver.
+    ///
+    /// Probes every receiver slot in order and returns the first paired
+    /// device that answers a ping, so callers do not need to know which slot
+    /// the mouse occupies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when no receiver is present or no
+    /// paired device responds in any slot.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::devices::{MouseDevice, MxMaster3s};
+    ///
+    /// let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
+    /// println!("{}", device.get_device_name()?);
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
+    pub fn open_bolt_receiver_discovered() -> Result<Self> {
+        info!("Discovering MX Master 3S on Bolt receiver slots");
+
+        for index in RECEIVER_SLOTS {
+            if let Ok(device) = Self::open_bolt_receiver(index) {
+                return Ok(device);
+            }
+        }
+
+        Err(DeviceErrorKind::NotFound.into())
     }
 
     fn get_battery_unified(&mut self) -> Result<BatteryInfo> {

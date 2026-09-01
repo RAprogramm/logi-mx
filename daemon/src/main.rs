@@ -42,7 +42,7 @@ impl DeviceManager {
     fn handle_device_added(&mut self, device_path: String) {
         info!("Device added: {device_path}");
 
-        match MxMaster3s::open_bolt_receiver(2) {
+        match MxMaster3s::open_bolt_receiver_discovered() {
             Ok(mut device) => {
                 if let Ok(name) = device.get_device_name() {
                     info!("Detected: {name}");
@@ -201,7 +201,7 @@ async fn main() -> Result<()> {
                 tokio::spawn(async move {
                     loop {
                         sleep(Duration::from_secs(30)).await;
-                        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
+                        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
                             && let Ok(mut status) = tray_status_clone.lock()
                         {
                             status.connected = true;

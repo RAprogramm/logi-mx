@@ -122,7 +122,7 @@ impl LogiTrayIcon {
 
     /// Queries the device and refreshes the shared status.
     pub fn update_status(&self) {
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
+        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered() {
             let battery_level = {
                 let mut status = self
                     .status

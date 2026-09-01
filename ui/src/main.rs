@@ -61,7 +61,7 @@ fn build_ui(app: &Application) {
     let toast_overlay = ToastOverlay::new();
 
     // Check device connection
-    let content = MxMaster3s::open_bolt_receiver(2).map_or_else(
+    let content = MxMaster3s::open_bolt_receiver_discovered().map_or_else(
         |_| create_disconnected_ui(),
         |mut device| {
             let name = device
@@ -178,7 +178,7 @@ fn create_battery_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     battery_row.add_prefix(&battery_icon);
     battery_row.set_title("Battery Level");
 
-    match MxMaster3s::open_bolt_receiver(2).and_then(|mut d| d.get_battery_info()) {
+    match MxMaster3s::open_bolt_receiver_discovered().and_then(|mut d| d.get_battery_info()) {
         Ok(battery) => {
             let icon = match battery.level {
                 0..=20 => "battery-level-0-symbolic",
@@ -200,7 +200,7 @@ fn create_battery_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     let bi = battery_icon;
     let to = toast_overlay.clone();
     refresh_btn.connect_clicked(move |_| {
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
+        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
             && let Ok(battery) = device.get_battery_info()
         {
             let icon = match battery.level {
@@ -231,7 +231,7 @@ fn create_dpi_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     group.set_title("Pointer Sensitivity");
     group.set_description(Some("Adjust cursor speed from 400 to 8000 DPI"));
 
-    let current_dpi = MxMaster3s::open_bolt_receiver(2)
+    let current_dpi = MxMaster3s::open_bolt_receiver_discovered()
         .and_then(|mut d| d.get_dpi())
         .unwrap_or(1000);
 
@@ -271,7 +271,7 @@ fn create_dpi_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
         let dpi = scale_dpi(sc.value());
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
+        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
             && device.set_dpi(dpi).is_ok()
         {
             let toast = Toast::new(&format!("DPI set to {dpi}"));
@@ -293,7 +293,7 @@ fn create_smartshift_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
         "Automatic switching between ratchet and freespin modes"
     ));
 
-    let current_config = MxMaster3s::open_bolt_receiver(2)
+    let current_config = MxMaster3s::open_bolt_receiver_discovered()
         .and_then(|mut d| d.get_smartshift())
         .unwrap_or_default();
 
@@ -343,7 +343,7 @@ fn create_smartshift_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
             threshold: scale_threshold(ts.value())
         };
 
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
+        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
             && device.set_smartshift(config).is_ok()
         {
             let toast = Toast::new(&format!(
@@ -371,7 +371,7 @@ fn create_scroll_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     group.set_title("Scroll Settings");
     group.set_description(Some("Configure high-resolution and natural scrolling"));
 
-    let current_config = MxMaster3s::open_bolt_receiver(2)
+    let current_config = MxMaster3s::open_bolt_receiver_discovered()
         .and_then(|mut d| d.get_hires_scroll())
         .unwrap_or_default();
 
@@ -411,7 +411,7 @@ fn create_scroll_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
             inverted: is.is_active()
         };
 
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
+        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
             && device.set_hires_scroll(config).is_ok()
         {
             let toast = Toast::new(&format!(
