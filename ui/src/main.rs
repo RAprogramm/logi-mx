@@ -10,6 +10,59 @@ use logi_mx_driver::prelude::*;
 
 const APP_ID: &str = "com.logitech.mx.configurator";
 
+/// One-shot device state collected at startup.
+///
+/// The UI opens the device exactly once per launch and seeds every settings
+/// group from this snapshot instead of re-opening the device four times.
+#[derive(Debug, Clone)]
+struct DeviceSnapshot {
+    /// Marketing name reported by the device.
+    name:        String,
+    /// Battery state, when the battery feature answered.
+    battery:     Option<BatteryInfo>,
+    /// Currently applied DPI.
+    dpi:         u16,
+    /// Current `SmartShift` configuration.
+    smartshift:  SmartShiftConfig,
+    /// Current hi-res wheel configuration.
+    hiresscroll: HiResScrollConfig
+}
+
+/// Opens the device once and reads every supported property.
+///
+/// # Returns
+///
+/// `Some` snapshot when the device opened, `None` when it is unreachable.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use logi_mx_driver::prelude::*;
+/// // Mirrors the UI startup path: a single open, a single set of reads.
+/// let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
+/// let name = device.get_device_name()?;
+/// # Ok::<(), masterror::AppError>(())
+/// ```
+fn collect_device_snapshot() -> Option<DeviceSnapshot> {
+    let mut device = MxMaster3s::open_bolt_receiver_discovered().ok()?;
+
+    let name = device
+        .get_device_name()
+        .unwrap_or_else(|_| "MX Master 3S".to_string());
+    let battery = device.get_battery_info().ok();
+    let dpi = device.get_dpi().unwrap_or(1000);
+    let smartshift = device.get_smartshift().unwrap_or_default();
+    let hiresscroll = device.get_hires_scroll().unwrap_or_default();
+
+    Some(DeviceSnapshot {
+        name,
+        battery,
+        dpi,
+        smartshift,
+        hiresscroll
+    })
+}
+
 /// Narrows a GTK scale reading to a DPI setting value.
 ///
 /// The scale range is configured by this UI, so out-of-range readings cannot
@@ -60,16 +113,11 @@ fn build_ui(app: &Application) {
 
     let toast_overlay = ToastOverlay::new();
 
-    // Check device connection
-    let content = MxMaster3s::open_bolt_receiver_discovered().map_or_else(
-        |_| create_disconnected_ui(),
-        |mut device| {
-            let name = device
-                .get_device_name()
-                .unwrap_or_else(|_| "MX Master 3S".to_string());
-            create_connected_ui(&name, &toast_overlay)
-        }
-    );
+    // Collect a single device snapshot instead of opening the device in
+    // every settings group
+    let content = collect_device_snapshot().map_or_else(create_disconnected_ui, |snapshot| {
+        create_connected_ui(&snapshot, &toast_overlay)
+    });
 
     toast_overlay.set_child(Some(&content));
 
@@ -105,7 +153,7 @@ fn create_disconnected_ui() -> Box {
     main_box
 }
 
-fn create_connected_ui(device_name: &str, toast_overlay: &ToastOverlay) -> Box {
+fn create_connected_ui(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> Box {
     let scrolled = gtk4::ScrolledWindow::new();
     scrolled.set_vexpand(true);
     scrolled.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
@@ -121,23 +169,23 @@ fn create_connected_ui(device_name: &str, toast_overlay: &ToastOverlay) -> Box {
     prefs_page.set_margin_end(12);
 
     // Device Info
-    let device_info = create_device_info_group(device_name);
+    let device_info = create_device_info_group(&snapshot.name);
     prefs_page.add(&device_info);
 
     // Battery
-    let battery_group = create_battery_group(toast_overlay);
+    let battery_group = create_battery_group(snapshot, toast_overlay);
     prefs_page.add(&battery_group);
 
     // DPI
-    let dpi_group = create_dpi_group(toast_overlay);
+    let dpi_group = create_dpi_group(snapshot, toast_overlay);
     prefs_page.add(&dpi_group);
 
     // SmartShift
-    let smartshift_group = create_smartshift_group(toast_overlay);
+    let smartshift_group = create_smartshift_group(snapshot, toast_overlay);
     prefs_page.add(&smartshift_group);
 
     // Scroll
-    let scroll_group = create_scroll_group(toast_overlay);
+    let scroll_group = create_scroll_group(snapshot, toast_overlay);
     prefs_page.add(&scroll_group);
 
     clamp.set_child(Some(&prefs_page));
@@ -168,7 +216,10 @@ fn create_device_info_group(name: &str) -> PreferencesGroup {
     group
 }
 
-fn create_battery_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
+fn create_battery_group(
+    snapshot: &DeviceSnapshot,
+    toast_overlay: &ToastOverlay
+) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Battery");
     group.set_description(Some("Monitor battery status and charging"));
@@ -178,20 +229,12 @@ fn create_battery_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     battery_row.add_prefix(&battery_icon);
     battery_row.set_title("Battery Level");
 
-    match MxMaster3s::open_bolt_receiver_discovered().and_then(|mut d| d.get_battery_info()) {
-        Ok(battery) => {
-            let icon = match battery.level {
-                0..=20 => "battery-level-0-symbolic",
-                21..=40 => "battery-level-20-symbolic",
-                41..=60 => "battery-level-40-symbolic",
-                61..=80 => "battery-level-60-symbolic",
-                81..=90 => "battery-level-80-symbolic",
-                _ => "battery-level-100-symbolic"
-            };
-            battery_icon.set_icon_name(Some(icon));
+    match snapshot.battery {
+        Some(battery) => {
+            battery_icon.set_icon_name(Some(battery_icon_name(battery.level)));
             battery_row.set_subtitle(&format!("{}% · {:?}", battery.level, battery.status));
         }
-        Err(_) => battery_row.set_subtitle("Unable to read")
+        None => battery_row.set_subtitle("Unable to read")
     }
 
     let refresh_btn = Button::with_label("Refresh");
@@ -203,15 +246,7 @@ fn create_battery_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
             && let Ok(battery) = device.get_battery_info()
         {
-            let icon = match battery.level {
-                0..=20 => "battery-level-0-symbolic",
-                21..=40 => "battery-level-20-symbolic",
-                41..=60 => "battery-level-40-symbolic",
-                61..=80 => "battery-level-60-symbolic",
-                81..=90 => "battery-level-80-symbolic",
-                _ => "battery-level-100-symbolic"
-            };
-            bi.set_icon_name(Some(icon));
+            bi.set_icon_name(Some(battery_icon_name(battery.level)));
             br.set_subtitle(&format!("{}% · {:?}", battery.level, battery.status));
 
             let toast = Toast::new("Battery status updated");
@@ -226,14 +261,25 @@ fn create_battery_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     group
 }
 
-fn create_dpi_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
+/// Maps a battery percentage to the matching symbolic icon name.
+#[must_use]
+const fn battery_icon_name(level: u8) -> &'static str {
+    match level {
+        0..=20 => "battery-level-0-symbolic",
+        21..=40 => "battery-level-20-symbolic",
+        41..=60 => "battery-level-40-symbolic",
+        61..=80 => "battery-level-60-symbolic",
+        81..=90 => "battery-level-80-symbolic",
+        _ => "battery-level-100-symbolic"
+    }
+}
+
+fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Pointer Sensitivity");
     group.set_description(Some("Adjust cursor speed from 400 to 8000 DPI"));
 
-    let current_dpi = MxMaster3s::open_bolt_receiver_discovered()
-        .and_then(|mut d| d.get_dpi())
-        .unwrap_or(1000);
+    let current_dpi = snapshot.dpi;
 
     let dpi_row = ActionRow::new();
     dpi_row.add_prefix(&Image::from_icon_name(
@@ -286,16 +332,17 @@ fn create_dpi_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     group
 }
 
-fn create_smartshift_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
+fn create_smartshift_group(
+    snapshot: &DeviceSnapshot,
+    toast_overlay: &ToastOverlay
+) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("SmartShift");
     group.set_description(Some(
         "Automatic switching between ratchet and freespin modes"
     ));
 
-    let current_config = MxMaster3s::open_bolt_receiver_discovered()
-        .and_then(|mut d| d.get_smartshift())
-        .unwrap_or_default();
+    let current_config = snapshot.smartshift;
 
     let switch_row = ActionRow::new();
     switch_row.add_prefix(&Image::from_icon_name("weather-windy-symbolic"));
@@ -366,14 +413,15 @@ fn create_smartshift_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     group
 }
 
-fn create_scroll_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
+fn create_scroll_group(
+    snapshot: &DeviceSnapshot,
+    toast_overlay: &ToastOverlay
+) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Scroll Settings");
     group.set_description(Some("Configure high-resolution and natural scrolling"));
 
-    let current_config = MxMaster3s::open_bolt_receiver_discovered()
-        .and_then(|mut d| d.get_hires_scroll())
-        .unwrap_or_default();
+    let current_config = snapshot.hiresscroll;
 
     let hires_row = ActionRow::new();
     hires_row.add_prefix(&Image::from_icon_name("view-continuous-symbolic"));
