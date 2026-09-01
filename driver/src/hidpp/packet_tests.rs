@@ -14,7 +14,7 @@ fn test_short_packet_creation_all_parameters() {
             assert_eq!(p.software_id, 0x07);
             assert_eq!(p.parameters, [0xAA, 0xBB, 0xCC]);
         }
-        HidppPacket::Long(_) => panic!("Expected short packet")
+        HidppPacket::Long(_) | HidppPacket::Error(_) => panic!("Expected short packet")
     }
 }
 
@@ -34,7 +34,7 @@ fn test_long_packet_creation() {
             assert_eq!(p.software_id, 0x05);
             assert_eq!(p.parameters, params);
         }
-        HidppPacket::Short(_) => panic!("Expected long packet")
+        HidppPacket::Short(_) | HidppPacket::Error(_) => panic!("Expected long packet")
     }
 }
 
@@ -168,7 +168,7 @@ fn test_long_packet_preserves_all_params() {
         HidppPacket::Long(p) => {
             assert_eq!(p.parameters, params);
         }
-        HidppPacket::Short(_) => panic!("Expected long packet")
+        HidppPacket::Short(_) | HidppPacket::Error(_) => panic!("Expected long packet")
     }
 }
 
@@ -182,7 +182,7 @@ fn test_max_function_id() {
         HidppPacket::Short(p) => {
             assert_eq!(p.function_id, 0x0F);
         }
-        HidppPacket::Long(_) => panic!("Expected short packet")
+        HidppPacket::Long(_) | HidppPacket::Error(_) => panic!("Expected short packet")
     }
 }
 
@@ -196,6 +196,6 @@ fn test_max_software_id() {
         HidppPacket::Short(p) => {
             assert_eq!(p.software_id, 0x0F);
         }
-        HidppPacket::Long(_) => panic!("Expected short packet")
+        HidppPacket::Long(_) | HidppPacket::Error(_) => panic!("Expected short packet")
     }
 }
