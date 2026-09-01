@@ -8,7 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-logi-mx-driver = { path = "../driver" }
+logi-mx-driver.workspace = true
 masterror.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true

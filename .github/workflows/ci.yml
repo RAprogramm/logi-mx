@@ -69,7 +69,76 @@ jobs:
       - name: Run clippy
         run: >-
           cargo clippy --all-targets --all-features --workspace
-          -- -D warnings
+          -- -D warnings -W clippy::pedantic -W clippy::nursery
+
+  deny:
+    name: Supply Chain (cargo-deny)
+    needs: [format]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v5
+        with:
+          path: /var/cache/pacman/pkg
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm \
+            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+          rustup default stable
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache cargo binaries
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-deny
+      - name: Install cargo-deny
+        run: |
+          if ! cargo deny --version 2>/dev/null; then
+            cargo install cargo-deny --locked --force
+          fi
+      - name: Run cargo-deny
+        run: cargo deny check
+
+  msrv:
+    name: MSRV
+    needs: [format]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v5
+        with:
+          path: /var/cache/pacman/pkg
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm \
+            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+          rustup default stable
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Determine MSRV
+        id: msrv
+        run: |
+          VERSION=$(grep '^rust-version' Cargo.toml \
+            | sed 's/.*"\(.*\)".*/\1/')
+          echo "MSRV from Cargo.toml: ${VERSION}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+      - name: Install MSRV toolchain
+        run: |
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" \
+            --profile minimal
+      - name: Check with MSRV toolchain
+        run: >-
+          cargo +${{ steps.msrv.outputs.version }} check
+          --workspace --all-features --locked
 
   test:
     name: Test
@@ -232,6 +301,8 @@ jobs:
       - reuse
       - format
       - clippy
+      - deny
+      - msrv
       - test
       - coverage
       - codecov
@@ -300,6 +371,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
+          DEP_PREFIX="logi-mx-driver = { path = \"driver\", version = "
+          sed -i \
+            "s|^${DEP_PREFIX}.*|${DEP_PREFIX}\"${NEW_VERSION}\" }|" \
+            Cargo.toml
           sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
 
           git add Cargo.toml PKGBUILD
@@ -319,6 +394,8 @@ jobs:
       - reuse
       - format
       - clippy
+      - deny
+      - msrv
       - test
       - coverage
       - codecov
@@ -331,6 +408,8 @@ jobs:
       needs.reuse.result == 'success' &&
       needs.format.result == 'success' &&
       needs.clippy.result == 'success' &&
+      needs.deny.result == 'success' &&
+      needs.msrv.result == 'success' &&
       needs.test.result == 'success' &&
       needs.coverage.result == 'success' &&
       needs.codecov.result == 'success' &&
@@ -394,10 +473,18 @@ jobs:
           cp logi-mx-daemon.service release/
           cp README.md LICENSE release/
           tar -czf "logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz" -C release .
+      - name: Generate SHA-256 checksum
+        run: |
+          VERSION="${{ needs.release-gate.outputs.version }}"
+          FILE="logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz"
+          sha256sum "${FILE}" > "${FILE}.sha256"
+          cat "${FILE}.sha256"
       - uses: actions/upload-artifact@v6
         with:
           name: release-archive
-          path: logi-mx-*.tar.gz
+          path: |
+            logi-mx-*.tar.gz
+            logi-mx-*.tar.gz.sha256
 
   create-release:
     name: Create GitHub Release
@@ -429,7 +516,8 @@ jobs:
           gh release create "v${VERSION}" \
             --title "Release v${VERSION}" \
             --notes-file RELEASE_NOTES.md \
-            logi-mx-*.tar.gz
+            logi-mx-*.tar.gz \
+            logi-mx-*.tar.gz.sha256
 
   publish-aur:
     name: Publish to AUR
@@ -528,6 +616,8 @@ jobs:
       - reuse
       - format
       - clippy
+      - deny
+      - msrv
       - test
       - coverage
       - codecov

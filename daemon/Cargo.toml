@@ -12,7 +12,7 @@ default = ["tray"]
 tray = ["dep:ksni", "dep:gtk4", "dep:libadwaita"]
 
 [dependencies]
-logi-mx-driver = { path = "../driver" }
+logi-mx-driver.workspace = true
 masterror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
