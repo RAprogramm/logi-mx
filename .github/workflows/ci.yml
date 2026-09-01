@@ -162,6 +162,28 @@ jobs:
       - name: Build release
         run: cargo build --release --all-features --workspace
 
+  bench:
+    name: Benchmarks
+    needs: [clippy]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v5
+        with:
+          path: /var/cache/pacman/pkg
+          key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm \
+            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Run benchmarks
+        run: cargo bench --all-features --workspace --no-fail-fast
+
   test:
     name: Test
     needs: [clippy]
@@ -328,6 +350,7 @@ jobs:
       - deny
       - msrv
       - release-build
+      - bench
       - test
       - coverage
       - codecov
@@ -422,6 +445,7 @@ jobs:
       - deny
       - msrv
       - release-build
+      - bench
       - test
       - coverage
       - codecov
@@ -437,6 +461,7 @@ jobs:
       needs.deny.result == 'success' &&
       needs.msrv.result == 'success' &&
       needs.release-build.result == 'success' &&
+      needs.bench.result == 'success' &&
       needs.test.result == 'success' &&
       needs.coverage.result == 'success' &&
       needs.codecov.result == 'success' &&
@@ -646,6 +671,7 @@ jobs:
       - deny
       - msrv
       - release-build
+      - bench
       - test
       - coverage
       - codecov
