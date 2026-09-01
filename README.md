@@ -144,12 +144,13 @@ Automatic ratchet-to-free-spin transition:
 **Rich Functionality**
 - DPI configuration (200-8000 in 50 DPI increments)
 - SmartShift tuning (threshold 0-50)
-- Hi-res scroll control with inversion
-- Button remapping for all 7 buttons
-- Gesture support (4 directions: up, down, left, right)
+- Hi-res scroll control
 - Battery monitoring with charge level
-- Main scroll wheel configuration
-- Thumb wheel horizontal scroll
+- Gesture support (4 directions: up, down, left, right)
+- Button remapping stored in configuration (wire-level reprogramming in development)
+- Daemon with system tray integration
+- GTK4/libadwaita GUI
+- Automatic device discovery on Bolt receiver slots
 
 **Supported Devices**
 - Logitech MX Master 3S (USB, Bluetooth, Bolt receiver)
@@ -160,21 +161,23 @@ Automatic ratchet-to-free-spin transition:
 **Implemented:**
 - DPI adjustment (200-8000)
 - SmartShift configuration
-- Hi-res scroll with inversion
-- Basic gesture support (up/down/left/right)
+- Hi-res scroll enable/disable (inversion not yet applied to hardware)
 - Battery status monitoring
-- Button remapping via configuration
-- Daemon with system tray integration
+- Daemon with udev hotplug and automatic config application
 - GTK4/libadwaita GUI
-- Scroll wheel speed configuration (lines per click)
-- Thumb wheel speed configuration
+- Automatic device discovery (no hardcoded receiver slot)
+
+**Configured but not yet applied on the wire:**
+- Button remapping and gestures (stored in `~/.config/logi-mx.toml`; HID++
+  ReprogControls reprogramming is in development)
+- Hi-res scroll inversion
 
 **In Development:**
+- Wire-level button reprogramming (HID++ 0x1B04)
 - Enhanced gesture system with visual feedback
 - Mode-shift button configuration
 - Per-application profiles
 - Macro recording and playback
-- Advanced button actions
 - UI gesture configuration interface
 
 **Planned:**
@@ -206,12 +209,11 @@ When the daemon is running, you get full control:
 |---------|-------------|-------------|
 | Basic mouse movement | ✅ | ✅ |
 | Button clicks | ✅ | ✅ |
-| Scroll wheel | ✅ | ✅ (configurable speed) |
+| Scroll wheel | ✅ | ✅ |
 | Custom DPI | ❌ | ✅ |
 | SmartShift | ❌ | ✅ |
 | Hi-res scrolling | ❌ | ✅ |
-| Thumbwheel speed | ❌ | ✅ |
-| Button remapping | ❌ | ✅ |
+| Button remapping | ❌ | 🚧 (config stored, wire reprogramming in development) |
 | Battery monitoring | ❌ | ✅ |
 | Per-app settings | ❌ | 🚧 (planned) |
 
@@ -366,13 +368,7 @@ logi-mx set dpi 1600
 logi-mx set smartshift --enabled --threshold 20
 
 # Enable hi-res scroll
-logi-mx set scroll --hires
-
-# Configure scroll wheel speed
-logi-mx set scroll-wheel --vertical-speed 5 --horizontal-speed 3 --smooth
-
-# Configure thumb wheel speed
-logi-mx set thumb-wheel --speed 7 --smooth
+logi-mx set hires --enabled
 
 # Get battery status
 logi-mx battery
@@ -395,15 +391,6 @@ threshold = 20
 enabled = true
 inverted = false
 
-[devices.scroll_wheel]
-vertical_speed = 3
-horizontal_speed = 2
-smooth_scrolling = false
-
-[devices.thumbwheel]
-speed = 5
-smooth_scrolling = true
-
 [devices.buttons.ThumbGesture]
 Gestures = [
     { direction = "Up", mode = "OnRelease", action = { Keypress = { keys = ["KEY_UP"] } } },
@@ -412,6 +399,9 @@ Gestures = [
     { direction = "Right", mode = "OnRelease", action = { Keypress = { keys = ["KEY_LEFTCTRL", "KEY_RIGHT"] } } },
 ]
 ```
+
+> **Note:** button and gesture entries are loaded and stored by the daemon,
+> but wire-level reprogramming (HID++ 0x1B04) is still in development.
 
 </details>
 
