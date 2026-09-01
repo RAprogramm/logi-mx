@@ -358,10 +358,10 @@ fn create_smartshift_group(
     group.add(&switch_row);
 
     let threshold_row = ActionRow::new();
-    threshold_row.set_title("Sensitivity Threshold");
+    threshold_row.set_title("Disengage Sensitivity");
     threshold_row.set_subtitle(&format!("Current: {}", current_config.threshold));
 
-    let threshold_scale = Scale::with_range(Orientation::Horizontal, 1.0, 50.0, 1.0);
+    let threshold_scale = Scale::with_range(Orientation::Horizontal, 1.0, 255.0, 1.0);
     threshold_scale.set_value(f64::from(current_config.threshold));
     threshold_scale.set_draw_value(true);
     threshold_scale.set_value_pos(gtk4::PositionType::Right);

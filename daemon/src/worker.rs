@@ -159,8 +159,11 @@ impl DeviceManager {
                 if let Ok(name) = device.get_device_name() {
                     info!("Detected: {name}");
 
-                    if let Some(device_config) =
-                        self.config.devices.iter().find(|d| d.name == name)
+                    if let Some(device_config) = self
+                        .config
+                        .devices
+                        .iter()
+                        .find(|d| name.starts_with(&d.name))
                     {
                         info!("Applying configuration for {name}");
                         Self::apply_config(&mut device, device_config);

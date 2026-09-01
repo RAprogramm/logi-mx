@@ -21,6 +21,10 @@ enum Commands {
 
     Battery,
 
+    Hosts,
+
+    Buttons,
+
     Set {
         #[command(subcommand)]
         setting: SetCommands
@@ -77,6 +81,8 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Info => cmd_info(),
         Commands::Battery => cmd_battery(),
+        Commands::Hosts => cmd_hosts(),
+        Commands::Buttons => cmd_buttons(),
         Commands::Set {
             setting
         } => cmd_set(setting),
@@ -125,6 +131,47 @@ fn cmd_battery() -> Result<()> {
     println!("Battery Status:");
     println!("  Level: {}%", battery.level);
     println!("  Status: {:?}", battery.status);
+
+    Ok(())
+}
+
+fn cmd_hosts() -> Result<()> {
+    info!("Reading Easy-Switch host info...");
+
+    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
+    let (hosts, current) = device.get_host_info()?;
+
+    println!("Easy-Switch Hosts:");
+    println!("  Current host: {current} (zero-indexed)");
+    println!("  Supported hosts: {hosts}");
+
+    Ok(())
+}
+
+fn cmd_buttons() -> Result<()> {
+    info!("Listing reprogrammable controls...");
+
+    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
+    let controls = device.list_reprog_controls()?;
+
+    println!("Reprogrammable Controls: {}", controls.len());
+
+    for control in controls {
+        let (divert_flags, remap) = device.get_control_divert(control.control_id)?;
+        let diverted = divert_flags & 0x01 != 0;
+
+        println!(
+            "  0x{:04X} {:<18} flags {:#04x} divert {}",
+            control.control_id,
+            control_id_name(control.control_id),
+            control.flags,
+            if diverted {
+                format!("on (remap {remap:#06x})")
+            } else {
+                "off".to_string()
+            }
+        );
+    }
 
     Ok(())
 }

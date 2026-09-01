@@ -104,7 +104,7 @@ Each gesture can trigger:
 Automatic ratchet-to-free-spin transition:
 - **Ratchet Mode**: Precise line-by-line scrolling for documents
 - **Free-Spin Mode**: Fast navigation through long pages
-- **Threshold**: Adjustable sensitivity (0-50)
+- **Auto-disengage threshold**: 1-255; higher values need more scroll force to switch to free-spin mode
   - Lower values: Easier transition to free-spin
   - Higher values: More force required for free-spin
 
@@ -143,7 +143,7 @@ Automatic ratchet-to-free-spin transition:
 
 **Rich Functionality**
 - DPI configuration (200-8000 in 50 DPI increments)
-- SmartShift tuning (threshold 0-50)
+- SmartShift auto-disengage tuning (threshold 1-255)
 - Hi-res scroll control
 - Battery monitoring with charge level
 - Gesture support (4 directions: up, down, left, right)
