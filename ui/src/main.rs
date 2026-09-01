@@ -10,6 +10,37 @@ use logi_mx_driver::prelude::*;
 
 const APP_ID: &str = "com.logitech.mx.configurator";
 
+/// Narrows a GTK scale reading to a DPI setting value.
+///
+/// The scale range is configured by this UI, so out-of-range readings cannot
+/// occur in normal use; Rust's saturating float-to-integer cast keeps the
+/// conversion total for pathological inputs.
+#[must_use]
+const fn scale_dpi(value: f64) -> u16 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "scale bounds are owned by this UI; the cast saturates"
+    )]
+    let narrowed = value.round() as u16;
+    narrowed
+}
+
+/// Narrows a GTK scale reading to a `SmartShift` threshold value.
+///
+/// Same invariants as [`scale_dpi`]: the 1-50 scale range is owned here and
+/// the cast saturates.
+#[must_use]
+const fn scale_threshold(value: f64) -> u8 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "scale bounds are owned by this UI; the cast saturates"
+    )]
+    let narrowed = value.round() as u8;
+    narrowed
+}
+
 fn main() -> glib::ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
     app.connect_activate(build_ui);
@@ -30,14 +61,15 @@ fn build_ui(app: &Application) {
     let toast_overlay = ToastOverlay::new();
 
     // Check device connection
-    let content = if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
-        let name = device
-            .get_device_name()
-            .unwrap_or_else(|_| "MX Master 3S".to_string());
-        create_connected_ui(&name, toast_overlay.clone())
-    } else {
-        create_disconnected_ui()
-    };
+    let content = MxMaster3s::open_bolt_receiver(2).map_or_else(
+        |_| create_disconnected_ui(),
+        |mut device| {
+            let name = device
+                .get_device_name()
+                .unwrap_or_else(|_| "MX Master 3S".to_string());
+            create_connected_ui(&name, &toast_overlay)
+        }
+    );
 
     toast_overlay.set_child(Some(&content));
 
@@ -73,7 +105,7 @@ fn create_disconnected_ui() -> Box {
     main_box
 }
 
-fn create_connected_ui(device_name: &str, toast_overlay: ToastOverlay) -> Box {
+fn create_connected_ui(device_name: &str, toast_overlay: &ToastOverlay) -> Box {
     let scrolled = gtk4::ScrolledWindow::new();
     scrolled.set_vexpand(true);
     scrolled.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
@@ -93,15 +125,15 @@ fn create_connected_ui(device_name: &str, toast_overlay: ToastOverlay) -> Box {
     prefs_page.add(&device_info);
 
     // Battery
-    let battery_group = create_battery_group(toast_overlay.clone());
+    let battery_group = create_battery_group(toast_overlay);
     prefs_page.add(&battery_group);
 
     // DPI
-    let dpi_group = create_dpi_group(toast_overlay.clone());
+    let dpi_group = create_dpi_group(toast_overlay);
     prefs_page.add(&dpi_group);
 
     // SmartShift
-    let smartshift_group = create_smartshift_group(toast_overlay.clone());
+    let smartshift_group = create_smartshift_group(toast_overlay);
     prefs_page.add(&smartshift_group);
 
     // Scroll
@@ -136,7 +168,7 @@ fn create_device_info_group(name: &str) -> PreferencesGroup {
     group
 }
 
-fn create_battery_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
+fn create_battery_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Battery");
     group.set_description(Some("Monitor battery status and charging"));
@@ -165,7 +197,7 @@ fn create_battery_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     let refresh_btn = Button::with_label("Refresh");
     refresh_btn.add_css_class("pill");
     let br = battery_row.clone();
-    let bi = battery_icon.clone();
+    let bi = battery_icon;
     let to = toast_overlay.clone();
     refresh_btn.connect_clicked(move |_| {
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
@@ -194,7 +226,7 @@ fn create_battery_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     group
 }
 
-fn create_dpi_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
+fn create_dpi_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Pointer Sensitivity");
     group.set_description(Some("Adjust cursor speed from 400 to 8000 DPI"));
@@ -208,7 +240,7 @@ fn create_dpi_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
         "preferences-desktop-pointing-symbolic"
     ));
     dpi_row.set_title("Current DPI");
-    dpi_row.set_subtitle(&format!("{} DPI", current_dpi));
+    dpi_row.set_subtitle(&format!("{current_dpi} DPI"));
 
     group.add(&dpi_row);
 
@@ -216,16 +248,16 @@ fn create_dpi_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     scale_row.set_title("Sensitivity");
 
     let scale = Scale::with_range(Orientation::Horizontal, 400.0, 8000.0, 100.0);
-    scale.set_value(current_dpi as f64);
+    scale.set_value(f64::from(current_dpi));
     scale.set_draw_value(true);
     scale.set_value_pos(gtk4::PositionType::Right);
     scale.set_hexpand(true);
     scale.set_width_request(400);
 
-    let dr = dpi_row.clone();
+    let dr = dpi_row;
     scale.connect_value_changed(move |s| {
-        let value = s.value() as u16;
-        dr.set_subtitle(&format!("{} DPI", value));
+        let value = scale_dpi(s.value());
+        dr.set_subtitle(&format!("{value} DPI"));
     });
 
     let scale_box = Box::new(Orientation::Horizontal, 12);
@@ -235,14 +267,14 @@ fn create_dpi_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     apply_btn.add_css_class("suggested-action");
     apply_btn.add_css_class("pill");
 
-    let sc = scale.clone();
+    let sc = scale;
     let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
-        let dpi = sc.value() as u16;
+        let dpi = scale_dpi(sc.value());
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
             && device.set_dpi(dpi).is_ok()
         {
-            let toast = Toast::new(&format!("DPI set to {}", dpi));
+            let toast = Toast::new(&format!("DPI set to {dpi}"));
             to.add_toast(toast);
         }
     });
@@ -254,7 +286,7 @@ fn create_dpi_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     group
 }
 
-fn create_smartshift_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
+fn create_smartshift_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("SmartShift");
     group.set_description(Some(
@@ -283,7 +315,7 @@ fn create_smartshift_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     threshold_row.set_subtitle(&format!("Current: {}", current_config.threshold));
 
     let threshold_scale = Scale::with_range(Orientation::Horizontal, 1.0, 50.0, 1.0);
-    threshold_scale.set_value(current_config.threshold as f64);
+    threshold_scale.set_value(f64::from(current_config.threshold));
     threshold_scale.set_draw_value(true);
     threshold_scale.set_value_pos(gtk4::PositionType::Right);
     threshold_scale.set_hexpand(true);
@@ -291,8 +323,8 @@ fn create_smartshift_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
 
     let tr = threshold_row.clone();
     threshold_scale.connect_value_changed(move |s| {
-        let value = s.value() as u8;
-        tr.set_subtitle(&format!("Current: {}", value));
+        let value = scale_threshold(s.value());
+        tr.set_subtitle(&format!("Current: {value}"));
     });
 
     let threshold_box = Box::new(Orientation::Horizontal, 12);
@@ -302,13 +334,13 @@ fn create_smartshift_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     apply_btn.add_css_class("suggested-action");
     apply_btn.add_css_class("pill");
 
-    let sw = switch.clone();
-    let ts = threshold_scale.clone();
+    let sw = switch;
+    let ts = threshold_scale;
     let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
         let config = SmartShiftConfig {
             enabled:   sw.is_active(),
-            threshold: ts.value() as u8
+            threshold: scale_threshold(ts.value())
         };
 
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2)
@@ -334,7 +366,7 @@ fn create_smartshift_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     group
 }
 
-fn create_scroll_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
+fn create_scroll_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Scroll Settings");
     group.set_description(Some("Configure high-resolution and natural scrolling"));
@@ -370,9 +402,9 @@ fn create_scroll_group(toast_overlay: ToastOverlay) -> PreferencesGroup {
     apply_btn.add_css_class("suggested-action");
     apply_btn.add_css_class("pill");
 
-    let hs = hires_switch.clone();
-    let is = inverted_switch.clone();
-    let to = toast_overlay;
+    let hs = hires_switch;
+    let is = inverted_switch;
+    let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
         let config = HiResScrollConfig {
             enabled:  hs.is_active(),

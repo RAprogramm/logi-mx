@@ -9,30 +9,59 @@ use crate::devices::{
     Action, ButtonId, GestureDirection, GestureMode, HiResScrollConfig, SmartShiftConfig
 };
 
+/// Root configuration schema persisted at `~/.config/logi-mx.toml`.
+///
+/// Holds one [`DeviceConfig`] entry per supported mouse. Unknown keys are
+/// rejected by `toml`, so keep this structure in sync with documentation.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_driver::config::Config;
+///
+/// let config = Config::default();
+/// assert!(!config.devices.is_empty());
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Per-device settings; the daemon matches them by device name.
     #[serde(default)]
     pub devices: Vec<DeviceConfig>
 }
 
+/// Configuration for a single mouse.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_driver::config::DeviceConfig;
+///
+/// let device = DeviceConfig::default();
+/// assert_eq!(device.name, "MX Master 3S");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceConfig {
+    /// Device name reported by HID++ feature 0x0005; used for matching.
     pub name: String,
 
+    /// Sensor sensitivity in DPI, validated against device limits.
     #[serde(default = "default_dpi")]
     pub dpi: u16,
 
+    /// `SmartShift` ratchet/free-spin switching behaviour.
     #[serde(default)]
     pub smartshift: SmartShiftConfig,
 
+    /// High-resolution wheel mode and inversion flag.
     #[serde(default)]
     pub hiresscroll: HiResScrollConfig,
 
+    /// Per-button remapping applied by the daemon on device attach.
     #[serde(default)]
     pub buttons: HashMap<ButtonId, Action>
 }
 
-fn default_dpi() -> u16 {
+const fn default_dpi() -> u16 {
     1000
 }
 

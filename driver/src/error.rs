@@ -15,26 +15,41 @@ pub enum DeviceErrorKind {
     Timeout
 }
 
+/// Converts a [`DeviceErrorKind`] into a [`masterror::AppError`].
+///
+/// Maps each logical device failure to the closest HTTP-style error category
+/// so callers can branch on `AppError` uniformly.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_driver::error::{DeviceErrorKind, Result};
+///
+/// let result: Result<()> = Err(DeviceErrorKind::NotFound.into());
+/// assert!(result.is_err());
+/// ```
 impl From<DeviceErrorKind> for AppError {
     fn from(kind: DeviceErrorKind) -> Self {
         match kind {
-            DeviceErrorKind::NotFound => AppError::not_found("Device not found or not connected"),
+            DeviceErrorKind::NotFound => Self::not_found("Device not found or not connected"),
             DeviceErrorKind::ConnectionFailed => {
-                AppError::internal("Failed to establish device connection")
+                Self::internal("Failed to establish device connection")
             }
             DeviceErrorKind::InvalidResponse => {
-                AppError::internal("Received invalid response from device")
+                Self::internal("Received invalid response from device")
             }
             DeviceErrorKind::UnsupportedFeature => {
-                AppError::bad_request("Feature not supported by this device")
+                Self::bad_request("Feature not supported by this device")
             }
-            DeviceErrorKind::CommandFailed => {
-                AppError::internal("Device command execution failed")
-            }
-            DeviceErrorKind::Timeout => AppError::timeout("Device communication timeout")
+            DeviceErrorKind::CommandFailed => Self::internal("Device command execution failed"),
+            DeviceErrorKind::Timeout => Self::timeout("Device communication timeout")
         }
     }
 }
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod error_tests;
 
 #[cfg(test)]
 mod tests {

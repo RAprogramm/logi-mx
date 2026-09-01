@@ -13,10 +13,35 @@ use crate::error::Result;
 
 const DEFAULT_CONFIG_NAME: &str = "logi-mx.toml";
 
+/// Resolves the configuration file location.
+///
+/// Honours `XDG_CONFIG_HOME` first, then falls back to `$HOME/.config`.
+///
+/// # Returns
+///
+/// Absolute path to `logi-mx.toml` inside the user configuration directory.
+///
+/// # Errors
+///
+/// Returns [`masterror::AppError`] when neither `XDG_CONFIG_HOME` nor `HOME`
+/// is set, making the configuration directory undeterminable.
+///
+/// # Examples
+///
+/// ```no_run
+/// use logi_mx_driver::config::get_config_path;
+///
+/// let path = get_config_path()?;
+/// println!("config located at {}", path.display());
+/// # Ok::<(), masterror::AppError>(())
+/// ```
 pub fn get_config_path() -> Result<PathBuf> {
     get_config_path_from_env(|key| std::env::var(key))
 }
 
+/// Resolves the configuration path using a supplied environment reader.
+///
+/// Keeps [`get_config_path`] testable without mutating process state.
 fn get_config_path_from_env<F>(env_fn: F) -> Result<PathBuf>
 where
     F: Fn(&str) -> std::result::Result<String, std::env::VarError>
@@ -34,6 +59,30 @@ where
     Err(AppError::internal("Cannot determine config directory"))
 }
 
+/// Loads configuration from the default location.
+///
+/// When the file does not exist yet, a default [`Config`] is created and
+/// persisted so first run is self-initialising.
+///
+/// # Returns
+///
+/// Parsed configuration, or the freshly written default.
+///
+/// # Errors
+///
+/// Returns [`masterror::AppError`] when the path cannot be determined
+/// (see [`get_config_path`]), the default cannot be persisted, or the
+/// existing file is unreadable or malformed.
+///
+/// # Examples
+///
+/// ```no_run
+/// use logi_mx_driver::config::load_config;
+///
+/// let config = load_config()?;
+/// println!("{} device(s) configured", config.devices.len());
+/// # Ok::<(), masterror::AppError>(())
+/// ```
 pub fn load_config() -> Result<Config> {
     let path = get_config_path()?;
 
@@ -47,6 +96,31 @@ pub fn load_config() -> Result<Config> {
     load_config_from_path(&path)
 }
 
+/// Parses a configuration file from an explicit path.
+///
+/// # Arguments
+///
+/// * `path` - TOML file location to read.
+///
+/// # Returns
+///
+/// Parsed [`Config`] on success.
+///
+/// # Errors
+///
+/// Returns [`masterror::AppError`] when the file cannot be read, or when
+/// its content is not valid TOML matching the [`Config`] schema.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+///
+/// use logi_mx_driver::config::load_config_from_path;
+///
+/// let config = load_config_from_path(Path::new("/tmp/logi-mx.toml"))?;
+/// # Ok::<(), masterror::AppError>(())
+/// ```
 pub fn load_config_from_path(path: &Path) -> Result<Config> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| AppError::internal("Failed to read config file").with_source(e))?;
@@ -58,6 +132,28 @@ pub fn load_config_from_path(path: &Path) -> Result<Config> {
     Ok(config)
 }
 
+/// Persists configuration to the default location.
+///
+/// Creates the target directory when missing and writes pretty-printed TOML.
+///
+/// # Arguments
+///
+/// * `config` - Configuration to serialize.
+///
+/// # Errors
+///
+/// Returns [`masterror::AppError`] when the path cannot be determined, the
+/// directory cannot be created, serialization fails, or the file cannot be
+/// written.
+///
+/// # Examples
+///
+/// ```no_run
+/// use logi_mx_driver::config::{Config, save_config};
+///
+/// save_config(&Config::default())?;
+/// # Ok::<(), masterror::AppError>(())
+/// ```
 pub fn save_config(config: &Config) -> Result<()> {
     let path = get_config_path()?;
 

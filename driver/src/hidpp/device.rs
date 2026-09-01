@@ -7,12 +7,36 @@ use hidapi::{HidApi, HidDevice};
 use masterror::{field, prelude::*};
 use tracing::{debug, trace, warn};
 
-use super::{RootFunction, constants::*, packet::HidppPacket};
+use super::{
+    RootFunction,
+    constants::{
+        ERROR_ALREADY_EXISTS, ERROR_BUSY, ERROR_CONNECT_FAIL, ERROR_INVALID_ADDRESS,
+        ERROR_INVALID_SUBID, ERROR_INVALID_VALUE, ERROR_REQUEST_UNAVAILABLE, ERROR_RESOURCE_ERROR,
+        ERROR_TOO_MANY_DEVICES, ERROR_UNKNOWN_DEVICE, ERROR_UNSUPPORTED_PARAM,
+        ERROR_WRONG_PIN_CODE, ROOT_INDEX
+    },
+    packet::HidppPacket
+};
 use crate::error::{DeviceErrorKind, Result};
 
 const DEFAULT_TIMEOUT_MS: i32 = 1000;
 const RETRY_COUNT: usize = 3;
 
+/// HID++ 2.0 transport over a `hidapi` handle.
+///
+/// Wraps raw report I/O with retry logic, HID++ error mapping and a feature
+/// index cache so higher layers only deal with feature IDs.
+///
+/// # Examples
+///
+/// ```no_run
+/// use logi_mx_driver::hidpp::{FEATURE_ROOT, HidppDevice};
+///
+/// let mut device = HidppDevice::open_vid_pid(0x046D, 0xC548, 2)?;
+/// let root = device.get_feature_index(FEATURE_ROOT)?;
+/// println!("root feature at index {}", root);
+/// # Ok::<(), masterror::AppError>(())
+/// ```
 pub struct HidppDevice {
     device:        HidDevice,
     device_index:  u8,
@@ -21,6 +45,26 @@ pub struct HidppDevice {
 }
 
 impl HidppDevice {
+    /// Opens a HID++ device by explicit filesystem path.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - hidraw device path, e.g. `/dev/hidraw2`.
+    /// * `device_index` - HID++ device index; `0xFF` for wired devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when HID API initialisation fails,
+    /// the path contains interior NUL bytes, or the device cannot be opened.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::hidpp::HidppDevice;
+    ///
+    /// let device = HidppDevice::open_path("/dev/hidraw2", 0xFF)?;
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
     pub fn open_path(path: &str, device_index: u8) -> Result<Self> {
         let api = HidApi::new()
             .map_err(|e| AppError::internal("Failed to initialize HID API").with_source(e))?;
@@ -45,6 +89,30 @@ impl HidppDevice {
         })
     }
 
+    /// Locates and opens a HID++ interface by USB vendor/product ID.
+    ///
+    /// Scans connected HID devices and opens the first match exposing the
+    /// HID++ interface (`2`) or an unnumbered interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `vendor_id` - USB vendor ID, e.g. `0x046D` for Logitech.
+    /// * `product_id` - USB product ID of the receiver or device.
+    /// * `device_index` - HID++ device index; `0xFF` for wired devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when HID API initialisation fails,
+    /// no matching interface is found, or the device cannot be opened.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::hidpp::HidppDevice;
+    ///
+    /// let device = HidppDevice::open_vid_pid(0x046D, 0xC548, 2)?;
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
     pub fn open_vid_pid(vendor_id: u16, product_id: u16, device_index: u8) -> Result<Self> {
         let api = HidApi::new()
             .map_err(|e| AppError::internal("Failed to initialize HID API").with_source(e))?;
@@ -85,6 +153,34 @@ impl HidppDevice {
         })
     }
 
+    /// Sends one HID++ command and returns the device response.
+    ///
+    /// Chooses a short or long packet based on the parameter count and
+    /// retries on transient failures (`ERROR_BUSY`) and transport errors.
+    ///
+    /// # Arguments
+    ///
+    /// * `feature_index` - Feature index previously resolved via
+    ///   [`get_feature_index`](Self::get_feature_index).
+    /// * `function_id` - Function within the feature, low nibble.
+    /// * `params` - Up to 16 parameter bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when parameters exceed 16 bytes, the
+    /// device reports a HID++ error that persists across retries, or the
+    /// transport times out.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::hidpp::{FEATURE_UNIFIED_BATTERY, HidppDevice};
+    ///
+    /// let mut device = HidppDevice::open_vid_pid(0x046D, 0xC548, 2)?;
+    /// let feature = device.get_feature_index(FEATURE_UNIFIED_BATTERY)?;
+    /// let response = device.send_command(feature, 0x00, &[])?;
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
     pub fn send_command(
         &mut self,
         feature_index: u8,
@@ -130,7 +226,7 @@ impl HidppDevice {
                             std::thread::sleep(Duration::from_millis(50));
                             continue;
                         }
-                        return Err(self.map_hidpp_error(error_code));
+                        return Err(Self::map_hidpp_error(error_code));
                     }
                     trace!("Received response: {:?}", response);
                     return Ok(response);
@@ -142,7 +238,6 @@ impl HidppDevice {
                         e
                     );
                     std::thread::sleep(Duration::from_millis(50));
-                    continue;
                 }
                 Err(e) => return Err(e)
             }
@@ -151,6 +246,29 @@ impl HidppDevice {
         Err(DeviceErrorKind::CommandFailed.into())
     }
 
+    /// Resolves a feature ID to its runtime feature index.
+    ///
+    /// Indices are device specific and discovered dynamically via the Root
+    /// feature; successful lookups are cached for subsequent calls.
+    ///
+    /// # Arguments
+    ///
+    /// * `feature_id` - Static feature ID, e.g. `FEATURE_ADJUSTABLE_DPI`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the device does not implement
+    /// the feature or the discovery command fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::hidpp::{FEATURE_HIRES_WHEEL, HidppDevice};
+    ///
+    /// let mut device = HidppDevice::open_vid_pid(0x046D, 0xC548, 2)?;
+    /// let index = device.get_feature_index(FEATURE_HIRES_WHEEL)?;
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
     pub fn get_feature_index(&mut self, feature_id: u16) -> Result<u8> {
         if let Some(&index) = self.feature_cache.get(&feature_id) {
             return Ok(index);
@@ -175,13 +293,28 @@ impl HidppDevice {
         Ok(index)
     }
 
+    /// Verifies the device answers Root `Ping` requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the device does not respond.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::hidpp::HidppDevice;
+    ///
+    /// let mut device = HidppDevice::open_vid_pid(0x046D, 0xC548, 2)?;
+    /// device.ping()?;
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
     pub fn ping(&mut self) -> Result<()> {
         let response = self.send_command(ROOT_INDEX, RootFunction::Ping as u8, &[0, 0, 0])?;
         trace!("Ping response: {:?}", response);
         Ok(())
     }
 
-    fn send_packet_with_response(&mut self, packet: &HidppPacket) -> Result<HidppPacket> {
+    fn send_packet_with_response(&self, packet: &HidppPacket) -> Result<HidppPacket> {
         let bytes = packet.to_bytes();
         self.device
             .write(&bytes)
@@ -200,7 +333,7 @@ impl HidppDevice {
         HidppPacket::from_bytes(&buf[..size])
     }
 
-    fn map_hidpp_error(&self, error_code: u8) -> AppError {
+    fn map_hidpp_error(error_code: u8) -> AppError {
         match error_code {
             ERROR_INVALID_SUBID => AppError::bad_request("Invalid function ID"),
             ERROR_INVALID_ADDRESS => AppError::bad_request("Invalid address"),
@@ -215,7 +348,7 @@ impl HidppDevice {
             ERROR_UNSUPPORTED_PARAM => AppError::bad_request("Unsupported parameter"),
             ERROR_WRONG_PIN_CODE => AppError::unauthorized("Wrong PIN code"),
             _ => AppError::internal("Unknown HID++ error")
-                .with_field(field::u64("error_code", error_code as u64))
+                .with_field(field::u64("error_code", u64::from(error_code)))
         }
     }
 }
@@ -227,8 +360,9 @@ mod tests {
     #[test]
     fn test_feature_cache() {
         let mut cache = HashMap::new();
-        cache.insert(FEATURE_ROOT, ROOT_INDEX);
-        assert_eq!(cache.get(&FEATURE_ROOT), Some(&ROOT_INDEX));
+        cache.insert(0x1234, 0x05);
+        assert_eq!(cache.get(&0x1234), Some(&0x05));
+        assert_eq!(cache.get(&0x4321), None);
     }
 
     #[test]
@@ -248,47 +382,15 @@ mod tests {
             ERROR_WRONG_PIN_CODE,
         ];
 
-        let api = HidApi::new().unwrap();
-        let devices: Vec<_> = api.device_list().collect();
-
-        if devices.is_empty() {
-            return;
-        }
-
-        if let Ok(opened_device) = api.open_path(devices[0].path()) {
-            let device = HidppDevice {
-                device:        opened_device,
-                device_index:  1,
-                feature_cache: HashMap::new(),
-                software_id:   0x05
-            };
-
-            for code in error_codes {
-                let err = device.map_hidpp_error(code);
-                assert!(!err.to_string().is_empty());
-            }
+        for code in error_codes {
+            let err = HidppDevice::map_hidpp_error(code);
+            assert!(!err.to_string().is_empty());
         }
     }
 
     #[test]
     fn test_unknown_error_code() {
-        let api = HidApi::new().unwrap();
-        let devices: Vec<_> = api.device_list().collect();
-
-        if devices.is_empty() {
-            return;
-        }
-
-        if let Ok(opened_device) = api.open_path(devices[0].path()) {
-            let device = HidppDevice {
-                device:        opened_device,
-                device_index:  1,
-                feature_cache: HashMap::new(),
-                software_id:   0x05
-            };
-
-            let err = device.map_hidpp_error(0xFF);
-            assert!(!err.to_string().is_empty());
-        }
+        let err = HidppDevice::map_hidpp_error(0xFF);
+        assert!(!err.to_string().is_empty());
     }
 }

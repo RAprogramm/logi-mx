@@ -5,95 +5,307 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
+/// Battery charge snapshot reported by the device.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_driver::devices::{BatteryInfo, BatteryStatus};
+///
+/// let battery = BatteryInfo {
+///     level:  75,
+///     status: BatteryStatus::Discharging
+/// };
+/// assert_eq!(battery.level, 75);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatteryInfo {
+    /// Remaining charge as a percentage, 0-100.
     pub level:  u8,
+    /// Charge state reported by the battery feature.
     pub status: BatteryStatus
 }
 
+/// Charge state reported by the device battery feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BatteryStatus {
+    /// Device is drawing power from the battery.
     Discharging,
+    /// Device is connected to external power.
     Charging,
+    /// Battery is fully charged.
     Full,
+    /// Device reported an unrecognised state.
     Unknown
 }
 
+/// `SmartShift` ratchet/free-spin switching behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SmartShiftConfig {
+    /// Whether automatic mode switching is active.
     pub enabled:   bool,
+    /// Scroll-speed threshold (0-50) that triggers free-spin mode.
     pub threshold: u8
 }
 
+/// High-resolution wheel behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct HiResScrollConfig {
+    /// Whether high-resolution scroll reporting is enabled.
     pub enabled:  bool,
+    /// Whether scroll direction is inverted.
     pub inverted: bool
 }
 
+/// Identifies a programmable physical button on the mouse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ButtonId {
+    /// Primary left button.
     LeftClick,
+    /// Primary right button.
     RightClick,
+    /// Middle click on the main wheel.
     MiddleClick,
+    /// Thumb-side back button.
     Back,
+    /// Thumb-side forward button.
     Forward,
+    /// Thumb-side gesture button.
     ThumbGesture,
+    /// Mode-shift button behind the main wheel.
     WheelModeShift
 }
 
+/// Action assigned to a button, either a key sequence, a gesture set or a
+/// built-in behaviour.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Action {
+    /// Sends a key sequence, e.g. `["KEY_LEFTCTRL", "KEY_C"]`.
     Keypress { keys: Vec<String> },
+    /// Runs direction-based gestures on the thumb gesture button.
     Gestures { gestures: Vec<Gesture> },
+    /// Toggles `SmartShift` ratchet mode.
     ToggleSmartShift,
+    /// Clears the button mapping.
     None
 }
 
+/// One direction of a gesture bound to the gesture button.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gesture {
+    /// Physical direction the gesture is recognised from.
     pub direction: GestureDirection,
+    /// When the action fires relative to press/release.
     pub mode:      GestureMode,
+    /// Action executed when the gesture triggers.
     pub action:    Box<Action>
 }
 
+/// Recognised gesture direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GestureDirection {
+    /// Upward drag.
     Up,
+    /// Downward drag.
     Down,
+    /// Leftward drag.
     Left,
+    /// Rightward drag.
     Right,
+    /// Press without directional movement.
     None
 }
 
+/// When a gesture action fires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GestureMode {
+    /// Fires when the button is released.
     OnRelease,
+    /// Fires as soon as the button is pressed.
     OnPress
 }
 
+/// Device-agnostic interface every supported mouse must implement.
+///
+/// Implementations wrap HID++ transport details so the daemon, CLI and UI can
+/// operate on any device without protocol knowledge.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_driver::{
+///     devices::{BatteryInfo, BatteryStatus, MouseDevice, SmartShiftConfig},
+///     error::{DeviceErrorKind, Result}
+/// };
+///
+/// struct FakeMouse;
+///
+/// impl MouseDevice for FakeMouse {
+///     fn get_device_name(&mut self) -> Result<String> {
+///         Ok("MX Master 3S".to_string())
+///     }
+///
+///     fn get_battery_info(&mut self) -> Result<BatteryInfo> {
+///         Ok(BatteryInfo {
+///             level:  80,
+///             status: BatteryStatus::Discharging
+///         })
+///     }
+///
+///     fn set_dpi(&mut self, _dpi: u16) -> Result<()> {
+///         Ok(())
+///     }
+///
+///     fn get_dpi(&mut self) -> Result<u16> {
+///         Ok(1000)
+///     }
+///
+///     fn set_smartshift(&mut self, _config: SmartShiftConfig) -> Result<()> {
+///         Ok(())
+///     }
+///
+///     fn get_smartshift(&mut self) -> Result<SmartShiftConfig> {
+///         Err(DeviceErrorKind::UnsupportedFeature.into())
+///     }
+///
+///     fn set_hires_scroll(
+///         &mut self,
+///         _config: logi_mx_driver::devices::HiResScrollConfig
+///     ) -> Result<()> {
+///         Ok(())
+///     }
+///
+///     fn get_hires_scroll(&mut self) -> Result<logi_mx_driver::devices::HiResScrollConfig> {
+///         Err(DeviceErrorKind::UnsupportedFeature.into())
+///     }
+///
+///     fn set_button_action(
+///         &mut self,
+///         _button: logi_mx_driver::devices::ButtonId,
+///         _action: logi_mx_driver::devices::Action
+///     ) -> Result<()> {
+///         Ok(())
+///     }
+///
+///     fn get_button_action(
+///         &mut self,
+///         _button: logi_mx_driver::devices::ButtonId
+///     ) -> Result<logi_mx_driver::devices::Action> {
+///         Err(DeviceErrorKind::NotFound.into())
+///     }
+///
+///     fn ping(&mut self) -> Result<()> {
+///         Ok(())
+///     }
+/// }
+///
+/// let mut mouse = FakeMouse;
+/// assert_eq!(mouse.get_device_name()?, "MX Master 3S");
+/// # Ok::<(), masterror::AppError>(())
+/// ```
 pub trait MouseDevice {
+    /// Reads the marketing device name, e.g. `MX Master 3S`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the name feature is unsupported
+    /// or the device response is invalid.
     fn get_device_name(&mut self) -> Result<String>;
 
+    /// Reads the current battery level and charge state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when no battery feature is available
+    /// or the response cannot be parsed.
     fn get_battery_info(&mut self) -> Result<BatteryInfo>;
 
+    /// Applies a sensor DPI setting.
+    ///
+    /// # Arguments
+    ///
+    /// * `dpi` - Sensitivity in DPI; the device clamps to its supported range.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the DPI feature is unsupported
+    /// or the command fails.
     fn set_dpi(&mut self, dpi: u16) -> Result<()>;
 
+    /// Reads the currently applied sensor DPI.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the DPI feature is unsupported
+    /// or the response cannot be parsed.
     fn get_dpi(&mut self) -> Result<u16>;
 
+    /// Applies `SmartShift` ratchet behaviour.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Enable flag and scroll-speed threshold.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the `SmartShift` feature is
+    /// unsupported or the command fails.
     fn set_smartshift(&mut self, config: SmartShiftConfig) -> Result<()>;
 
+    /// Reads the current `SmartShift` configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the `SmartShift` feature is
+    /// unsupported or the response cannot be parsed.
     fn get_smartshift(&mut self) -> Result<SmartShiftConfig>;
 
+    /// Applies high-resolution wheel settings.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Enable flag and inversion preference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the hi-res wheel feature is
+    /// unsupported or the command fails.
     fn set_hires_scroll(&mut self, config: HiResScrollConfig) -> Result<()>;
 
+    /// Reads the current high-resolution wheel settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the hi-res wheel feature is
+    /// unsupported or the response cannot be parsed.
     fn get_hires_scroll(&mut self) -> Result<HiResScrollConfig>;
 
+    /// Assigns an action to a physical button.
+    ///
+    /// # Arguments
+    ///
+    /// * `button` - Physical button to reprogramme.
+    /// * `action` - Action to execute when the button is used.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the button cannot be programmed.
     fn set_button_action(&mut self, button: ButtonId, action: Action) -> Result<()>;
 
+    /// Reads the action currently assigned to a button.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the button has no assigned
+    /// action or the query fails.
     fn get_button_action(&mut self, button: ButtonId) -> Result<Action>;
 
+    /// Verifies the device responds to HID++ traffic.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the device does not answer.
     fn ping(&mut self) -> Result<()>;
 }
 

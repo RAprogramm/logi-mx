@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
+//! System tray integration for the daemon.
+//!
+//! Exposes the device state through an `ksni` tray icon and offers menu
+//! actions such as status refresh, UI launch and graceful shutdown.
+
 use std::{
     env::current_exe,
     path::PathBuf,
@@ -14,14 +19,22 @@ use ksni::{Category, MenuItem, Tray, TrayMethods, menu::StandardItem};
 use logi_mx_driver::prelude::*;
 use tracing::{debug, error, info};
 
+/// Snapshot of device state shared between the tray icon and the daemon.
 #[derive(Clone)]
 pub struct DeviceStatus {
+    /// Whether the mouse is currently reachable.
     pub connected:            bool,
+    /// Last observed battery charge percentage.
     pub battery_level:        u8,
+    /// Last observed battery charge state.
     pub battery_status:       String,
+    /// Last observed DPI setting.
     pub dpi:                  u16,
+    /// Whether `SmartShift` automatic switching is enabled.
     pub smartshift:           bool,
+    /// `SmartShift` scroll-speed threshold.
     pub smartshift_threshold: u8,
+    /// Last fatal error message, if any.
     pub error:                Option<String>
 }
 
@@ -39,17 +52,22 @@ impl Default for DeviceStatus {
     }
 }
 
+/// Tray icon driven by [`DeviceStatus`].
 pub struct LogiTrayIcon {
     status: Arc<Mutex<DeviceStatus>>
 }
 
 impl LogiTrayIcon {
+    /// Creates a tray icon with default status.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             status: Arc::new(Mutex::new(DeviceStatus::default()))
         }
     }
 
+    /// Returns a shared handle to the status so the daemon can update it.
+    #[must_use]
     pub fn get_status_handle(&self) -> Arc<Mutex<DeviceStatus>> {
         Arc::clone(&self.status)
     }
@@ -78,12 +96,12 @@ impl LogiTrayIcon {
                 .build();
 
             let response = dialog.choose_future(None::<&Window>).await;
-            let confirmed = response.map(|r| r == 1).unwrap_or(false);
+            let confirmed = response.is_ok_and(|r| r == 1);
             tx.send(confirmed).ok();
         });
 
         let result = rx.recv().unwrap_or(false);
-        info!("Exit confirmation dialog result: {}", result);
+        info!("Exit confirmation dialog result: {result}");
         result
     }
 
@@ -94,7 +112,7 @@ impl LogiTrayIcon {
             .args(["--user", "stop", "logi-mx-daemon.service"])
             .status()
         {
-            error!("Failed to stop systemd service: {}", e);
+            error!("Failed to stop systemd service: {e}");
             exit(1);
         }
 
@@ -102,37 +120,56 @@ impl LogiTrayIcon {
         exit(0);
     }
 
+    /// Queries the device and refreshes the shared status.
     pub fn update_status(&self) {
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver(2) {
-            let mut status = self.status.lock().unwrap();
-            status.connected = true;
+            let battery_level = {
+                let mut status = self
+                    .status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                status.connected = true;
 
-            if let Ok(battery) = device.get_battery_info() {
-                status.battery_level = battery.level;
-                status.battery_status = format!("{:?}", battery.status);
-            }
+                if let Ok(battery) = device.get_battery_info() {
+                    status.battery_level = battery.level;
+                    status.battery_status = format!("{:?}", battery.status);
+                }
 
-            if let Ok(dpi) = device.get_dpi() {
-                status.dpi = dpi;
-            }
+                if let Ok(dpi) = device.get_dpi() {
+                    status.dpi = dpi;
+                }
 
-            if let Ok(ss_config) = device.get_smartshift() {
-                status.smartshift = ss_config.enabled;
-                status.smartshift_threshold = ss_config.threshold;
-            }
+                if let Ok(ss_config) = device.get_smartshift() {
+                    status.smartshift = ss_config.enabled;
+                    status.smartshift_threshold = ss_config.threshold;
+                }
 
-            debug!("Tray status updated: battery={}%", status.battery_level);
+                status.battery_level
+            };
+
+            debug!("Tray status updated: battery={battery_level}%");
         } else {
-            let mut status = self.status.lock().unwrap();
-            status.connected = false;
+            {
+                let mut status = self
+                    .status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                status.connected = false;
+            }
             debug!("Device not connected");
         }
+    }
+
+    fn lock_status(&self) -> std::sync::MutexGuard<'_, DeviceStatus> {
+        self.status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
 impl Tray for LogiTrayIcon {
     fn icon_name(&self) -> String {
-        let status = self.status.lock().unwrap();
+        let status = self.lock_status();
         if status.error.is_some() {
             "dialog-error".to_string()
         } else if status.connected {
@@ -143,13 +180,13 @@ impl Tray for LogiTrayIcon {
     }
 
     fn title(&self) -> String {
-        let status = self.status.lock().unwrap();
-        if let Some(ref error) = status.error {
-            format!("MX Master 3S - Error: {}", error)
-        } else if status.connected {
+        let snapshot = self.lock_status().clone();
+        if let Some(error) = snapshot.error.as_ref() {
+            format!("MX Master 3S - Error: {error}")
+        } else if snapshot.connected {
             format!(
                 "MX Master 3S - Battery: {}% ({}), DPI: {}",
-                status.battery_level, status.battery_status, status.dpi
+                snapshot.battery_level, snapshot.battery_status, snapshot.dpi
             )
         } else {
             "MX Master 3S - Disconnected".to_string()
@@ -165,7 +202,7 @@ impl Tray for LogiTrayIcon {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let status = self.status.lock().unwrap();
+        let snapshot = self.lock_status().clone();
 
         let mut menu = vec![
             StandardItem {
@@ -179,90 +216,12 @@ impl Tray for LogiTrayIcon {
             MenuItem::Separator,
         ];
 
-        if status.connected {
-            menu.extend(vec![
-                StandardItem {
-                    label: format!(
-                        "Battery: {}% ({})",
-                        status.battery_level, status.battery_status
-                    ),
-                    icon_name: "battery".into(),
-                    activate: Box::new(|_| {}),
-                    enabled: false,
-                    ..Default::default()
-                }
-                .into(),
-                StandardItem {
-                    label: format!("DPI: {}", status.dpi),
-                    icon_name: "preferences-desktop".into(),
-                    activate: Box::new(|_| {}),
-                    enabled: false,
-                    ..Default::default()
-                }
-                .into(),
-                StandardItem {
-                    label: format!(
-                        "SmartShift: {} ({})",
-                        if status.smartshift { "On" } else { "Off" },
-                        status.smartshift_threshold
-                    ),
-                    icon_name: "preferences-system".into(),
-                    activate: Box::new(|_| {}),
-                    enabled: false,
-                    ..Default::default()
-                }
-                .into(),
-                MenuItem::Separator,
-                StandardItem {
-                    label: "Refresh Status".into(),
-                    icon_name: "view-refresh".into(),
-                    activate: Box::new(|this: &mut Self| {
-                        this.update_status();
-                    }),
-                    enabled: true,
-                    ..Default::default()
-                }
-                .into(),
-                StandardItem {
-                    label: "Open Configuration".into(),
-                    icon_name: "preferences-system".into(),
-                    activate: Box::new(|_this: &mut Self| {
-                        let ui_path = current_exe()
-                            .ok()
-                            .and_then(|p| p.parent().map(|p| p.join("logi-mx-ui")))
-                            .unwrap_or_else(|| PathBuf::from("logi-mx-ui"));
-
-                        // Build environment variables for display access
-                        let mut cmd = Command::new(&ui_path);
-
-                        // Propagate display environment variables
-                        for var in [
-                            "DISPLAY",
-                            "WAYLAND_DISPLAY",
-                            "XDG_RUNTIME_DIR",
-                            "XDG_SESSION_TYPE",
-                            "DBUS_SESSION_BUS_ADDRESS"
-                        ] {
-                            if let Ok(val) = std::env::var(var) {
-                                cmd.env(var, val);
-                            }
-                        }
-
-                        if let Err(e) = cmd.spawn() {
-                            error!("Failed to launch UI at {:?}: {}", ui_path, e);
-                        } else {
-                            info!("Launched configuration UI");
-                        }
-                    }),
-                    enabled: true,
-                    ..Default::default()
-                }
-                .into(),
-            ]);
+        if snapshot.connected {
+            menu.extend(Self::device_menu_items(&snapshot));
         } else {
             menu.push(
                 StandardItem {
-                    label: "❌ Device Not Connected".into(),
+                    label: "Device Not Connected".into(),
                     icon_name: "dialog-error".into(),
                     activate: Box::new(|_| {}),
                     enabled: false,
@@ -299,6 +258,100 @@ impl Tray for LogiTrayIcon {
     }
 }
 
+impl LogiTrayIcon {
+    /// Builds the informational and action entries shown while a device is
+    /// connected.
+    fn device_menu_items(status: &DeviceStatus) -> Vec<MenuItem<Self>> {
+        vec![
+            StandardItem {
+                label: format!(
+                    "Battery: {}% ({})",
+                    status.battery_level, status.battery_status
+                ),
+                icon_name: "battery".into(),
+                activate: Box::new(|_| {}),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: format!("DPI: {}", status.dpi),
+                icon_name: "preferences-desktop".into(),
+                activate: Box::new(|_| {}),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: format!(
+                    "SmartShift: {} ({})",
+                    if status.smartshift { "On" } else { "Off" },
+                    status.smartshift_threshold
+                ),
+                icon_name: "preferences-system".into(),
+                activate: Box::new(|_| {}),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
+            StandardItem {
+                label: "Refresh Status".into(),
+                icon_name: "view-refresh".into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.update_status();
+                }),
+                enabled: true,
+                ..Default::default()
+            }
+            .into(),
+            Self::open_configuration_item(),
+        ]
+    }
+
+    /// Builds the menu entry that launches the configuration UI.
+    fn open_configuration_item() -> MenuItem<Self> {
+        StandardItem {
+            label: "Open Configuration".into(),
+            icon_name: "preferences-system".into(),
+            activate: Box::new(|_this: &mut Self| {
+                let ui_path = current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|p| p.join("logi-mx-ui")))
+                    .unwrap_or_else(|| PathBuf::from("logi-mx-ui"));
+
+                let mut cmd = Command::new(&ui_path);
+
+                for var in [
+                    "DISPLAY",
+                    "WAYLAND_DISPLAY",
+                    "XDG_RUNTIME_DIR",
+                    "XDG_SESSION_TYPE",
+                    "DBUS_SESSION_BUS_ADDRESS"
+                ] {
+                    if let Ok(val) = std::env::var(var) {
+                        cmd.env(var, val);
+                    }
+                }
+
+                if let Err(e) = cmd.spawn() {
+                    error!("Failed to launch UI at {ui_path:?}: {e}");
+                } else {
+                    info!("Launched configuration UI");
+                }
+            }),
+            enabled: true,
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
+/// Spawns the tray icon and returns the shared status handle.
+///
+/// # Errors
+///
+/// Returns a human-readable error string when the tray cannot be registered.
 pub async fn spawn_tray() -> std::result::Result<Arc<Mutex<DeviceStatus>>, String> {
     let tray_icon = LogiTrayIcon::new();
     let status_handle = tray_icon.get_status_handle();
@@ -308,7 +361,7 @@ pub async fn spawn_tray() -> std::result::Result<Arc<Mutex<DeviceStatus>>, Strin
         .spawn()
         .await
         .map(|_| status_handle)
-        .map_err(|e| format!("Failed to spawn tray: {}", e))
+        .map_err(|e| format!("Failed to spawn tray: {e}"))
 }
 
 #[cfg(test)]
@@ -413,14 +466,12 @@ mod tests {
         let handle1 = tray.get_status_handle();
         let handle2 = tray.get_status_handle();
 
-        // Modify status through handle1
         {
             let mut status = handle1.lock().unwrap();
             status.connected = true;
             status.battery_level = 50;
         }
 
-        // Verify change visible through handle2
         {
             let status = handle2.lock().unwrap();
             assert!(status.connected);
@@ -457,7 +508,6 @@ mod tests {
             status.connected = true;
             status.error = Some("Test error".to_string());
         }
-        // Error state should take priority over connected state
         assert_eq!(tray.icon_name(), "dialog-error");
     }
 
@@ -471,7 +521,6 @@ mod tests {
             status.error = Some("Critical failure".to_string());
         }
         let title = tray.title();
-        // Error should take priority, should not show battery level
         assert!(title.contains("Error: Critical failure"));
         assert!(!title.contains("90%"));
     }

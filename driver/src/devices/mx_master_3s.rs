@@ -6,13 +6,15 @@ use std::collections::HashMap;
 use masterror::prelude::*;
 use tracing::{debug, info};
 
-use super::traits::*;
+use super::traits::{
+    Action, BatteryInfo, BatteryStatus, ButtonId, HiResScrollConfig, MouseDevice, SmartShiftConfig
+};
 use crate::{
-    error::Result,
+    error::{DeviceErrorKind, Result},
     hidpp::{
         BatteryFunction, DpiFunction, FEATURE_ADJUSTABLE_DPI, FEATURE_BATTERY_STATUS,
         FEATURE_DEVICE_NAME, FEATURE_HIRES_WHEEL, FEATURE_SMART_SHIFT, FEATURE_UNIFIED_BATTERY,
-        HidppDevice, HiresWheelFunction, SmartShiftFunction
+        HidppDevice, HidppPacket, HiresWheelFunction, SmartShiftFunction
     }
 };
 
@@ -21,12 +23,45 @@ const PID_BOLT_RECEIVER: u16 = 0xC548;
 const PID_MX_MASTER_3S_USB: u16 = 0x4082;
 const PID_MX_MASTER_3S_BT: u16 = 0xB034;
 
+/// Logitech MX Master 3S connected via Bolt receiver, USB or Bluetooth.
+///
+/// Implements [`MouseDevice`] on top of the HID++ 2.0 protocol and keeps an
+/// in-memory map of programmable button actions.
+///
+/// # Examples
+///
+/// ```no_run
+/// use logi_mx_driver::devices::{MouseDevice, MxMaster3s};
+///
+/// let mut device = MxMaster3s::open_bolt_receiver(2)?;
+/// println!("{}", device.get_device_name()?);
+/// # Ok::<(), masterror::AppError>(())
+/// ```
 pub struct MxMaster3s {
     hidpp:           HidppDevice,
     button_mappings: HashMap<ButtonId, Action>
 }
 
 impl MxMaster3s {
+    /// Opens the mouse paired with a Logi Bolt receiver.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_index` - Receiver slot of the paired device, `1`-`6`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the receiver is absent, the slot
+    /// is empty, or the device does not answer a ping.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::devices::MxMaster3s;
+    ///
+    /// let device = MxMaster3s::open_bolt_receiver(2)?;
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
     pub fn open_bolt_receiver(device_index: u8) -> Result<Self> {
         info!(
             "Opening MX Master 3S via Bolt receiver, device index: {}",
@@ -43,6 +78,21 @@ impl MxMaster3s {
         })
     }
 
+    /// Opens the mouse connected over USB cable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when no wired device is found or the
+    /// device does not answer a ping.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::devices::MxMaster3s;
+    ///
+    /// let device = MxMaster3s::open_usb()?;
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
     pub fn open_usb() -> Result<Self> {
         info!("Opening MX Master 3S via USB");
 
@@ -56,6 +106,21 @@ impl MxMaster3s {
         })
     }
 
+    /// Opens the mouse paired over Bluetooth.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the Bluetooth HID interface is
+    /// absent or the device does not answer a ping.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::devices::MxMaster3s;
+    ///
+    /// let device = MxMaster3s::open_bluetooth()?;
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
     pub fn open_bluetooth() -> Result<Self> {
         info!("Opening MX Master 3S via Bluetooth");
 
@@ -77,8 +142,8 @@ impl MxMaster3s {
                 .send_command(feature_index, BatteryFunction::GetStatus as u8, &[])?;
 
         let (level, status_byte) = match response {
-            crate::hidpp::HidppPacket::Short(p) => (p.parameters[0], p.parameters[1]),
-            crate::hidpp::HidppPacket::Long(p) => (p.parameters[0], p.parameters[1])
+            HidppPacket::Short(p) => (p.parameters[0], p.parameters[1]),
+            HidppPacket::Long(p) => (p.parameters[0], p.parameters[1])
         };
 
         let status = match status_byte {
@@ -102,8 +167,8 @@ impl MxMaster3s {
                 .send_command(feature_index, BatteryFunction::GetStatus as u8, &[])?;
 
         let (level, status_byte) = match response {
-            crate::hidpp::HidppPacket::Short(p) => (p.parameters[0], p.parameters[1]),
-            crate::hidpp::HidppPacket::Long(p) => (p.parameters[0], p.parameters[1])
+            HidppPacket::Short(p) => (p.parameters[0], p.parameters[1]),
+            HidppPacket::Long(p) => (p.parameters[0], p.parameters[1])
         };
 
         let status = match status_byte {
@@ -131,12 +196,8 @@ impl MouseDevice for MxMaster3s {
             let response = self.hidpp.send_command(feature_index, 0x00, &[offset])?;
 
             let (name_len, chunk) = match response {
-                crate::hidpp::HidppPacket::Short(p) => {
-                    (p.parameters[0] as usize, p.parameters[1..].to_vec())
-                }
-                crate::hidpp::HidppPacket::Long(p) => {
-                    (p.parameters[0] as usize, p.parameters[1..].to_vec())
-                }
+                HidppPacket::Short(p) => (p.parameters[0] as usize, p.parameters[1..].to_vec()),
+                HidppPacket::Long(p) => (p.parameters[0] as usize, p.parameters[1..].to_vec())
             };
 
             for &byte in chunk.iter().take(name_len.saturating_sub(offset as usize)) {
@@ -150,7 +211,11 @@ impl MouseDevice for MxMaster3s {
                 break;
             }
 
-            offset += chunk.len() as u8;
+            let chunk_len =
+                u8::try_from(chunk.len()).map_err(|_| DeviceErrorKind::InvalidResponse)?;
+            offset = offset
+                .checked_add(chunk_len)
+                .ok_or(DeviceErrorKind::InvalidResponse)?;
         }
 
         if name.is_empty() || name.trim().is_empty() {
@@ -186,12 +251,8 @@ impl MouseDevice for MxMaster3s {
                 .send_command(feature_index, DpiFunction::GetSensorDpi as u8, &[0x00])?;
 
         let dpi = match response {
-            crate::hidpp::HidppPacket::Short(p) => {
-                u16::from_be_bytes([p.parameters[1], p.parameters[2]])
-            }
-            crate::hidpp::HidppPacket::Long(p) => {
-                u16::from_be_bytes([p.parameters[1], p.parameters[2]])
-            }
+            HidppPacket::Short(p) => u16::from_be_bytes([p.parameters[1], p.parameters[2]]),
+            HidppPacket::Long(p) => u16::from_be_bytes([p.parameters[1], p.parameters[2]])
         };
 
         debug!("Current DPI: {}", dpi);
@@ -234,8 +295,8 @@ impl MouseDevice for MxMaster3s {
         )?;
 
         let (_wheel_mode, auto_disengage) = match response {
-            crate::hidpp::HidppPacket::Short(p) => (p.parameters[0], p.parameters[1]),
-            crate::hidpp::HidppPacket::Long(p) => (p.parameters[0], p.parameters[1])
+            HidppPacket::Short(p) => (p.parameters[0], p.parameters[1]),
+            HidppPacket::Long(p) => (p.parameters[0], p.parameters[1])
         };
 
         Ok(SmartShiftConfig {
@@ -272,8 +333,8 @@ impl MouseDevice for MxMaster3s {
                 .send_command(feature_index, HiresWheelFunction::GetMode as u8, &[])?;
 
         let mode = match response {
-            crate::hidpp::HidppPacket::Short(p) => p.parameters[0],
-            crate::hidpp::HidppPacket::Long(p) => p.parameters[0]
+            HidppPacket::Short(p) => p.parameters[0],
+            HidppPacket::Long(p) => p.parameters[0]
         };
 
         Ok(HiResScrollConfig {

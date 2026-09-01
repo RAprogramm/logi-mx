@@ -32,7 +32,7 @@ enum Commands {
     }
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone, Copy)]
 enum SetCommands {
     Dpi {
         value: u16
@@ -97,8 +97,8 @@ fn cmd_info() -> Result<()> {
     let hires = device.get_hires_scroll()?;
 
     println!("Device Information:");
-    println!("  Name: {}", name);
-    println!("  DPI: {}", dpi);
+    println!("  Name: {name}");
+    println!("  DPI: {dpi}");
     println!(
         "  SmartShift: {} (threshold: {})",
         if smartshift.enabled {
@@ -138,7 +138,7 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
         } => {
             info!("Setting DPI to {}...", value);
             device.set_dpi(value)?;
-            println!("DPI set to {}", value);
+            println!("DPI set to {value}");
         }
         SetCommands::Smartshift {
             enabled,
@@ -187,7 +187,7 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
             let config = load_config()?;
             let toml_str = toml::to_string_pretty(&config)
                 .map_err(|e| AppError::internal("Failed to serialize config").with_source(e))?;
-            println!("{}", toml_str);
+            println!("{toml_str}");
         }
         ConfigCommands::Edit => {
             let config_path = get_config_path()?;
@@ -202,14 +202,14 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
                 .map_err(|e| AppError::internal("Failed to serialize config").with_source(e))?;
             std::fs::write(&path, toml_str)
                 .map_err(|e| AppError::internal("Failed to write config").with_source(e))?;
-            println!("Config exported to {}", path);
+            println!("Config exported to {path}");
         }
         ConfigCommands::Import {
             path
         } => {
             let config = load_config_from_path(std::path::Path::new(&path))?;
             save_config(&config)?;
-            println!("Config imported from {}", path);
+            println!("Config imported from {path}");
         }
     }
 

@@ -4,6 +4,8 @@
 #[cfg(feature = "tray")]
 mod tray;
 
+#[cfg(feature = "tray")]
+use std::sync::Arc;
 use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
 
 use fslock::LockFile;
@@ -18,6 +20,9 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use udev::MonitorBuilder;
+
+#[cfg(feature = "tray")]
+use crate::tray::spawn_tray;
 
 type Result<T> = std::result::Result<T, AppError>;
 
@@ -34,43 +39,39 @@ impl DeviceManager {
         }
     }
 
-    async fn handle_device_added(&mut self, device_path: String) -> Result<()> {
-        info!("Device added: {}", device_path);
+    fn handle_device_added(&mut self, device_path: String) {
+        info!("Device added: {device_path}");
 
         match MxMaster3s::open_bolt_receiver(2) {
             Ok(mut device) => {
                 if let Ok(name) = device.get_device_name() {
-                    info!("Detected: {}", name);
+                    info!("Detected: {name}");
 
                     if let Some(device_config) =
                         self.config.devices.iter().find(|d| d.name == name)
                     {
-                        info!("Applying configuration for {}", name);
-                        if let Err(e) = self.apply_config(&mut device, device_config).await {
-                            error!("Failed to apply config: {}", e);
-                        }
+                        info!("Applying configuration for {name}");
+                        Self::apply_config(&mut device, device_config);
                     }
 
                     self.devices.insert(device_path, device);
                 }
             }
             Err(e) => {
-                warn!("Failed to open device: {}", e);
+                warn!("Failed to open device: {e}");
             }
         }
-
-        Ok(())
     }
 
-    async fn handle_device_removed(&mut self, device_path: &str) {
-        info!("Device removed: {}", device_path);
+    fn handle_device_removed(&mut self, device_path: &str) {
+        info!("Device removed: {device_path}");
         self.devices.remove(device_path);
     }
 
-    async fn apply_config(&self, device: &mut MxMaster3s, config: &DeviceConfig) -> Result<()> {
+    fn apply_config(device: &mut MxMaster3s, config: &DeviceConfig) {
         debug!("Setting DPI to {}", config.dpi);
         if let Err(e) = device.set_dpi(config.dpi) {
-            error!("Failed to set DPI: {}", e);
+            error!("Failed to set DPI: {e}");
         }
 
         debug!(
@@ -78,7 +79,7 @@ impl DeviceManager {
             config.smartshift.enabled, config.smartshift.threshold
         );
         if let Err(e) = device.set_smartshift(config.smartshift) {
-            error!("Failed to set SmartShift: {}", e);
+            error!("Failed to set SmartShift: {e}");
         }
 
         debug!(
@@ -86,47 +87,17 @@ impl DeviceManager {
             config.hiresscroll.enabled, config.hiresscroll.inverted
         );
         if let Err(e) = device.set_hires_scroll(config.hiresscroll) {
-            error!("Failed to set hi-res scroll: {}", e);
+            error!("Failed to set hi-res scroll: {e}");
         }
 
         for (button, action) in &config.buttons {
-            debug!("Setting button {:?} to action {:?}", button, action);
+            debug!("Setting button {button:?} to action {action:?}");
             if let Err(e) = device.set_button_action(*button, action.clone()) {
-                error!("Failed to set button action: {}", e);
+                error!("Failed to set button action: {e}");
             }
         }
 
         info!("Configuration applied successfully");
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    async fn monitor_battery(&mut self) {
-        loop {
-            sleep(Duration::from_secs(300)).await;
-
-            let paths: Vec<String> = self.devices.keys().cloned().collect();
-
-            for path in paths {
-                if let Some(device) = self.devices.get_mut(&path) {
-                    match device.get_battery_info() {
-                        Ok(battery) => {
-                            info!(
-                                "Device {} battery: {}% ({:?})",
-                                path, battery.level, battery.status
-                            );
-
-                            if battery.level < 10 {
-                                warn!("Low battery on {}: {}%", path, battery.level);
-                            }
-                        }
-                        Err(e) => {
-                            debug!("Failed to get battery info for {}: {}", path, e);
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -134,10 +105,10 @@ fn get_lock_file_path(suffix: Option<&str>) -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
         .unwrap_or_else(|_| "/tmp".to_string());
-    let filename = match suffix {
-        Some(s) => format!("logi-mx-daemon-{}.lock", s),
-        None => "logi-mx-daemon.lock".to_string()
-    };
+    let filename = suffix.map_or_else(
+        || "logi-mx-daemon.lock".to_string(),
+        |s| format!("logi-mx-daemon-{s}.lock")
+    );
     PathBuf::from(runtime_dir).join(filename)
 }
 
@@ -158,29 +129,36 @@ fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
         && let Ok(pid_str) = fs::read_to_string(&lock_path)
         && let Ok(pid) = pid_str.trim().parse::<i32>()
     {
-        if pid == std::process::id() as i32 {
+        if pid == std::process::id().cast_signed() {
             info!("Lock already held by current process, reusing");
         } else {
-            info!(
-                "Another instance detected (PID {}), requesting graceful shutdown",
-                pid
-            );
+            info!("Another instance detected (PID {pid}), requesting graceful shutdown");
 
+            // SAFETY: `kill` only sends a signal to the PID recorded by our
+            // own previous instance in the lock file. The syscall cannot
+            // introduce memory unsafety; delivery failure is tolerated and
+            // detected indirectly because the lock will never be released.
             unsafe {
                 libc::kill(pid, libc::SIGTERM);
             }
-            info!("Sent SIGTERM to process {}, waiting for shutdown", pid);
+            info!("Sent SIGTERM to process {pid}, waiting for shutdown");
 
             for attempt in 1..=10 {
                 std::thread::sleep(Duration::from_millis(500));
-                if lockfile.try_lock().unwrap_or(false) {
-                    info!("Previous instance stopped, acquired lock");
-                    break;
-                }
-                if attempt == 10 {
-                    return Err(AppError::internal(
-                        "Previous instance did not stop within 5 seconds"
-                    ));
+                match lockfile.try_lock() {
+                    Ok(true) => {
+                        info!("Previous instance stopped, acquired lock");
+                        break;
+                    }
+                    Ok(false) if attempt == 10 => {
+                        return Err(AppError::internal(
+                            "Previous instance did not stop within 5 seconds"
+                        ));
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        return Err(AppError::internal("Failed to acquire lock").with_source(e));
+                    }
                 }
             }
         }
@@ -214,9 +192,6 @@ async fn main() -> Result<()> {
     #[cfg(feature = "tray")]
     {
         info!("Initializing system tray...");
-        use std::sync::Arc;
-
-        use crate::tray::spawn_tray;
 
         match spawn_tray().await {
             Ok(tray_status) => {
@@ -255,8 +230,8 @@ async fn main() -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<UdevEvent>(32);
 
     std::thread::spawn(move || {
-        if let Err(e) = monitor_udev_events_sync(tx) {
-            error!("Udev monitor error: {}", e);
+        if let Err(e) = monitor_udev_events_sync(&tx) {
+            error!("Udev monitor error: {e}");
         }
     });
 
@@ -272,12 +247,10 @@ async fn main() -> Result<()> {
             Some(event) = rx.recv() => {
                 match event {
                     UdevEvent::Add(path) => {
-                        if let Err(e) = manager.handle_device_added(path).await {
-                            error!("Error handling device add: {}", e);
-                        }
+                        manager.handle_device_added(path);
                     }
                     UdevEvent::Remove(path) => {
-                        manager.handle_device_removed(&path).await;
+                        manager.handle_device_removed(&path);
                     }
                 }
             }
@@ -302,7 +275,7 @@ enum UdevEvent {
     Remove(String)
 }
 
-fn monitor_udev_events_sync(tx: mpsc::Sender<UdevEvent>) -> Result<()> {
+fn monitor_udev_events_sync(tx: &mpsc::Sender<UdevEvent>) -> Result<()> {
     let monitor = MonitorBuilder::new()
         .map_err(|e| AppError::internal("Failed to create udev monitor").with_source(e))?
         .match_subsystem("hidraw")
