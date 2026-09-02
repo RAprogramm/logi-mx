@@ -3,7 +3,7 @@ resolver = "3"
 members = ["driver", "daemon", "cli", "ui"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["RAprogramm <andrey.rozanov.vl@gmail.com>"]
 license = "MIT"
@@ -11,7 +11,7 @@ repository = "https://github.com/RAprogramm/logi-mx"
 rust-version = "1.98"
 
 [workspace.dependencies]
-logi-mx-driver = { path = "driver", version = "0.5.0" }
+logi-mx-driver = { path = "driver", version = "0.6.0" }
 masterror = { version = "0.31", default-features = false, features = ["std"] }
 hidapi = { version = "2", default-features = false, features = [
   "linux-native",
