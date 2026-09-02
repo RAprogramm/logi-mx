@@ -9,6 +9,8 @@ mod worker;
 
 use std::{
     fs,
+    io::Write,
+    os::unix::fs::OpenOptionsExt as _,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration
@@ -38,12 +40,30 @@ type Result<T> = std::result::Result<T, AppError>;
 fn lock_file_path(suffix: Option<&str>) -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
-        .unwrap_or_else(|_| "/tmp".to_string());
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
     let filename = suffix.map_or_else(
         || "logi-mx-daemon.lock".to_string(),
         |s| format!("logi-mx-daemon-{s}.lock")
     );
     PathBuf::from(runtime_dir).join(filename)
+}
+
+/// Reports whether the PID read from the lock file belongs to this daemon.
+///
+/// Checks `/proc/<pid>/exe` and falls back to `/proc/<pid>/cmdline` to avoid
+/// signalling an unrelated process that recycled the PID after a crash.
+fn pid_belongs_to_daemon(pid: i32) -> bool {
+    let exe_path = format!("/proc/{pid}/exe");
+    if let Ok(target) = fs::read_link(&exe_path)
+        && let Some(name) = target.file_name().and_then(|n| n.to_str())
+    {
+        return name.contains("logi-mx-daemon");
+    }
+    let cmdline_path = format!("/proc/{pid}/cmdline");
+    if let Ok(bytes) = fs::read(&cmdline_path) {
+        return String::from_utf8_lossy(&bytes).contains("logi-mx-daemon");
+    }
+    false
 }
 
 fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
@@ -65,13 +85,18 @@ fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
     {
         if pid == std::process::id().cast_signed() {
             info!("Lock already held by current process, reusing");
+        } else if !pid_belongs_to_daemon(pid) {
+            warn!(
+                "PID {pid} from lock file does not belong to logi-mx-daemon, \
+                 treating as stale lock"
+            );
         } else {
             info!("Another instance detected (PID {pid}), requesting graceful shutdown");
 
-            // SAFETY: `kill` only sends a signal to the PID recorded by our
-            // own previous instance in the lock file. The syscall cannot
-            // introduce memory unsafety; delivery failure is tolerated and
-            // detected indirectly because the lock will never be released.
+            // SAFETY: `kill` only sends a signal to the PID that was verified
+            // to belong to this daemon via `/proc/<pid>/exe`. The syscall
+            // cannot introduce memory unsafety; delivery failure is tolerated
+            // because the lock will never be released.
             unsafe {
                 libc::kill(pid, libc::SIGTERM);
             }
@@ -98,8 +123,16 @@ fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
         }
     }
 
-    fs::write(&lock_path, std::process::id().to_string())
+    let pid_string = std::process::id().to_string();
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true).mode(0o600);
+    let mut file = options
+        .open(&lock_path)
+        .map_err(|e| AppError::internal("Failed to open lock file for PID").with_source(e))?;
+    file.write_all(pid_string.as_bytes())
         .map_err(|e| AppError::internal("Failed to write PID to lock file").with_source(e))?;
+    file.flush()
+        .map_err(|e| AppError::internal("Failed to flush PID file").with_source(e))?;
 
     Ok(lockfile)
 }

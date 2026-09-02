@@ -72,6 +72,17 @@ impl HidppDevice {
     /// # Ok::<(), masterror::AppError>(())
     /// ```
     pub fn open_path(path: &str, device_index: u8) -> Result<Self> {
+        if !path.starts_with("/dev/hidraw") {
+            return Err(AppError::bad_request(
+                "Invalid HID path: must start with /dev/hidraw"
+            ));
+        }
+        if path.contains("..") {
+            return Err(AppError::bad_request(
+                "Invalid HID path: must not contain .."
+            ));
+        }
+
         let api = HidApi::new()
             .map_err(|e| AppError::internal("Failed to initialize HID API").with_source(e))?;
 

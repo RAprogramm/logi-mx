@@ -302,13 +302,14 @@ impl LogiTrayIcon {
                     .unwrap_or_else(|| PathBuf::from("logi-mx-ui"));
 
                 let mut cmd = Command::new(&ui_path);
-
+                cmd.env_clear();
                 for var in [
                     "DISPLAY",
                     "WAYLAND_DISPLAY",
                     "XDG_RUNTIME_DIR",
                     "XDG_SESSION_TYPE",
-                    "DBUS_SESSION_BUS_ADDRESS"
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "PATH"
                 ] {
                     if let Ok(val) = std::env::var(var) {
                         cmd.env(var, val);
