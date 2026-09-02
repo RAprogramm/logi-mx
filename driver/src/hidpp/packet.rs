@@ -15,6 +15,56 @@ use crate::error::{DeviceErrorKind, Result};
 const ERROR_MARKER_SHORT: u8 = 0x8F;
 const ERROR_MARKER_LONG: u8 = 0xFF;
 
+/// Common header shared by all HID++ packets.
+///
+/// Extracted to eliminate the repeated field group `device_index`,
+/// `feature_index`, `function_id`, `software_id` across
+/// [`ShortPacket`], [`LongPacket`] and [`ErrorPacket`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HidppHeader {
+    /// Target device index; `0xFF` for wired devices.
+    pub device_index:  u8,
+    /// Resolved feature index.
+    pub feature_index: u8,
+    /// Function within the feature.
+    pub function_id:   u8,
+    /// Caller identity used to match responses.
+    pub software_id:   u8
+}
+
+impl HidppHeader {
+    /// Builds a header from its four fields.
+    #[must_use]
+    pub const fn new(
+        device_index: u8,
+        feature_index: u8,
+        function_id: u8,
+        software_id: u8
+    ) -> Self {
+        Self {
+            device_index,
+            feature_index,
+            function_id,
+            software_id
+        }
+    }
+
+    /// Packs `function_id` and `software_id` into the wire byte.
+    #[must_use]
+    pub const fn packed_function(&self) -> u8 {
+        (self.function_id << 4) | (self.software_id & 0x0F)
+    }
+
+    /// Reports whether `self` matches `other` on all four fields.
+    #[must_use]
+    pub const fn matches(&self, other: &Self) -> bool {
+        self.device_index == other.device_index
+            && self.feature_index == other.feature_index
+            && self.function_id == other.function_id
+            && self.software_id == other.software_id
+    }
+}
+
 /// A HID++ request, response, notification or error report.
 ///
 /// # Examples
@@ -50,6 +100,19 @@ pub struct ShortPacket {
     pub parameters:    [u8; 3]
 }
 
+impl ShortPacket {
+    /// Returns the common header of this short packet.
+    #[must_use]
+    pub const fn header(&self) -> HidppHeader {
+        HidppHeader::new(
+            self.device_index,
+            self.feature_index,
+            self.function_id,
+            self.software_id
+        )
+    }
+}
+
 /// Payload of a long HID++ report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LongPacket {
@@ -63,6 +126,19 @@ pub struct LongPacket {
     pub software_id:   u8,
     /// Sixteen parameter bytes.
     pub parameters:    [u8; 16]
+}
+
+impl LongPacket {
+    /// Returns the common header of this long packet.
+    #[must_use]
+    pub const fn header(&self) -> HidppHeader {
+        HidppHeader::new(
+            self.device_index,
+            self.feature_index,
+            self.function_id,
+            self.software_id
+        )
+    }
 }
 
 /// Error report layout.
@@ -82,6 +158,19 @@ pub struct ErrorPacket {
     pub software_id:   u8,
     /// HID++ 2.0 error code.
     pub error_code:    u8
+}
+
+impl ErrorPacket {
+    /// Returns the common header of this error packet.
+    #[must_use]
+    pub const fn header(&self) -> HidppHeader {
+        HidppHeader::new(
+            self.device_index,
+            self.feature_index,
+            self.function_id,
+            self.software_id
+        )
+    }
 }
 
 impl HidppPacket {
@@ -171,30 +260,33 @@ impl HidppPacket {
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
             Self::Short(packet) => {
+                let header = packet.header();
                 let mut bytes = Vec::with_capacity(SHORT_PACKET_SIZE);
                 bytes.push(REPORT_ID_SHORT);
-                bytes.push(packet.device_index);
-                bytes.push(packet.feature_index);
-                bytes.push((packet.function_id << 4) | (packet.software_id & 0x0F));
+                bytes.push(header.device_index);
+                bytes.push(header.feature_index);
+                bytes.push(header.packed_function());
                 bytes.extend_from_slice(&packet.parameters);
                 bytes
             }
             Self::Long(packet) => {
+                let header = packet.header();
                 let mut bytes = Vec::with_capacity(LONG_PACKET_SIZE);
                 bytes.push(REPORT_ID_LONG);
-                bytes.push(packet.device_index);
-                bytes.push(packet.feature_index);
-                bytes.push((packet.function_id << 4) | (packet.software_id & 0x0F));
+                bytes.push(header.device_index);
+                bytes.push(header.feature_index);
+                bytes.push(header.packed_function());
                 bytes.extend_from_slice(&packet.parameters);
                 bytes
             }
             Self::Error(packet) => {
+                let header = packet.header();
                 let mut bytes = Vec::with_capacity(SHORT_PACKET_SIZE);
                 bytes.push(REPORT_ID_SHORT);
-                bytes.push(packet.device_index);
+                bytes.push(header.device_index);
                 bytes.push(ERROR_MARKER_SHORT);
-                bytes.push(packet.feature_index);
-                bytes.push((packet.function_id << 4) | (packet.software_id & 0x0F));
+                bytes.push(header.feature_index);
+                bytes.push(header.packed_function());
                 bytes.push(packet.error_code);
                 bytes.push(0x00);
                 bytes
@@ -367,48 +459,17 @@ impl HidppPacket {
     pub const fn matches_request(&self, request: &Self) -> bool {
         match request {
             Self::Error(_) => false,
-            Self::Short(r) => self.matches_fields(
-                r.device_index,
-                r.feature_index,
-                r.function_id,
-                r.software_id
-            ),
-            Self::Long(r) => self.matches_fields(
-                r.device_index,
-                r.feature_index,
-                r.function_id,
-                r.software_id
-            )
+            Self::Short(r) => self.matches_header(r.header()),
+            Self::Long(r) => self.matches_header(r.header())
         }
     }
 
     #[must_use]
-    const fn matches_fields(
-        &self,
-        device_index: u8,
-        feature_index: u8,
-        function_id: u8,
-        software_id: u8
-    ) -> bool {
+    const fn matches_header(&self, header: HidppHeader) -> bool {
         match self {
-            Self::Short(p) => {
-                p.device_index == device_index
-                    && p.feature_index == feature_index
-                    && p.function_id == function_id
-                    && p.software_id == software_id
-            }
-            Self::Long(p) => {
-                p.device_index == device_index
-                    && p.feature_index == feature_index
-                    && p.function_id == function_id
-                    && p.software_id == software_id
-            }
-            Self::Error(p) => {
-                p.device_index == device_index
-                    && p.feature_index == feature_index
-                    && p.function_id == function_id
-                    && p.software_id == software_id
-            }
+            Self::Short(p) => p.header().matches(&header),
+            Self::Long(p) => p.header().matches(&header),
+            Self::Error(p) => p.header().matches(&header)
         }
     }
 }
