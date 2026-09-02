@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
+use std::io::Write as IoWrite;
+
 use clap::{Parser, Subcommand};
 use logi_mx_driver::prelude::*;
 use masterror::prelude::*;
@@ -102,10 +104,17 @@ fn cmd_info() -> Result<()> {
     let smartshift = device.smartshift()?;
     let hires = device.hires_scroll()?;
 
-    println!("Device Information:");
-    println!("  Name: {name}");
-    println!("  DPI: {dpi}");
-    println!(
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+
+    out.write_all(b"Device Information:\n")
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    writeln!(out, "  Name: {name}")
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    writeln!(out, "  DPI: {dpi}")
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    writeln!(
+        out,
         "  SmartShift: {} (threshold: {})",
         if smartshift.enabled {
             "enabled"
@@ -113,11 +122,16 @@ fn cmd_info() -> Result<()> {
             "disabled"
         },
         smartshift.threshold
-    );
-    println!(
+    )
+    .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    writeln!(
+        out,
         "  Hi-Res Scroll: {}",
         if hires.enabled { "enabled" } else { "disabled" }
-    );
+    )
+    .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    out.flush()
+        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
 
     Ok(())
 }
@@ -128,9 +142,17 @@ fn cmd_battery() -> Result<()> {
     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
     let battery = device.battery_info()?;
 
-    println!("Battery Status:");
-    println!("  Level: {}%", battery.level);
-    println!("  Status: {:?}", battery.status);
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+
+    out.write_all(b"Battery Status:\n")
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    writeln!(out, "  Level: {}%", battery.level)
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    writeln!(out, "  Status: {:?}", battery.status)
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    out.flush()
+        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
 
     Ok(())
 }
@@ -141,9 +163,17 @@ fn cmd_hosts() -> Result<()> {
     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
     let (hosts, current) = device.host_info()?;
 
-    println!("Easy-Switch Hosts:");
-    println!("  Current host: {current} (zero-indexed)");
-    println!("  Supported hosts: {hosts}");
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+
+    out.write_all(b"Easy-Switch Hosts:\n")
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    writeln!(out, "  Current host: {current} (zero-indexed)")
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    writeln!(out, "  Supported hosts: {hosts}")
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+    out.flush()
+        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
 
     Ok(())
 }
@@ -154,13 +184,18 @@ fn cmd_buttons() -> Result<()> {
     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
     let controls = device.list_reprog_controls()?;
 
-    println!("Reprogrammable Controls: {}", controls.len());
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+
+    writeln!(out, "Reprogrammable Controls: {}", controls.len())
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
 
     for control in controls {
         let (divert_flags, remap) = device.control_divert(control.control_id)?;
         let diverted = divert_flags & 0x01 != 0;
 
-        println!(
+        writeln!(
+            out,
             "  0x{:04X} {:<18} flags {:#04x} divert {}",
             control.control_id,
             control_id_name(control.control_id),
@@ -170,8 +205,12 @@ fn cmd_buttons() -> Result<()> {
             } else {
                 "off".to_string()
             }
-        );
+        )
+        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
     }
+
+    out.flush()
+        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
 
     Ok(())
 }
@@ -179,13 +218,17 @@ fn cmd_buttons() -> Result<()> {
 fn cmd_set(setting: SetCommands) -> Result<()> {
     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
 
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+
     match setting {
         SetCommands::Dpi {
             value
         } => {
             info!("Setting DPI to {}...", value);
             device.set_dpi(value)?;
-            println!("DPI set to {value}");
+            writeln!(out, "DPI set to {value}")
+                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
         }
         SetCommands::Smartshift {
             enabled,
@@ -199,11 +242,13 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 enabled,
                 threshold
             })?;
-            println!(
+            writeln!(
+                out,
                 "SmartShift configured: {} (threshold: {})",
                 if enabled { "enabled" } else { "disabled" },
                 threshold
-            );
+            )
+            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
         }
         SetCommands::Hires {
             enabled,
@@ -217,29 +262,39 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 enabled,
                 inverted
             })?;
-            println!(
+            writeln!(
+                out,
                 "Hi-res scroll: {}, inverted: {}",
                 if enabled { "enabled" } else { "disabled" },
                 if inverted { "yes" } else { "no" }
-            );
+            )
+            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
         }
     }
 
+    out.flush()
+        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
+
     Ok(())
 }
-
 fn cmd_config(action: ConfigCommands) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+
     match action {
         ConfigCommands::Show => {
             let config = load_config()?;
             let toml_str = toml::to_string_pretty(&config)
                 .map_err(|e| AppError::internal("Failed to serialize config").with_source(e))?;
-            println!("{toml_str}");
+            writeln!(out, "{toml_str}")
+                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
         }
         ConfigCommands::Edit => {
             let config_path = config_path()?;
-            println!("Config location: {}", config_path.display());
-            println!("Edit the file with your preferred editor");
+            writeln!(out, "Config location: {}", config_path.display())
+                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+            out.write_all(b"Edit the file with your preferred editor\n")
+                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
         }
         ConfigCommands::Export {
             path
@@ -249,16 +304,22 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
                 .map_err(|e| AppError::internal("Failed to serialize config").with_source(e))?;
             std::fs::write(&path, toml_str)
                 .map_err(|e| AppError::internal("Failed to write config").with_source(e))?;
-            println!("Config exported to {path}");
+            writeln!(out, "Config exported to {path}")
+                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
         }
         ConfigCommands::Import {
             path
         } => {
             let config = load_config_from_path(std::path::Path::new(&path))?;
             save_config(&config)?;
-            println!("Config imported from {path}");
+
+            writeln!(out, "Config imported from {path}")
+                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
         }
     }
+
+    out.flush()
+        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
 
     Ok(())
 }
