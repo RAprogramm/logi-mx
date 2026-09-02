@@ -334,11 +334,11 @@ impl HidppPacket {
     /// use logi_mx_driver::hidpp::HidppPacket;
     ///
     /// let error = HidppPacket::from_bytes(&[0x10, 0x02, 0x8F, 0x09, 0x15, 0x02, 0x00])?;
-    /// assert_eq!(error.get_error_code(), Some(0x02));
+    /// assert_eq!(error.error_code(), Some(0x02));
     /// # Ok::<(), masterror::AppError>(())
     /// ```
     #[must_use]
-    pub const fn get_error_code(&self) -> Option<u8> {
+    pub const fn error_code(&self) -> Option<u8> {
         match self {
             Self::Error(p) => Some(p.error_code),
             _ => None
@@ -467,7 +467,7 @@ mod tests {
         let error_packet = HidppPacket::from_bytes(&bytes).unwrap();
 
         assert!(error_packet.is_error());
-        assert_eq!(error_packet.get_error_code(), Some(0x02));
+        assert_eq!(error_packet.error_code(), Some(0x02));
     }
 
     #[test]

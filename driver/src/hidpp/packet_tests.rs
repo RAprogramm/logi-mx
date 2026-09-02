@@ -110,7 +110,7 @@ fn test_error_detection_0x8f() {
         error_code:    0x03
     });
     assert!(error_packet.is_error());
-    assert_eq!(error_packet.get_error_code(), Some(0x03));
+    assert_eq!(error_packet.error_code(), Some(0x03));
 }
 
 #[test]
@@ -123,14 +123,14 @@ fn test_error_detection_0xff() {
         error_code:    0x08
     });
     assert!(error_packet.is_error());
-    assert_eq!(error_packet.get_error_code(), Some(0x08));
+    assert_eq!(error_packet.error_code(), Some(0x08));
 }
 
 #[test]
 fn test_non_error_packet() {
     let normal_packet = HidppPacket::new_short(0xFF, 0x00, 0x01, 0x05, [0x00, 0x00, 0x00]);
     assert!(!normal_packet.is_error());
-    assert_eq!(normal_packet.get_error_code(), None);
+    assert_eq!(normal_packet.error_code(), None);
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn test_long_packet_error_code() {
         error_code:    0x0A
     });
     assert!(error_packet.is_error());
-    assert_eq!(error_packet.get_error_code(), Some(0x0A));
+    assert_eq!(error_packet.error_code(), Some(0x0A));
 }
 
 #[test]

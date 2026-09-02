@@ -40,19 +40,19 @@ struct DeviceSnapshot {
 /// # use logi_mx_driver::prelude::*;
 /// // Mirrors the UI startup path: a single open, a single set of reads.
 /// let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-/// let name = device.get_device_name()?;
+/// let name = device.device_name()?;
 /// # Ok::<(), masterror::AppError>(())
 /// ```
 fn collect_device_snapshot() -> Option<DeviceSnapshot> {
     let mut device = MxMaster3s::open_bolt_receiver_discovered().ok()?;
 
     let name = device
-        .get_device_name()
+        .device_name()
         .unwrap_or_else(|_| "MX Master 3S".to_string());
-    let battery = device.get_battery_info().ok();
-    let dpi = device.get_dpi().unwrap_or(1000);
-    let smartshift = device.get_smartshift().unwrap_or_default();
-    let hiresscroll = device.get_hires_scroll().unwrap_or_default();
+    let battery = device.battery_info().ok();
+    let dpi = device.dpi().unwrap_or(1000);
+    let smartshift = device.smartshift().unwrap_or_default();
+    let hiresscroll = device.hires_scroll().unwrap_or_default();
 
     Some(DeviceSnapshot {
         name,
@@ -244,7 +244,7 @@ fn create_battery_group(
     let to = toast_overlay.clone();
     refresh_btn.connect_clicked(move |_| {
         if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
-            && let Ok(battery) = device.get_battery_info()
+            && let Ok(battery) = device.battery_info()
         {
             bi.set_icon_name(Some(battery_icon_name(battery.level)));
             br.set_subtitle(&format!("{}% · {:?}", battery.level, battery.status));

@@ -142,11 +142,11 @@ pub enum GestureMode {
 /// struct FakeMouse;
 ///
 /// impl MouseDevice for FakeMouse {
-///     fn get_device_name(&mut self) -> Result<String> {
+///     fn device_name(&mut self) -> Result<String> {
 ///         Ok("MX Master 3S".to_string())
 ///     }
 ///
-///     fn get_battery_info(&mut self) -> Result<BatteryInfo> {
+///     fn battery_info(&mut self) -> Result<BatteryInfo> {
 ///         Ok(BatteryInfo {
 ///             level:  80,
 ///             status: BatteryStatus::Discharging
@@ -157,7 +157,7 @@ pub enum GestureMode {
 ///         Ok(())
 ///     }
 ///
-///     fn get_dpi(&mut self) -> Result<u16> {
+///     fn dpi(&mut self) -> Result<u16> {
 ///         Ok(1000)
 ///     }
 ///
@@ -165,7 +165,7 @@ pub enum GestureMode {
 ///         Ok(())
 ///     }
 ///
-///     fn get_smartshift(&mut self) -> Result<SmartShiftConfig> {
+///     fn smartshift(&mut self) -> Result<SmartShiftConfig> {
 ///         Err(DeviceErrorKind::UnsupportedFeature.into())
 ///     }
 ///
@@ -176,7 +176,7 @@ pub enum GestureMode {
 ///         Ok(())
 ///     }
 ///
-///     fn get_hires_scroll(&mut self) -> Result<logi_mx_driver::devices::HiResScrollConfig> {
+///     fn hires_scroll(&mut self) -> Result<logi_mx_driver::devices::HiResScrollConfig> {
 ///         Err(DeviceErrorKind::UnsupportedFeature.into())
 ///     }
 ///
@@ -188,7 +188,7 @@ pub enum GestureMode {
 ///         Ok(())
 ///     }
 ///
-///     fn get_button_action(
+///     fn button_action(
 ///         &mut self,
 ///         _button: logi_mx_driver::devices::ButtonId
 ///     ) -> Result<logi_mx_driver::devices::Action> {
@@ -201,7 +201,7 @@ pub enum GestureMode {
 /// }
 ///
 /// let mut mouse = FakeMouse;
-/// assert_eq!(mouse.get_device_name()?, "MX Master 3S");
+/// assert_eq!(mouse.device_name()?, "MX Master 3S");
 /// # Ok::<(), masterror::AppError>(())
 /// ```
 pub trait MouseDevice {
@@ -211,7 +211,7 @@ pub trait MouseDevice {
     ///
     /// Returns [`masterror::AppError`] when the name feature is unsupported
     /// or the device response is invalid.
-    fn get_device_name(&mut self) -> Result<String>;
+    fn device_name(&mut self) -> Result<String>;
 
     /// Reads the current battery level and charge state.
     ///
@@ -219,7 +219,7 @@ pub trait MouseDevice {
     ///
     /// Returns [`masterror::AppError`] when no battery feature is available
     /// or the response cannot be parsed.
-    fn get_battery_info(&mut self) -> Result<BatteryInfo>;
+    fn battery_info(&mut self) -> Result<BatteryInfo>;
 
     /// Applies a sensor DPI setting.
     ///
@@ -239,7 +239,7 @@ pub trait MouseDevice {
     ///
     /// Returns [`masterror::AppError`] when the DPI feature is unsupported
     /// or the response cannot be parsed.
-    fn get_dpi(&mut self) -> Result<u16>;
+    fn dpi(&mut self) -> Result<u16>;
 
     /// Applies `SmartShift` ratchet behaviour.
     ///
@@ -259,7 +259,7 @@ pub trait MouseDevice {
     ///
     /// Returns [`masterror::AppError`] when the `SmartShift` feature is
     /// unsupported or the response cannot be parsed.
-    fn get_smartshift(&mut self) -> Result<SmartShiftConfig>;
+    fn smartshift(&mut self) -> Result<SmartShiftConfig>;
 
     /// Applies high-resolution wheel settings.
     ///
@@ -279,7 +279,7 @@ pub trait MouseDevice {
     ///
     /// Returns [`masterror::AppError`] when the hi-res wheel feature is
     /// unsupported or the response cannot be parsed.
-    fn get_hires_scroll(&mut self) -> Result<HiResScrollConfig>;
+    fn hires_scroll(&mut self) -> Result<HiResScrollConfig>;
 
     /// Assigns an action to a physical button.
     ///
@@ -299,7 +299,7 @@ pub trait MouseDevice {
     ///
     /// Returns [`masterror::AppError`] when the button has no assigned
     /// action or the query fails.
-    fn get_button_action(&mut self, button: ButtonId) -> Result<Action>;
+    fn button_action(&mut self, button: ButtonId) -> Result<Action>;
 
     /// Verifies the device responds to HID++ traffic.
     ///

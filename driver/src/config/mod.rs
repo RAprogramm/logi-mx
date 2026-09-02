@@ -29,20 +29,20 @@ const DEFAULT_CONFIG_NAME: &str = "logi-mx.toml";
 /// # Examples
 ///
 /// ```no_run
-/// use logi_mx_driver::config::get_config_path;
+/// use logi_mx_driver::config::config_path;
 ///
-/// let path = get_config_path()?;
+/// let path = config_path()?;
 /// println!("config located at {}", path.display());
 /// # Ok::<(), masterror::AppError>(())
 /// ```
-pub fn get_config_path() -> Result<PathBuf> {
-    get_config_path_from_env(|key| std::env::var(key))
+pub fn config_path() -> Result<PathBuf> {
+    config_path_from_env(|key| std::env::var(key))
 }
 
 /// Resolves the configuration path using a supplied environment reader.
 ///
-/// Keeps [`get_config_path`] testable without mutating process state.
-fn get_config_path_from_env<F>(env_fn: F) -> Result<PathBuf>
+/// Keeps [`config_path`] testable without mutating process state.
+fn config_path_from_env<F>(env_fn: F) -> Result<PathBuf>
 where
     F: Fn(&str) -> std::result::Result<String, std::env::VarError>
 {
@@ -71,7 +71,7 @@ where
 /// # Errors
 ///
 /// Returns [`masterror::AppError`] when the path cannot be determined
-/// (see [`get_config_path`]), the default cannot be persisted, or the
+/// (see [`config_path`]), the default cannot be persisted, or the
 /// existing file is unreadable or malformed.
 ///
 /// # Examples
@@ -84,7 +84,7 @@ where
 /// # Ok::<(), masterror::AppError>(())
 /// ```
 pub fn load_config() -> Result<Config> {
-    let path = get_config_path()?;
+    let path = config_path()?;
 
     if !path.exists() {
         info!("Config file not found, creating default: {:?}", path);
@@ -155,7 +155,7 @@ pub fn load_config_from_path(path: &Path) -> Result<Config> {
 /// # Ok::<(), masterror::AppError>(())
 /// ```
 pub fn save_config(config: &Config) -> Result<()> {
-    let path = get_config_path()?;
+    let path = config_path()?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_config_path_with_xdg() {
+    fn test_config_path_with_xdg() {
         // Mock environment with XDG_CONFIG_HOME set
         let mock_env = |var: &str| {
             if var == "XDG_CONFIG_HOME" {
@@ -202,12 +202,12 @@ mod tests {
                 Err(env::VarError::NotPresent)
             }
         };
-        let path = get_config_path_from_env(mock_env).unwrap();
+        let path = config_path_from_env(mock_env).unwrap();
         assert_eq!(path, PathBuf::from("/tmp/test_xdg/logi-mx.toml"));
     }
 
     #[test]
-    fn test_get_config_path_with_home() {
+    fn test_config_path_with_home() {
         // Mock environment with only HOME set
         let mock_env = |var: &str| {
             if var == "HOME" {
@@ -216,7 +216,7 @@ mod tests {
                 Err(env::VarError::NotPresent)
             }
         };
-        let path = get_config_path_from_env(mock_env).unwrap();
+        let path = config_path_from_env(mock_env).unwrap();
         assert_eq!(path, PathBuf::from("/tmp/test_home/.config/logi-mx.toml"));
     }
 
@@ -254,7 +254,7 @@ mod tests {
     fn test_config_path_no_env() {
         // Mock environment with no variables set
         let mock_env = |_: &str| Err(env::VarError::NotPresent);
-        let result = get_config_path_from_env(mock_env);
+        let result = config_path_from_env(mock_env);
         assert!(result.is_err());
     }
 }

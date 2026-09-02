@@ -97,10 +97,10 @@ fn cmd_info() -> Result<()> {
 
     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
 
-    let name = device.get_device_name()?;
-    let dpi = device.get_dpi()?;
-    let smartshift = device.get_smartshift()?;
-    let hires = device.get_hires_scroll()?;
+    let name = device.device_name()?;
+    let dpi = device.dpi()?;
+    let smartshift = device.smartshift()?;
+    let hires = device.hires_scroll()?;
 
     println!("Device Information:");
     println!("  Name: {name}");
@@ -126,7 +126,7 @@ fn cmd_battery() -> Result<()> {
     info!("Checking battery...");
 
     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-    let battery = device.get_battery_info()?;
+    let battery = device.battery_info()?;
 
     println!("Battery Status:");
     println!("  Level: {}%", battery.level);
@@ -139,7 +139,7 @@ fn cmd_hosts() -> Result<()> {
     info!("Reading Easy-Switch host info...");
 
     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-    let (hosts, current) = device.get_host_info()?;
+    let (hosts, current) = device.host_info()?;
 
     println!("Easy-Switch Hosts:");
     println!("  Current host: {current} (zero-indexed)");
@@ -157,7 +157,7 @@ fn cmd_buttons() -> Result<()> {
     println!("Reprogrammable Controls: {}", controls.len());
 
     for control in controls {
-        let (divert_flags, remap) = device.get_control_divert(control.control_id)?;
+        let (divert_flags, remap) = device.control_divert(control.control_id)?;
         let diverted = divert_flags & 0x01 != 0;
 
         println!(
@@ -237,7 +237,7 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
             println!("{toml_str}");
         }
         ConfigCommands::Edit => {
-            let config_path = get_config_path()?;
+            let config_path = config_path()?;
             println!("Config location: {}", config_path.display());
             println!("Edit the file with your preferred editor");
         }

@@ -39,7 +39,7 @@ const SOFTWARE_ID_MAX: u8 = 0x0F;
 /// use logi_mx_driver::hidpp::{FEATURE_ROOT, HidppDevice};
 ///
 /// let mut device = HidppDevice::open_vid_pid(0x046D, 0xC548, 2)?;
-/// let root = device.get_feature_index(FEATURE_ROOT)?;
+/// let root = device.feature_index(FEATURE_ROOT)?;
 /// println!("root feature at index {}", root);
 /// # Ok::<(), masterror::AppError>(())
 /// ```
@@ -173,7 +173,7 @@ impl HidppDevice {
     /// # Arguments
     ///
     /// * `feature_index` - Feature index previously resolved via
-    ///   [`get_feature_index`](Self::get_feature_index).
+    ///   [`feature_index`](Self::feature_index).
     /// * `function_id` - Function within the feature.
     /// * `params` - Up to 16 parameter bytes.
     ///
@@ -189,7 +189,7 @@ impl HidppDevice {
     /// use logi_mx_driver::hidpp::{FEATURE_UNIFIED_BATTERY, HidppDevice};
     ///
     /// let mut device = HidppDevice::open_vid_pid(0x046D, 0xC548, 2)?;
-    /// let feature = device.get_feature_index(FEATURE_UNIFIED_BATTERY)?;
+    /// let feature = device.feature_index(FEATURE_UNIFIED_BATTERY)?;
     /// let response = device.send_command(feature, 0x01, &[])?;
     /// # Ok::<(), masterror::AppError>(())
     /// ```
@@ -217,7 +217,7 @@ impl HidppDevice {
             match self.await_response(&packet, Duration::from_millis(RESPONSE_BUDGET_MS)) {
                 Ok(response) => {
                     if response.is_error() {
-                        let Some(error_code) = response.get_error_code() else {
+                        let Some(error_code) = response.error_code() else {
                             return Err(DeviceErrorKind::InvalidResponse.into());
                         };
                         let transient = error_code == ERROR_BUSY || error_code == ERROR_HW_ERROR;
@@ -341,10 +341,10 @@ impl HidppDevice {
     /// use logi_mx_driver::hidpp::{FEATURE_HIRES_WHEEL, HidppDevice};
     ///
     /// let mut device = HidppDevice::open_vid_pid(0x046D, 0xC548, 2)?;
-    /// let index = device.get_feature_index(FEATURE_HIRES_WHEEL)?;
+    /// let index = device.feature_index(FEATURE_HIRES_WHEEL)?;
     /// # Ok::<(), masterror::AppError>(())
     /// ```
-    pub fn get_feature_index(&mut self, feature_id: u16) -> Result<u8> {
+    pub fn feature_index(&mut self, feature_id: u16) -> Result<u8> {
         if let Some(&index) = self.feature_cache.get(&feature_id) {
             return Ok(index);
         }

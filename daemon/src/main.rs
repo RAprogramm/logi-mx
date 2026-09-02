@@ -35,7 +35,7 @@ use crate::{
 
 type Result<T> = std::result::Result<T, AppError>;
 
-fn get_lock_file_path(suffix: Option<&str>) -> PathBuf {
+fn lock_file_path(suffix: Option<&str>) -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
         .unwrap_or_else(|_| "/tmp".to_string());
@@ -47,7 +47,7 @@ fn get_lock_file_path(suffix: Option<&str>) -> PathBuf {
 }
 
 fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
-    let lock_path = get_lock_file_path(suffix);
+    let lock_path = lock_file_path(suffix);
 
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)
@@ -225,11 +225,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_lock_file_path() {
-        let path = get_lock_file_path(None);
+    fn test_lock_file_path() {
+        let path = lock_file_path(None);
         assert!(path.to_str().unwrap().contains("logi-mx-daemon.lock"));
 
-        let path_with_suffix = get_lock_file_path(Some("test"));
+        let path_with_suffix = lock_file_path(Some("test"));
         assert!(
             path_with_suffix
                 .to_str()
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn test_lock_file_created_with_pid() {
         let lock = acquire_instance_lock(Some("test2")).unwrap();
-        let lock_path = get_lock_file_path(Some("test2"));
+        let lock_path = lock_file_path(Some("test2"));
         assert!(lock_path.exists());
 
         let pid_str = fs::read_to_string(&lock_path).unwrap();

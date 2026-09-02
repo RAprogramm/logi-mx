@@ -105,16 +105,16 @@ impl LogiTrayIcon {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 status.connected = true;
 
-                if let Ok(battery) = device.get_battery_info() {
+                if let Ok(battery) = device.battery_info() {
                     status.battery_level = battery.level;
                     status.battery_status = format!("{:?}", battery.status);
                 }
 
-                if let Ok(dpi) = device.get_dpi() {
+                if let Ok(dpi) = device.dpi() {
                     status.dpi = dpi;
                 }
 
-                if let Ok(ss_config) = device.get_smartshift() {
+                if let Ok(ss_config) = device.smartshift() {
                     status.smartshift = ss_config.enabled;
                     status.smartshift_threshold = ss_config.threshold;
                 }

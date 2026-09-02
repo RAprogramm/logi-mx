@@ -223,7 +223,7 @@ pub fn append_name_chunk(name: &mut String, chunk: &[u8], remaining: usize) -> u
 /// use logi_mx_driver::devices::{MouseDevice, MxMaster3s};
 ///
 /// let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-/// println!("{}", device.get_device_name()?);
+/// println!("{}", device.device_name()?);
 /// # Ok::<(), masterror::AppError>(())
 /// ```
 pub struct MxMaster3s {
@@ -337,7 +337,7 @@ impl MxMaster3s {
     /// use logi_mx_driver::devices::{MouseDevice, MxMaster3s};
     ///
     /// let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-    /// println!("{}", device.get_device_name()?);
+    /// println!("{}", device.device_name()?);
     /// # Ok::<(), masterror::AppError>(())
     /// ```
     pub fn open_bolt_receiver_discovered() -> Result<Self> {
@@ -372,12 +372,12 @@ impl MxMaster3s {
     /// use logi_mx_driver::devices::{MouseDevice, MxMaster3s};
     ///
     /// let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-    /// let (hosts, current) = device.get_host_info()?;
+    /// let (hosts, current) = device.host_info()?;
     /// println!("host {current} of {hosts}");
     /// # Ok::<(), masterror::AppError>(())
     /// ```
-    pub fn get_host_info(&mut self) -> Result<(u8, u8)> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_CHANGE_HOST)?;
+    pub fn host_info(&mut self) -> Result<(u8, u8)> {
+        let feature_index = self.hidpp.feature_index(FEATURE_CHANGE_HOST)?;
 
         let response =
             self.hidpp
@@ -410,7 +410,7 @@ impl MxMaster3s {
     /// # Ok::<(), masterror::AppError>(())
     /// ```
     pub fn list_reprog_controls(&mut self) -> Result<Vec<ReprogControl>> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_REPROG_CONTROLS)?;
+        let feature_index = self.hidpp.feature_index(FEATURE_REPROG_CONTROLS)?;
 
         let count_response = self.hidpp.send_command(
             feature_index,
@@ -481,12 +481,12 @@ impl MxMaster3s {
     /// use logi_mx_driver::devices::{MouseDevice, MxMaster3s};
     ///
     /// let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-    /// let (flags, remap) = device.get_control_divert(0x00C3)?;
+    /// let (flags, remap) = device.control_divert(0x00C3)?;
     /// println!("flags {flags:#04x}, remap {remap:#06x}");
     /// # Ok::<(), masterror::AppError>(())
     /// ```
-    pub fn get_control_divert(&mut self, control_id: u16) -> Result<(u8, u16)> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_REPROG_CONTROLS)?;
+    pub fn control_divert(&mut self, control_id: u16) -> Result<(u8, u16)> {
+        let feature_index = self.hidpp.feature_index(FEATURE_REPROG_CONTROLS)?;
 
         let response = self.hidpp.send_command(
             feature_index,
@@ -531,7 +531,7 @@ impl MxMaster3s {
         divert: bool,
         raw_xy: bool
     ) -> Result<()> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_REPROG_CONTROLS)?;
+        let feature_index = self.hidpp.feature_index(FEATURE_REPROG_CONTROLS)?;
 
         let mut flags = 0u8;
         if divert {
@@ -560,8 +560,8 @@ impl MxMaster3s {
         Ok(())
     }
 
-    fn get_battery_unified(&mut self) -> Result<BatteryInfo> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_UNIFIED_BATTERY)?;
+    fn battery_unified(&mut self) -> Result<BatteryInfo> {
+        let feature_index = self.hidpp.feature_index(FEATURE_UNIFIED_BATTERY)?;
 
         let response = self.hidpp.send_command(
             feature_index,
@@ -579,8 +579,8 @@ impl MxMaster3s {
         })
     }
 
-    fn get_battery_legacy(&mut self) -> Result<BatteryInfo> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_BATTERY_STATUS)?;
+    fn battery_legacy(&mut self) -> Result<BatteryInfo> {
+        let feature_index = self.hidpp.feature_index(FEATURE_BATTERY_STATUS)?;
 
         let response =
             self.hidpp
@@ -598,8 +598,8 @@ impl MxMaster3s {
 }
 
 impl MouseDevice for MxMaster3s {
-    fn get_device_name(&mut self) -> Result<String> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_DEVICE_NAME)?;
+    fn device_name(&mut self) -> Result<String> {
+        let feature_index = self.hidpp.feature_index(FEATURE_DEVICE_NAME)?;
 
         let length_response = self
             .hidpp
@@ -635,13 +635,12 @@ impl MouseDevice for MxMaster3s {
         Ok(name)
     }
 
-    fn get_battery_info(&mut self) -> Result<BatteryInfo> {
-        self.get_battery_unified()
-            .or_else(|_| self.get_battery_legacy())
+    fn battery_info(&mut self) -> Result<BatteryInfo> {
+        self.battery_unified().or_else(|_| self.battery_legacy())
     }
 
     fn set_dpi(&mut self, dpi: u16) -> Result<()> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_ADJUSTABLE_DPI)?;
+        let feature_index = self.hidpp.feature_index(FEATURE_ADJUSTABLE_DPI)?;
 
         let params = [0x00, (dpi >> 8) as u8, (dpi & 0xFF) as u8];
 
@@ -652,8 +651,8 @@ impl MouseDevice for MxMaster3s {
         Ok(())
     }
 
-    fn get_dpi(&mut self) -> Result<u16> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_ADJUSTABLE_DPI)?;
+    fn dpi(&mut self) -> Result<u16> {
+        let feature_index = self.hidpp.feature_index(FEATURE_ADJUSTABLE_DPI)?;
 
         let response = self.hidpp.send_command(
             feature_index,
@@ -672,7 +671,7 @@ impl MouseDevice for MxMaster3s {
     }
 
     fn set_smartshift(&mut self, config: SmartShiftConfig) -> Result<()> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_SMART_SHIFT)?;
+        let feature_index = self.hidpp.feature_index(FEATURE_SMART_SHIFT)?;
 
         let params = encode_smartshift(config);
 
@@ -686,8 +685,8 @@ impl MouseDevice for MxMaster3s {
         Ok(())
     }
 
-    fn get_smartshift(&mut self) -> Result<SmartShiftConfig> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_SMART_SHIFT)?;
+    fn smartshift(&mut self) -> Result<SmartShiftConfig> {
+        let feature_index = self.hidpp.feature_index(FEATURE_SMART_SHIFT)?;
 
         let response =
             self.hidpp
@@ -697,7 +696,7 @@ impl MouseDevice for MxMaster3s {
     }
 
     fn set_hires_scroll(&mut self, config: HiResScrollConfig) -> Result<()> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_HIRES_WHEEL)?;
+        let feature_index = self.hidpp.feature_index(FEATURE_HIRES_WHEEL)?;
 
         let current =
             self.hidpp
@@ -720,8 +719,8 @@ impl MouseDevice for MxMaster3s {
         Ok(())
     }
 
-    fn get_hires_scroll(&mut self) -> Result<HiResScrollConfig> {
-        let feature_index = self.hidpp.get_feature_index(FEATURE_HIRES_WHEEL)?;
+    fn hires_scroll(&mut self) -> Result<HiResScrollConfig> {
+        let feature_index = self.hidpp.feature_index(FEATURE_HIRES_WHEEL)?;
 
         let response =
             self.hidpp
@@ -738,7 +737,7 @@ impl MouseDevice for MxMaster3s {
         Ok(())
     }
 
-    fn get_button_action(&mut self, button: ButtonId) -> Result<Action> {
+    fn button_action(&mut self, button: ButtonId) -> Result<Action> {
         self.button_mappings
             .get(&button)
             .cloned()

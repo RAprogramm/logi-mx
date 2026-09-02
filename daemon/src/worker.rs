@@ -105,16 +105,16 @@ fn refresh_tray_status(status: &SharedStatus) {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard.connected = true;
 
-                if let Ok(battery) = device.get_battery_info() {
+                if let Ok(battery) = device.battery_info() {
                     guard.battery_level = battery.level;
                     guard.battery_status = format!("{:?}", battery.status);
                 }
 
-                if let Ok(current_dpi) = device.get_dpi() {
+                if let Ok(current_dpi) = device.dpi() {
                     guard.dpi = current_dpi;
                 }
 
-                if let Ok(ss_config) = device.get_smartshift() {
+                if let Ok(ss_config) = device.smartshift() {
                     guard.smartshift = ss_config.enabled;
                     guard.smartshift_threshold = ss_config.threshold;
                 }
@@ -156,7 +156,7 @@ impl DeviceManager {
 
         match MxMaster3s::open_bolt_receiver_discovered() {
             Ok(mut device) => {
-                if let Ok(name) = device.get_device_name() {
+                if let Ok(name) = device.device_name() {
                     info!("Detected: {name}");
 
                     if let Some(device_config) = self
