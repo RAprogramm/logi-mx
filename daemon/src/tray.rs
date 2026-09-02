@@ -17,8 +17,7 @@ use std::{
 #[cfg(feature = "tray")]
 use gtk4::{AlertDialog, Window, glib};
 use ksni::{Category, MenuItem, Tray, TrayMethods, menu::StandardItem};
-use logi_mx_driver::prelude::*;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::status::{DeviceStatus, SharedStatus};
 
@@ -97,42 +96,7 @@ impl LogiTrayIcon {
     /// Runs on the `ksni` worker thread from the tray menu, so the blocking
     /// device I/O never stalls the daemon event loop.
     pub fn update_status(&self) {
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered() {
-            let battery_level = {
-                let mut status = self
-                    .status
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                status.connected = true;
-
-                if let Ok(battery) = device.battery_info() {
-                    status.battery_level = battery.level;
-                    status.battery_status = format!("{:?}", battery.status);
-                }
-
-                if let Ok(dpi) = device.dpi() {
-                    status.dpi = dpi;
-                }
-
-                if let Ok(ss_config) = device.smartshift() {
-                    status.smartshift = ss_config.enabled;
-                    status.smartshift_threshold = ss_config.threshold;
-                }
-
-                status.battery_level
-            };
-
-            debug!("Tray status updated: battery={battery_level}%");
-        } else {
-            {
-                let mut status = self
-                    .status
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                status.connected = false;
-            }
-            debug!("Device not connected");
-        }
+        crate::status::refresh_from_device(&self.status);
     }
 
     fn lock_status(&self) -> std::sync::MutexGuard<'_, DeviceStatus> {

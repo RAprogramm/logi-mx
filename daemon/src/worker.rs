@@ -41,19 +41,20 @@ pub enum DeviceEvent {
 /// # Returns
 ///
 /// Command sender plus the worker thread handle for shutdown coordination.
-#[must_use]
 pub fn spawn_device_worker(
     config: Config,
     status: SharedStatus
-) -> (mpsc::Sender<DeviceEvent>, JoinHandle<()>) {
+) -> std::result::Result<(mpsc::Sender<DeviceEvent>, JoinHandle<()>), masterror::AppError> {
     let (tx, rx) = mpsc::channel();
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
         .spawn(move || run_device_worker(config, &rx, &status))
-        .unwrap_or_else(|e| panic!("Failed to spawn device worker thread: {e}"));
+        .map_err(|e| {
+            masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
+        })?;
 
-    (tx, handle)
+    Ok((tx, handle))
 }
 
 /// Runs the device worker event loop until the command channel closes.
@@ -97,43 +98,7 @@ fn run_device_worker(config: Config, rx: &mpsc::Receiver<DeviceEvent>, status: &
 /// Runs on the worker thread; blocking HID++ I/O is expected here.
 #[cfg(feature = "tray")]
 fn refresh_tray_status(status: &SharedStatus) {
-    match MxMaster3s::open_bolt_receiver_discovered() {
-        Ok(mut device) => {
-            let (battery_level, dpi) = {
-                let mut guard = status
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.connected = true;
-
-                if let Ok(battery) = device.battery_info() {
-                    guard.battery_level = battery.level;
-                    guard.battery_status = format!("{:?}", battery.status);
-                }
-
-                if let Ok(current_dpi) = device.dpi() {
-                    guard.dpi = current_dpi;
-                }
-
-                if let Ok(ss_config) = device.smartshift() {
-                    guard.smartshift = ss_config.enabled;
-                    guard.smartshift_threshold = ss_config.threshold;
-                }
-
-                (guard.battery_level, guard.dpi)
-            };
-
-            debug!("Tray status refreshed: battery={battery_level}%, dpi={dpi}");
-        }
-        Err(e) => {
-            {
-                let mut guard = status
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.connected = false;
-            }
-            debug!("Device not connected: {e}");
-        }
-    }
+    crate::status::refresh_from_device(status);
 }
 
 struct DeviceManager {

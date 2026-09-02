@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
     });
 
     let status: SharedStatus = Arc::new(Mutex::new(DeviceStatus::default()));
-    let (device_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status));
+    let (device_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status))?;
 
     #[cfg(feature = "tray")]
     match spawn_tray(Arc::clone(&status)).await {

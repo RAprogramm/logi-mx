@@ -8,6 +8,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use logi_mx_driver::prelude::*;
+use tracing::debug;
+
 /// Snapshot of device state shared between the worker and UI surfaces.
 ///
 /// Readers live behind the `tray` feature; without it the snapshot is only
@@ -50,6 +53,51 @@ impl Default for DeviceStatus {
 
 /// Shared handle around [`DeviceStatus`].
 pub type SharedStatus = Arc<Mutex<DeviceStatus>>;
+
+/// Refreshes the shared status by querying the device once.
+///
+/// Opens the bolt receiver, reads battery, DPI and `SmartShift`, and
+/// publishes the snapshot. Runs on the worker thread; blocking I/O is
+/// expected.
+pub fn refresh_from_device(status: &SharedStatus) {
+    match MxMaster3s::open_bolt_receiver_discovered() {
+        Ok(mut device) => {
+            let (battery_level, dpi) = {
+                let mut guard = status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.connected = true;
+
+                if let Ok(battery) = device.battery_info() {
+                    guard.battery_level = battery.level;
+                    guard.battery_status = format!("{:?}", battery.status);
+                }
+
+                if let Ok(current_dpi) = device.dpi() {
+                    guard.dpi = current_dpi;
+                }
+
+                if let Ok(ss_config) = device.smartshift() {
+                    guard.smartshift = ss_config.enabled;
+                    guard.smartshift_threshold = ss_config.threshold;
+                }
+
+                (guard.battery_level, guard.dpi)
+            };
+
+            debug!("Tray status refreshed: battery={battery_level}%, dpi={dpi}");
+        }
+        Err(e) => {
+            {
+                let mut guard = status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.connected = false;
+            }
+            debug!("Device not connected: {e}");
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
