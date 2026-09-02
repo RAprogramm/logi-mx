@@ -10,6 +10,16 @@ use logi_mx_driver::prelude::*;
 
 const APP_ID: &str = "com.logitech.mx.configurator";
 
+const DPI_MIN: f64 = 400.0;
+const DPI_MAX: f64 = 8000.0;
+const DPI_STEP: f64 = 100.0;
+const SMARTSHIFT_MIN: f64 = 1.0;
+const SMARTSHIFT_MAX: f64 = 255.0;
+const SMARTSHIFT_STEP: f64 = 1.0;
+const WIDGET_WIDTH: i32 = 400;
+const DEFAULT_DEVICE_NAME: &str = "MX Master 3S";
+const DEFAULT_DPI: u16 = 1000;
+
 /// One-shot device state collected at startup.
 ///
 /// The UI opens the device exactly once per launch and seeds every settings
@@ -48,9 +58,9 @@ fn collect_device_snapshot() -> Option<DeviceSnapshot> {
 
     let name = device
         .device_name()
-        .unwrap_or_else(|_| "MX Master 3S".to_string());
+        .unwrap_or_else(|_| DEFAULT_DEVICE_NAME.to_string());
     let battery = device.battery_info().ok();
-    let dpi = device.dpi().unwrap_or(1000);
+    let dpi = device.dpi().unwrap_or(DEFAULT_DPI);
     let smartshift = device.smartshift().unwrap_or_default();
     let hiresscroll = device.hires_scroll().unwrap_or_default();
 
@@ -274,6 +284,10 @@ const fn battery_icon_name(level: u8) -> &'static str {
     }
 }
 
+/// Builds the DPI adjustment group seeded from the snapshot.
+///
+/// Shows the current DPI and a slider that writes the selected value to the
+/// device on `Apply`.
 fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Pointer Sensitivity");
@@ -293,12 +307,12 @@ fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> 
     let scale_row = ActionRow::new();
     scale_row.set_title("Sensitivity");
 
-    let scale = Scale::with_range(Orientation::Horizontal, 400.0, 8000.0, 100.0);
+    let scale = Scale::with_range(Orientation::Horizontal, DPI_MIN, DPI_MAX, DPI_STEP);
     scale.set_value(f64::from(current_dpi));
     scale.set_draw_value(true);
     scale.set_value_pos(gtk4::PositionType::Right);
     scale.set_hexpand(true);
-    scale.set_width_request(400);
+    scale.set_width_request(WIDGET_WIDTH);
 
     let dr = dpi_row;
     scale.connect_value_changed(move |s| {
@@ -332,6 +346,7 @@ fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> 
     group
 }
 
+/// Builds the `SmartShift` toggle and threshold group.
 fn create_smartshift_group(
     snapshot: &DeviceSnapshot,
     toast_overlay: &ToastOverlay
@@ -361,12 +376,17 @@ fn create_smartshift_group(
     threshold_row.set_title("Disengage Sensitivity");
     threshold_row.set_subtitle(&format!("Current: {}", current_config.threshold));
 
-    let threshold_scale = Scale::with_range(Orientation::Horizontal, 1.0, 255.0, 1.0);
+    let threshold_scale = Scale::with_range(
+        Orientation::Horizontal,
+        SMARTSHIFT_MIN,
+        SMARTSHIFT_MAX,
+        SMARTSHIFT_STEP
+    );
     threshold_scale.set_value(f64::from(current_config.threshold));
     threshold_scale.set_draw_value(true);
     threshold_scale.set_value_pos(gtk4::PositionType::Right);
     threshold_scale.set_hexpand(true);
-    threshold_scale.set_width_request(400);
+    threshold_scale.set_width_request(WIDGET_WIDTH);
 
     let tr = threshold_row.clone();
     threshold_scale.connect_value_changed(move |s| {
