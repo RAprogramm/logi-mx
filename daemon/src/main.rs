@@ -4,6 +4,7 @@
 #[cfg(feature = "tray")]
 mod tray;
 
+mod ipc;
 mod status;
 mod worker;
 

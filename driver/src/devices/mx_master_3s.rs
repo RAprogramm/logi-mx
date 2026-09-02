@@ -59,7 +59,7 @@ pub mod control_id {
 }
 
 /// One reprogrammable control as reported by feature 0x1B04.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReprogControl {
     /// HID++ control ID (CID).
     pub control_id:      u16,
