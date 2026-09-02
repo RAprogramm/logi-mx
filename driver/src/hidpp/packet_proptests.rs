@@ -11,7 +11,10 @@ proptest! {
     #[test]
     fn prop_short_packet_roundtrip(
         device_index in any::<u8>(),
-        feature_index in any::<u8>(),
+        feature_index in any::<u8>().prop_filter(
+            "feature_index must not collide with error markers 0x8F/0xFF",
+            |v| *v != 0x8F && *v != 0xFF
+        ),
         function_id in 0u8..0x10,
         software_id in 0u8..0x10,
         parameters in proptest::array::uniform3(any::<u8>())
@@ -30,7 +33,10 @@ proptest! {
     #[test]
     fn prop_long_packet_roundtrip(
         device_index in any::<u8>(),
-        feature_index in any::<u8>(),
+        feature_index in any::<u8>().prop_filter(
+            "feature_index must not collide with error markers 0x8F/0xFF",
+            |v| *v != 0x8F && *v != 0xFF
+        ),
         function_id in 0u8..0x10,
         software_id in 0u8..0x10,
         parameters in proptest::array::uniform16(any::<u8>())

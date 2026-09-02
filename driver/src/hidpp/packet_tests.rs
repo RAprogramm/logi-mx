@@ -102,14 +102,26 @@ fn test_parse_long_packet_too_small() {
 
 #[test]
 fn test_error_detection_0x8f() {
-    let error_packet = HidppPacket::new_short(0xFF, 0x8F, 0x01, 0x05, [0x03, 0x00, 0x00]);
+    let error_packet = HidppPacket::Error(ErrorPacket {
+        device_index:  0x02,
+        feature_index: 0x09,
+        function_id:   0x01,
+        software_id:   0x05,
+        error_code:    0x03
+    });
     assert!(error_packet.is_error());
     assert_eq!(error_packet.get_error_code(), Some(0x03));
 }
 
 #[test]
 fn test_error_detection_0xff() {
-    let error_packet = HidppPacket::new_short(0xFF, 0xFF, 0x01, 0x05, [0x08, 0x00, 0x00]);
+    let error_packet = HidppPacket::Error(ErrorPacket {
+        device_index:  0x02,
+        feature_index: 0x09,
+        function_id:   0x01,
+        software_id:   0x05,
+        error_code:    0x08
+    });
     assert!(error_packet.is_error());
     assert_eq!(error_packet.get_error_code(), Some(0x08));
 }
@@ -137,10 +149,12 @@ fn test_packet_inequality() {
 
 #[test]
 fn test_long_packet_error_code() {
-    let error_packet = HidppPacket::new_long(0xFF, 0xFF, 0x01, 0x05, {
-        let mut params = [0; 16];
-        params[0] = 0x0A;
-        params
+    let error_packet = HidppPacket::Error(ErrorPacket {
+        device_index:  0x02,
+        feature_index: 0x09,
+        function_id:   0x01,
+        software_id:   0x05,
+        error_code:    0x0A
     });
     assert!(error_packet.is_error());
     assert_eq!(error_packet.get_error_code(), Some(0x0A));
