@@ -6,6 +6,7 @@ use libadwaita::{
     ActionRow, Application, ApplicationWindow, Clamp, HeaderBar, PreferencesGroup,
     PreferencesPage, StatusPage, Toast, ToastOverlay, prelude::*
 };
+use logi_mx_daemon::ipc::{Request, Response, try_request};
 use logi_mx_driver::prelude::*;
 
 const APP_ID: &str = "com.logitech.mx.configurator";
@@ -54,6 +55,46 @@ struct DeviceSnapshot {
 /// # Ok::<(), masterror::AppError>(())
 /// ```
 fn collect_device_snapshot() -> Option<DeviceSnapshot> {
+    if let Some(Response::Info {
+        name,
+        dpi,
+        smartshift,
+        hires
+    }) = try_request(&Request::Info)
+    {
+        let battery = try_request(&Request::Battery).and_then(|r| match r {
+            Response::Battery {
+                level,
+                status
+            } => Some(BatteryInfo {
+                level,
+                status: parse_battery_status(&status)
+            }),
+            _ => None
+        });
+
+        return Some(DeviceSnapshot {
+            name,
+            battery,
+            dpi,
+            smartshift,
+            hiresscroll: hires
+        });
+    }
+
+    collect_device_snapshot_direct()
+}
+
+fn parse_battery_status(status: &str) -> BatteryStatus {
+    match status {
+        "Charging" => BatteryStatus::Charging,
+        "Full" => BatteryStatus::Full,
+        "Discharging" => BatteryStatus::Discharging,
+        _ => BatteryStatus::Unknown
+    }
+}
+
+fn collect_device_snapshot_direct() -> Option<DeviceSnapshot> {
     let mut device = MxMaster3s::open_bolt_receiver_discovered().ok()?;
 
     let name = device
@@ -253,11 +294,14 @@ fn create_battery_group(
     let bi = battery_icon;
     let to = toast_overlay.clone();
     refresh_btn.connect_clicked(move |_| {
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
-            && let Ok(battery) = device.battery_info()
+        if let Some(Response::Battery {
+            level,
+            status
+        }) = try_request(&Request::Battery)
         {
-            bi.set_icon_name(Some(battery_icon_name(battery.level)));
-            br.set_subtitle(&format!("{}% · {:?}", battery.level, battery.status));
+            let status_enum = parse_battery_status(&status);
+            bi.set_icon_name(Some(battery_icon_name(level)));
+            br.set_subtitle(&format!("{level}% · {status_enum:?}"));
 
             let toast = Toast::new("Battery status updated");
             to.add_toast(toast);
@@ -331,8 +375,10 @@ fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> 
     let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
         let dpi = scale_dpi(sc.value());
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
-            && device.set_dpi(dpi).is_ok()
+        if try_request(&Request::SetDpi {
+            value: dpi
+        })
+        .is_some()
         {
             let toast = Toast::new(&format!("DPI set to {dpi}"));
             to.add_toast(toast);
@@ -410,8 +456,11 @@ fn create_smartshift_group(
             threshold: scale_threshold(ts.value())
         };
 
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
-            && device.set_smartshift(config).is_ok()
+        if try_request(&Request::SetSmartShift {
+            enabled:   config.enabled,
+            threshold: config.threshold
+        })
+        .is_some()
         {
             let toast = Toast::new(&format!(
                 "SmartShift {} at threshold {}",
@@ -479,8 +528,11 @@ fn create_scroll_group(
             inverted: is.is_active()
         };
 
-        if let Ok(mut device) = MxMaster3s::open_bolt_receiver_discovered()
-            && device.set_hires_scroll(config).is_ok()
+        if try_request(&Request::SetHires {
+            enabled:  config.enabled,
+            inverted: config.inverted
+        })
+        .is_some()
         {
             let toast = Toast::new(&format!(
                 "Scroll: {} · {}",

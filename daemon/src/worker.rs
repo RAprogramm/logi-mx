@@ -17,7 +17,10 @@ use std::{
 use logi_mx_driver::prelude::*;
 use tracing::{debug, error, info, warn};
 
-use crate::status::SharedStatus;
+use crate::{
+    ipc::{self, RpcRequest, RpcSender},
+    status::SharedStatus
+};
 
 /// Interval between periodic tray status refreshes.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -40,21 +43,27 @@ pub enum DeviceEvent {
 ///
 /// # Returns
 ///
-/// Command sender plus the worker thread handle for shutdown coordination.
+/// Device event sender, RPC sender and worker thread handle.
+///
+/// # Errors
+///
+/// Returns an internal error if the worker thread cannot be spawned.
 pub fn spawn_device_worker(
     config: Config,
     status: SharedStatus
-) -> std::result::Result<(mpsc::Sender<DeviceEvent>, JoinHandle<()>), masterror::AppError> {
+) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
+{
     let (tx, rx) = mpsc::channel();
+    let (rpc_tx, rpc_rx) = mpsc::channel();
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
-        .spawn(move || run_device_worker(config, &rx, &status))
+        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status))
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
 
-    Ok((tx, handle))
+    Ok((tx, rpc_tx, handle))
 }
 
 /// Runs the device worker event loop until the command channel closes.
@@ -69,22 +78,41 @@ pub fn spawn_device_worker(
         reason = "the status handle is only consumed by the tray refresh"
     )
 )]
-fn run_device_worker(config: Config, rx: &mpsc::Receiver<DeviceEvent>, status: &SharedStatus) {
+fn run_device_worker(
+    config: Config,
+    rx: &mpsc::Receiver<DeviceEvent>,
+    rpc_rx: &mpsc::Receiver<RpcRequest>,
+    status: &SharedStatus
+) {
     let manager = DeviceManager::new(config);
 
     #[cfg(feature = "tray")]
     refresh_tray_status(status);
 
+    let mut last_refresh = std::time::Instant::now();
+
     loop {
-        match rx.recv_timeout(REFRESH_INTERVAL) {
+        while let Ok(req) = rpc_rx.try_recv() {
+            handle_rpc(req);
+        }
+
+        match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(DeviceEvent::Added(path)) => manager.handle_device_added(path),
             Ok(DeviceEvent::Removed(path)) => manager.handle_device_removed(&path),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                #[cfg(feature = "tray")]
-                refresh_tray_status(status);
+                if last_refresh.elapsed() >= REFRESH_INTERVAL {
+                    #[cfg(feature = "tray")]
+                    refresh_tray_status(status);
 
-                #[cfg(not(feature = "tray"))]
-                {}
+                    #[cfg(not(feature = "tray"))]
+                    let _ = status;
+
+                    last_refresh = std::time::Instant::now();
+                }
+
+                while let Ok(req) = rpc_rx.try_recv() {
+                    handle_rpc(req);
+                }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break
         }
@@ -99,6 +127,130 @@ fn run_device_worker(config: Config, rx: &mpsc::Receiver<DeviceEvent>, status: &
 #[cfg(feature = "tray")]
 fn refresh_tray_status(status: &SharedStatus) {
     crate::status::refresh_from_device(status);
+}
+
+fn handle_rpc(request: RpcRequest) {
+    let response = handle_request(&request.request);
+    let _ = request.responder.send(response);
+}
+
+fn handle_request(request: &ipc::Request) -> ipc::Response {
+    let mut device = match MxMaster3s::open_bolt_receiver_discovered() {
+        Ok(d) => d,
+        Err(e) => {
+            return ipc::Response::Error {
+                message: e.to_string()
+            };
+        }
+    };
+
+    match request {
+        ipc::Request::Ping => ipc::Response::Pong,
+        ipc::Request::Info => handle_info(&mut device),
+        ipc::Request::Battery => handle_battery(&mut device),
+        ipc::Request::Hosts => match device.host_info() {
+            Ok((hosts, current)) => ipc::Response::Hosts {
+                hosts,
+                current
+            },
+            Err(e) => ipc::Response::Error {
+                message: e.to_string()
+            }
+        },
+        ipc::Request::Buttons => match device.list_reprog_controls() {
+            Ok(controls) => ipc::Response::Buttons {
+                controls
+            },
+            Err(e) => ipc::Response::Error {
+                message: e.to_string()
+            }
+        },
+        ipc::Request::Dpi => match device.dpi() {
+            Ok(value) => ipc::Response::Dpi {
+                value
+            },
+            Err(e) => ipc::Response::Error {
+                message: e.to_string()
+            }
+        },
+        ipc::Request::SmartShift => match device.smartshift() {
+            Ok(config) => ipc::Response::SmartShift {
+                config
+            },
+            Err(e) => ipc::Response::Error {
+                message: e.to_string()
+            }
+        },
+        ipc::Request::HiresScroll => match device.hires_scroll() {
+            Ok(config) => ipc::Response::HiresScroll {
+                config
+            },
+            Err(e) => ipc::Response::Error {
+                message: e.to_string()
+            }
+        },
+        ipc::Request::SetDpi {
+            value
+        } => match device.set_dpi(*value) {
+            Ok(()) => ipc::Response::Ok,
+            Err(e) => ipc::Response::Error {
+                message: e.to_string()
+            }
+        },
+        ipc::Request::SetSmartShift {
+            enabled,
+            threshold
+        } => {
+            let cfg = SmartShiftConfig {
+                enabled:   *enabled,
+                threshold: *threshold
+            };
+            match device.set_smartshift(cfg) {
+                Ok(()) => ipc::Response::Ok,
+                Err(e) => ipc::Response::Error {
+                    message: e.to_string()
+                }
+            }
+        }
+        ipc::Request::SetHires {
+            enabled,
+            inverted
+        } => {
+            let cfg = HiResScrollConfig {
+                enabled:  *enabled,
+                inverted: *inverted
+            };
+            match device.set_hires_scroll(cfg) {
+                Ok(()) => ipc::Response::Ok,
+                Err(e) => ipc::Response::Error {
+                    message: e.to_string()
+                }
+            }
+        }
+    }
+}
+
+fn handle_info(device: &mut MxMaster3s) -> ipc::Response {
+    ipc::Response::Info {
+        name:       device
+            .device_name()
+            .unwrap_or_else(|_| "MX Master 3S".to_string()),
+        dpi:        device.dpi().unwrap_or(1000),
+        smartshift: device.smartshift().unwrap_or_default(),
+        hires:      device.hires_scroll().unwrap_or_default()
+    }
+}
+
+fn handle_battery(device: &mut MxMaster3s) -> ipc::Response {
+    match device.battery_info() {
+        Ok(info) => ipc::Response::Battery {
+            level:  info.level,
+            status: format!("{:?}", info.status)
+        },
+        Err(e) => ipc::Response::Error {
+            message: e.to_string()
+        }
+    }
 }
 
 struct DeviceManager {
@@ -202,6 +354,7 @@ mod tests {
     #[test]
     fn test_worker_exits_on_channel_disconnect() {
         let (tx, rx) = mpsc::channel::<DeviceEvent>();
+        let (_rpc_tx, rpc_rx) = mpsc::channel::<RpcRequest>();
         drop(tx);
 
         std::thread::Builder::new()
@@ -210,6 +363,7 @@ mod tests {
                 run_device_worker(
                     Config::default(),
                     &rx,
+                    &rpc_rx,
                     &Arc::new(Mutex::new(DeviceStatus::default()))
                 );
             })

@@ -156,7 +156,14 @@ async fn main() -> Result<()> {
     });
 
     let status: SharedStatus = Arc::new(Mutex::new(DeviceStatus::default()));
-    let (device_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status))?;
+    let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status))?;
+
+    let ipc_rpc_tx = rpc_tx.clone();
+    let ipc_handle = tokio::spawn(async move {
+        if let Err(e) = crate::ipc::run_server(ipc_rpc_tx).await {
+            error!("IPC server error: {e}");
+        }
+    });
 
     #[cfg(feature = "tray")]
     match spawn_tray(Arc::clone(&status)).await {
@@ -204,8 +211,11 @@ async fn main() -> Result<()> {
     }
 
     drop(device_tx);
+    ipc_handle.abort();
+    drop(rpc_tx);
 
     let _ = worker_handle.join();
+    let _ = std::fs::remove_file(crate::ipc::socket_path());
 
     info!("Daemon stopped");
     Ok(())

@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 logi-mx-driver.workspace = true
+logi-mx-daemon = { path = "../daemon", version = "0.5.0" }
 masterror.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true
