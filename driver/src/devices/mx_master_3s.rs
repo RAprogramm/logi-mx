@@ -232,6 +232,14 @@ pub struct MxMaster3s {
 }
 
 impl MxMaster3s {
+    /// Creates an instance from an already opened HID++ transport.
+    fn new(hidpp: HidppDevice) -> Self {
+        Self {
+            hidpp,
+            button_mappings: HashMap::new()
+        }
+    }
+
     /// Opens the mouse paired with a Logi Bolt receiver.
     ///
     /// # Arguments
@@ -258,10 +266,7 @@ impl MxMaster3s {
 
         hidpp.ping()?;
 
-        Ok(Self {
-            hidpp,
-            button_mappings: HashMap::new()
-        })
+        Ok(Self::new(hidpp))
     }
 
     /// Opens the mouse connected over USB cable.
@@ -286,10 +291,7 @@ impl MxMaster3s {
 
         hidpp.ping()?;
 
-        Ok(Self {
-            hidpp,
-            button_mappings: HashMap::new()
-        })
+        Ok(Self::new(hidpp))
     }
 
     /// Opens the mouse paired over Bluetooth.
@@ -314,10 +316,7 @@ impl MxMaster3s {
 
         hidpp.ping()?;
 
-        Ok(Self {
-            hidpp,
-            button_mappings: HashMap::new()
-        })
+        Ok(Self::new(hidpp))
     }
 
     /// Opens the first MX Master 3S paired to a Logi Bolt receiver.

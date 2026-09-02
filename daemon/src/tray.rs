@@ -30,9 +30,7 @@ impl LogiTrayIcon {
     /// Creates a tray icon with default status.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            status: Arc::new(Mutex::new(DeviceStatus::default()))
-        }
+        Self::from_status(Arc::new(Mutex::new(DeviceStatus::default())))
     }
 
     /// Creates a tray icon sharing an existing status handle.
