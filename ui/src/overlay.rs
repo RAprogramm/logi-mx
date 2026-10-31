@@ -3,72 +3,113 @@
 
 //! Full-screen button-mapping overlay drawn over the desktop.
 //!
-//! Rendered with `gtk4-layer-shell`: a scaled mouse diagram with clickable
-//! buttons on the left and an assignment panel on the right. Activated with
-//! `LOGI_MX_OVERLAY=1`.
+//! The device diagram is the reference MX Master 3S layout SVG rendered with
+//! `resvg`; clickable hotspots are aligned with the SVG button geometry and
+//! highlighted on top of the image. An assignment panel sits on the right.
+//! Activated with `LOGI_MX_OVERLAY=1`.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::{OnceCell, RefCell},
+    collections::HashMap,
+    rc::Rc
+};
 
 use gtk4::{Box, Button, GestureClick, Label, Orientation, prelude::*};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{Application, ApplicationWindow, prelude::*};
 
-/// Logical width of the mouse diagram in drawing units.
-const DIAGRAM_SIZE: f64 = 600.0;
-/// Radius of a clickable button hotspot in drawing units.
-const BUTTON_RADIUS: f64 = 36.0;
-/// Hit-test tolerance around a button center in drawing units.
-const HIT_TOLERANCE: f64 = 40.0;
+/// Device layout embedded from `assets/logitech-mx-master-3s.svg`.
+const DEVICE_SVG: &str = include_str!("../assets/logitech-mx-master-3s.svg");
+/// Width of the device layout coordinate space.
+const LAYOUT_W: f64 = 128.32296;
+/// Height of the device layout coordinate space.
+const LAYOUT_H: f64 = 117.73977;
+/// Width the SVG is rasterized to once and cached, in pixels.
+const SVG_RENDER_WIDTH: u32 = 1024;
 /// Width of the assignment panel in pixels.
 const PANEL_WIDTH: i32 = 360;
 /// Margin between the overlay window and the screen edges in pixels.
 const OVERLAY_MARGIN: i32 = 80;
+/// Padding added to thin hotspots so they remain easy to click.
+const HIT_PADDING: f64 = 2.5;
+/// Minimum hotspot width before padding is applied, in layout units.
+const THIN_HOTSPOT: f64 = 6.0;
 
-/// Reprogrammable buttons drawn on the mouse diagram.
+/// Reprogrammable buttons of the device diagram.
+///
+/// Regions are the exact button geometries of the reference layout SVG:
+/// front of the mouse at the top, thumb platform on the left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum MouseButton {
     Left,
     Right,
-    Middle,
+    Wheel,
+    DpiShift,
     Back,
     Forward,
-    Gesture,
-    ModeShift
+    Gesture
 }
 
 impl MouseButton {
     const ALL: [Self; 7] = [
         Self::Left,
         Self::Right,
-        Self::Middle,
+        Self::Wheel,
+        Self::DpiShift,
+        Self::Back,
+        Self::Forward,
+        Self::Gesture
+    ];
+
+    /// Hit-test order: small hotspots first so padding never lets a large
+    /// region steal their clicks.
+    const HIT_ORDER: [Self; 7] = [
+        Self::Wheel,
+        Self::DpiShift,
         Self::Back,
         Self::Forward,
         Self::Gesture,
-        Self::ModeShift
+        Self::Left,
+        Self::Right
     ];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Left => "Left",
             Self::Right => "Right",
-            Self::Middle => "Middle",
+            Self::Wheel => "Wheel Click",
+            Self::DpiShift => "DPI Shift",
             Self::Back => "Back",
             Self::Forward => "Forward",
-            Self::Gesture => "Gesture",
-            Self::ModeShift => "Mode Shift"
+            Self::Gesture => "Gesture"
         }
     }
 
-    const fn position(self) -> (f64, f64) {
+    /// Button rectangle `(x, y, width, height)` in layout units, matching the
+    /// reference SVG geometry.
+    const fn region(self) -> (f64, f64, f64, f64) {
         match self {
-            Self::Left => (200.0, 150.0),
-            Self::Right => (400.0, 150.0),
-            Self::Middle => (300.0, 250.0),
-            Self::Back => (180.0, 350.0),
-            Self::Forward => (220.0, 350.0),
-            Self::Gesture => (180.0, 450.0),
-            Self::ModeShift => (300.0, 100.0)
+            Self::Left => (25.5, 12.3, 22.1, 36.1),
+            Self::Right => (47.6, 8.1, 20.5, 37.7),
+            Self::Wheel => (44.3, 19.5, 7.2, 15.3),
+            Self::DpiShift => (45.9, 44.1, 4.0, 7.2),
+            Self::Back => (20.1, 47.5, 1.4, 9.0),
+            Self::Forward => (20.1, 58.0, 1.4, 9.0),
+            Self::Gesture => (32.6, 59.5, 1.7, 6.3)
         }
+    }
+
+    /// Hit rectangle: the drawn region padded when too thin to click.
+    const fn hit_region(self) -> (f64, f64, f64, f64) {
+        let (x, y, w, h) = self.region();
+        let pad = if w < THIN_HOTSPOT { HIT_PADDING } else { 0.0 };
+        (x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad)
+    }
+
+    /// Reports whether a layout-space point falls inside the hit rectangle.
+    const fn contains(self, x: f64, y: f64) -> bool {
+        let (rx, ry, rw, rh) = self.hit_region();
+        x >= rx && x <= rx + rw && y >= ry && y <= ry + rh
     }
 }
 
@@ -82,11 +123,12 @@ struct OverlayState {
 pub fn build_overlay(app: &Application) {
     let window = create_window(app);
     let state = Rc::new(RefCell::new(OverlayState::default()));
+    let image = Rc::new(OnceCell::new());
     let drawing = create_drawing_area();
     let (panel, status_label) = create_panel(&state, &drawing, &window);
 
     attach_hit_testing(&state, &drawing, &status_label);
-    attach_draw_callback(&state, &drawing);
+    attach_draw_callback(&state, &drawing, &image);
 
     let root = Box::new(Orientation::Horizontal, 0);
     root.add_css_class("background");
@@ -148,19 +190,19 @@ fn create_panel(
     title.add_css_class("title-2");
     panel.append(&title);
 
-    let selected_label = Label::new(Some("Select a button on the mouse diagram"));
+    let selected_label = Label::new(Some("Select a button on the device diagram"));
     selected_label.set_wrap(true);
     selected_label.set_xalign(0.0);
     panel.append(&selected_label);
 
     let actions = [
-        ("Toggle SmartShift", "Toggle SmartShift"),
-        ("Keypress: Ctrl+C", "Keypress: Ctrl+C"),
-        ("Keypress: Ctrl+V", "Keypress: Ctrl+V"),
-        ("None", "None")
+        "Toggle SmartShift",
+        "Keypress: Ctrl+C",
+        "Keypress: Ctrl+V",
+        "None"
     ];
-    for (label, action) in actions {
-        let button = Button::with_label(label);
+    for action in actions {
+        let button = Button::with_label(action);
         button.add_css_class("pill");
         let state_clone = Rc::clone(state);
         let drawing_clone = drawing.clone();
@@ -195,13 +237,11 @@ fn attach_hit_testing(
     let state_gesture = Rc::clone(state);
     let drawing_gesture = drawing.clone();
     let status_gesture = status_label.clone();
-    gesture.connect_released(move |_gesture, _n_press, x, y| {
+    gesture.connect_released(move |_gesture, _n_press, px, py| {
+        let (x, y) = to_layout(px, py, drawing_gesture.width(), drawing_gesture.height());
         let mut st = state_gesture.borrow_mut();
-        for button in MouseButton::ALL {
-            let (bx, by) = button.position();
-            let dx = x - bx;
-            let dy = y - by;
-            if dx.mul_add(dx, dy * dy) < HIT_TOLERANCE * HIT_TOLERANCE {
+        for button in MouseButton::HIT_ORDER {
+            if button.contains(x, y) {
                 st.selected = Some(button);
                 status_gesture.set_text(&format!("Selected: {}", button.label()));
                 drawing_gesture.queue_draw();
@@ -212,73 +252,121 @@ fn attach_hit_testing(
     drawing.add_controller(gesture);
 }
 
-fn attach_draw_callback(state: &Rc<RefCell<OverlayState>>, drawing: &gtk4::DrawingArea) {
+fn attach_draw_callback(
+    state: &Rc<RefCell<OverlayState>>,
+    drawing: &gtk4::DrawingArea,
+    image: &Rc<OnceCell<Option<gtk4::cairo::ImageSurface>>>
+) {
     let state_draw = Rc::clone(state);
+    let image_draw = Rc::clone(image);
     drawing.set_draw_func(move |_, cr, width, height| {
         let st = state_draw.borrow();
-        draw_mouse(&st, cr, f64::from(width), f64::from(height));
+        let (scale, offset_x, offset_y) = fit_transform(f64::from(width), f64::from(height));
+
+        let _ = cr.save();
+        cr.translate(offset_x, offset_y);
+        cr.scale(scale, scale);
+
+        if let Some(surface) = image_draw.get_or_init(render_device_svg).as_ref() {
+            let sx = LAYOUT_W / f64::from(surface.width());
+            let sy = LAYOUT_H / f64::from(surface.height());
+            let _ = cr.save();
+            cr.scale(sx, sy);
+            cr.set_source_surface(surface, 0.0, 0.0);
+            let _ = cr.paint();
+            cr.restore();
+        }
+
+        draw_highlights(&st, cr);
+        cr.restore();
     });
 }
 
-fn draw_mouse(st: &OverlayState, cr: &gtk4::cairo::Context, width: f64, height: f64) {
-    let scale_x = width / DIAGRAM_SIZE;
-    let scale_y = height / DIAGRAM_SIZE;
-    let scale = scale_x.min(scale_y);
-    let content = DIAGRAM_SIZE * scale;
-    let offset_x = (width - content) / 2.0;
-    let offset_y = (height - content) / 2.0;
+/// Rasterizes the embedded device SVG once into a cairo surface.
+fn render_device_svg() -> Option<gtk4::cairo::ImageSurface> {
+    let tree = usvg::Tree::from_data(DEVICE_SVG.as_bytes(), &usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let scale = f64::from(SVG_RENDER_WIDTH) / f64::from(size.width());
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the raster height is clamped to a sane pixel range"
+    )]
+    let height = (f64::from(size.height()) * scale)
+        .round()
+        .clamp(1.0, 8192.0) as u32;
+    let width = SVG_RENDER_WIDTH;
 
-    let _ = cr.save();
-    cr.translate(offset_x, offset_y);
-    cr.scale(scale, scale);
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
+    let transform = resvg::tiny_skia::Transform::from_scale(scale as f32, scale as f32);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    cr.set_source_rgb(0.18, 0.18, 0.22);
-    rounded_rect(cr, 120.0, 60.0, 360.0, 480.0, 120.0);
-    let _ = cr.fill_preserve();
-    cr.set_source_rgb(0.35, 0.35, 0.42);
-    cr.set_line_width(3.0);
-    let _ = cr.stroke();
+    let mut data = pixmap.take();
+    for pixel in data.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
 
+    gtk4::cairo::ImageSurface::create_for_data(
+        data,
+        gtk4::cairo::Format::ARgb32,
+        width.cast_signed(),
+        height.cast_signed(),
+        (width * 4).cast_signed()
+    )
+    .ok()
+}
+
+/// Computes uniform scale and centering offsets for the layout space.
+fn fit_transform(width: f64, height: f64) -> (f64, f64, f64) {
+    let scale = (width / LAYOUT_W).min(height / LAYOUT_H);
+    let content_w = LAYOUT_W * scale;
+    let content_h = LAYOUT_H * scale;
+    (scale, (width - content_w) / 2.0, (height - content_h) / 2.0)
+}
+
+/// Maps widget pixel coordinates into the device layout space.
+fn to_layout(px: f64, py: f64, width: i32, height: i32) -> (f64, f64) {
+    let (scale, offset_x, offset_y) = fit_transform(f64::from(width), f64::from(height));
+    ((px - offset_x) / scale, (py - offset_y) / scale)
+}
+
+fn draw_highlights(st: &OverlayState, cr: &gtk4::cairo::Context) {
     for button in MouseButton::ALL {
-        draw_button(st, cr, button);
+        let selected = st.selected == Some(button);
+        let assigned = st.assignments.contains_key(&button);
+        if !selected && !assigned {
+            continue;
+        }
+
+        let (x, y, w, h) = button.region();
+        if selected {
+            cr.set_source_rgba(0.93, 0.66, 0.46, 0.55);
+        } else {
+            cr.set_source_rgba(0.42, 0.60, 0.80, 0.50);
+        }
+        rounded_rect(cr, x, y, w, h, 0.8);
+        let _ = cr.fill_preserve();
+
+        if selected {
+            cr.set_source_rgb(0.93, 0.66, 0.46);
+            cr.set_line_width(0.5);
+            let _ = cr.stroke();
+        }
     }
 
     if let Some(button) = st.selected {
-        let (x, y) = button.position();
-        cr.set_source_rgb(0.95, 0.75, 0.65);
-        cr.set_line_width(2.0);
-        cr.move_to(x + BUTTON_RADIUS, y);
-        cr.line_to(DIAGRAM_SIZE, y);
-        let _ = cr.stroke();
+        draw_leader(cr, button);
     }
-
-    let _ = cr.restore();
 }
 
-fn draw_button(st: &OverlayState, cr: &gtk4::cairo::Context, button: MouseButton) {
-    let (x, y) = button.position();
-    let selected = st.selected == Some(button);
-    let assigned = st.assignments.contains_key(&button);
-    if selected {
-        cr.set_source_rgb(0.95, 0.75, 0.65);
-    } else if assigned {
-        cr.set_source_rgb(0.55, 0.75, 0.95);
-    } else {
-        cr.set_source_rgb(0.30, 0.30, 0.36);
-    }
-    cr.arc(x, y, BUTTON_RADIUS, 0.0, 2.0 * std::f64::consts::PI);
-    let _ = cr.fill_preserve();
-    cr.set_source_rgb(0.75, 0.75, 0.82);
-    cr.set_line_width(2.0);
+fn draw_leader(cr: &gtk4::cairo::Context, button: MouseButton) {
+    let (x, y, w, h) = button.region();
+    let start_y = y + h / 2.0;
+    cr.set_source_rgb(0.93, 0.66, 0.46);
+    cr.set_line_width(0.4);
+    cr.move_to(x + w, start_y);
+    cr.line_to(LAYOUT_W, start_y);
     let _ = cr.stroke();
-
-    cr.set_source_rgb(0.95, 0.95, 0.98);
-    cr.set_font_size(14.0);
-    let text = button.label();
-    if let Ok(extents) = cr.text_extents(text) {
-        cr.move_to(x - extents.width() / 2.0, y + 5.0);
-        let _ = cr.show_text(text);
-    }
 }
 
 fn rounded_rect(

@@ -14,4 +14,6 @@ masterror.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true
 gtk4-layer-shell = "0.8"
+resvg.workspace = true
+usvg.workspace = true
 tracing.workspace = true
