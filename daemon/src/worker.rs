@@ -207,6 +207,12 @@ fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Resp
                 device.set_control_divert(*control_id, *divert, *raw_xy)?;
                 ipc::Response::Ok
             }
+            ipc::Request::SetHost {
+                host
+            } => {
+                device.set_host(*host)?;
+                ipc::Response::Ok
+            }
         })
     }) {
         Ok(response) => response,

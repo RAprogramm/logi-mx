@@ -411,6 +411,23 @@ impl MxMaster3s {
         Ok((host_count, current_host))
     }
 
+    /// Switches to the host at a zero-based index (Easy-Switch).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the feature is unsupported or the
+    /// command fails.
+    pub fn set_host(&mut self, host: u8) -> Result<()> {
+        let feature_index = self.hidpp.feature_index(FEATURE_CHANGE_HOST)?;
+        self.hidpp.send_command(
+            feature_index,
+            ChangeHostFunction::SetHost as u8,
+            &[host, 0x00, 0x00]
+        )?;
+        info!("Switched to host {host}");
+        Ok(())
+    }
+
     /// Enumerates all reprogrammable controls reported by feature 0x1B04.
     ///
     /// # Errors

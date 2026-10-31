@@ -85,6 +85,11 @@ pub enum Request {
         divert:     bool,
         /// Whether to also stream raw XY deltas.
         raw_xy:     bool
+    },
+    /// Switch to an Easy-Switch host.
+    SetHost {
+        /// Zero-based host index.
+        host: u8
     }
 }
 

@@ -80,6 +80,11 @@ enum SetCommands {
 
         #[arg(long)]
         raw_xy: bool
+    },
+
+    Host {
+        /// Zero-based host index
+        index: u8
     }
 }
 
@@ -529,6 +534,31 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
                     device.set_control_divert(control_id, divert, raw_xy)?;
                     writeln!(out, "Button {control_id:#06x} divert: {divert}")
+                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                }
+            }
+        }
+        SetCommands::Host {
+            index
+        } => {
+            info!("Switching to host {index}...");
+            match try_request(&Request::SetHost {
+                host: index
+            }) {
+                Some(Response::Ok) => {
+                    writeln!(out, "Switched to host {index}")
+                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                }
+                Some(Response::Error {
+                    message
+                }) => {
+                    return Err(AppError::internal(message));
+                }
+                _ => {
+                    warn!("Daemon unavailable, falling back to direct device access");
+                    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
+                    device.set_host(index)?;
+                    writeln!(out, "Switched to host {index}")
                         .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
                 }
             }
