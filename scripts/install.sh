@@ -52,8 +52,8 @@ Icon=input-mouse
 Categories=Settings;HardwareSettings;
 DESKTOP
 
-  # Autostart daemon (opt-in via env)
-  if [ "${AUTO_START:-ask}" = "yes" ] || { [ "${AUTO_START:-ask}" = "ask" ] && read -r -p "Enable daemon autostart? [y/N] " ans && [ "${ans}" = "y" ]; }; then
+  # Autostart daemon (enabled by default for professional UX)
+  if [ "${AUTO_START:-yes}" != "no" ]; then
     install -d "${AUTOSTART_DIR}"
     cat > "${AUTOSTART_DIR}/logi-mx-daemon.desktop" <<DESKTOP
 [Desktop Entry]
@@ -75,7 +75,8 @@ if command -v systemctl >/dev/null 2>&1; then
   # fix ExecStart path
   sed -i "s#^ExecStart=.*#ExecStart=${BIN_DIR}/logi-mx-daemon#" "${SYSTEMD_USER_DIR}/logi-mx-daemon.service"
   systemctl --user daemon-reload 2>/dev/null || true
-  echo "  systemd user service installed"
+  systemctl --user enable --now logi-mx-daemon.service 2>/dev/null || true
+  echo "  systemd user service installed and enabled"
 fi
 
 echo "=== Installation complete ==="
