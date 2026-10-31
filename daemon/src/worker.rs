@@ -84,7 +84,7 @@ fn run_device_worker(
     rpc_rx: &mpsc::Receiver<RpcRequest>,
     status: &SharedStatus
 ) {
-    let manager = DeviceManager::new(config);
+    let mut manager = DevicePool::new(config);
 
     #[cfg(feature = "tray")]
     refresh_tray_status(status);
@@ -93,7 +93,7 @@ fn run_device_worker(
 
     loop {
         while let Ok(req) = rpc_rx.try_recv() {
-            handle_rpc(req);
+            handle_rpc(req, &mut manager);
         }
 
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -111,7 +111,7 @@ fn run_device_worker(
                 }
 
                 while let Ok(req) = rpc_rx.try_recv() {
-                    handle_rpc(req);
+                    handle_rpc(req, &mut manager);
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break
@@ -129,103 +129,81 @@ fn refresh_tray_status(status: &SharedStatus) {
     crate::status::refresh_from_device(status);
 }
 
-fn handle_rpc(request: RpcRequest) {
-    let response = handle_request(&request.request);
+fn handle_rpc(request: RpcRequest, manager: &mut DevicePool) {
+    let response = handle_request(manager, &request.request);
     let _ = request.responder.send(response);
 }
 
-fn handle_request(request: &ipc::Request) -> ipc::Response {
-    let mut device = match MxMaster3s::open_bolt_receiver_discovered() {
-        Ok(d) => d,
-        Err(e) => {
-            return ipc::Response::Error {
-                message: e.to_string()
-            };
-        }
-    };
-
-    match request {
-        ipc::Request::Ping => ipc::Response::Pong,
-        ipc::Request::Info => handle_info(&mut device),
-        ipc::Request::Battery => handle_battery(&mut device),
-        ipc::Request::Hosts => match device.host_info() {
-            Ok((hosts, current)) => ipc::Response::Hosts {
-                hosts,
-                current
-            },
-            Err(e) => ipc::Response::Error {
-                message: e.to_string()
+fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Response {
+    match manager.with_device(|device| -> std::result::Result<ipc::Response, masterror::AppError> {
+        Ok(match request {
+            ipc::Request::Ping => ipc::Response::Pong,
+            ipc::Request::Info => handle_info(device),
+            ipc::Request::Battery => handle_battery(device),
+            ipc::Request::Hosts => {
+                let (hosts, current) = device.host_info()?;
+                ipc::Response::Hosts {
+                    hosts,
+                    current
+                }
             }
-        },
-        ipc::Request::Buttons => match device.list_reprog_controls() {
-            Ok(controls) => ipc::Response::Buttons {
-                controls
-            },
-            Err(e) => ipc::Response::Error {
-                message: e.to_string()
+            ipc::Request::Buttons => {
+                let controls = device.list_reprog_controls()?;
+                ipc::Response::Buttons {
+                    controls
+                }
             }
-        },
-        ipc::Request::Dpi => match device.dpi() {
-            Ok(value) => ipc::Response::Dpi {
+            ipc::Request::Dpi => {
+                let value = device.dpi()?;
+                ipc::Response::Dpi {
+                    value
+                }
+            }
+            ipc::Request::SmartShift => {
+                let config = device.smartshift()?;
+                ipc::Response::SmartShift {
+                    config
+                }
+            }
+            ipc::Request::HiresScroll => {
+                let config = device.hires_scroll()?;
+                ipc::Response::HiresScroll {
+                    config
+                }
+            }
+            ipc::Request::SetDpi {
                 value
-            },
-            Err(e) => ipc::Response::Error {
-                message: e.to_string()
+            } => {
+                device.set_dpi(*value)?;
+                ipc::Response::Ok
             }
-        },
-        ipc::Request::SmartShift => match device.smartshift() {
-            Ok(config) => ipc::Response::SmartShift {
-                config
-            },
-            Err(e) => ipc::Response::Error {
-                message: e.to_string()
+            ipc::Request::SetSmartShift {
+                enabled,
+                threshold
+            } => {
+                let cfg = SmartShiftConfig {
+                    enabled:   *enabled,
+                    threshold: *threshold
+                };
+                device.set_smartshift(cfg)?;
+                ipc::Response::Ok
             }
-        },
-        ipc::Request::HiresScroll => match device.hires_scroll() {
-            Ok(config) => ipc::Response::HiresScroll {
-                config
-            },
-            Err(e) => ipc::Response::Error {
-                message: e.to_string()
+            ipc::Request::SetHires {
+                enabled,
+                inverted
+            } => {
+                let cfg = HiResScrollConfig {
+                    enabled:  *enabled,
+                    inverted: *inverted
+                };
+                device.set_hires_scroll(cfg)?;
+                ipc::Response::Ok
             }
-        },
-        ipc::Request::SetDpi {
-            value
-        } => match device.set_dpi(*value) {
-            Ok(()) => ipc::Response::Ok,
-            Err(e) => ipc::Response::Error {
-                message: e.to_string()
-            }
-        },
-        ipc::Request::SetSmartShift {
-            enabled,
-            threshold
-        } => {
-            let cfg = SmartShiftConfig {
-                enabled:   *enabled,
-                threshold: *threshold
-            };
-            match device.set_smartshift(cfg) {
-                Ok(()) => ipc::Response::Ok,
-                Err(e) => ipc::Response::Error {
-                    message: e.to_string()
-                }
-            }
-        }
-        ipc::Request::SetHires {
-            enabled,
-            inverted
-        } => {
-            let cfg = HiResScrollConfig {
-                enabled:  *enabled,
-                inverted: *inverted
-            };
-            match device.set_hires_scroll(cfg) {
-                Ok(()) => ipc::Response::Ok,
-                Err(e) => ipc::Response::Error {
-                    message: e.to_string()
-                }
-            }
+        })
+    }) {
+        Ok(response) => response,
+        Err(e) => ipc::Response::Error {
+            message: e.to_string()
         }
     }
 }
@@ -253,25 +231,27 @@ fn handle_battery(device: &mut MxMaster3s) -> ipc::Response {
     }
 }
 
-struct DeviceManager {
-    devices: Mutex<HashMap<String, MxMaster3s>>,
-    config:  Config
+struct DevicePool {
+    devices:         Mutex<HashMap<String, MxMaster3s>>,
+    config:          Config,
+    preferred_slot:  Option<u8>
 }
 
-impl DeviceManager {
+impl DevicePool {
     fn new(config: Config) -> Self {
         Self {
-            devices: Mutex::new(HashMap::new()),
-            config
+            devices:         Mutex::new(HashMap::new()),
+            config,
+            preferred_slot:  None
         }
     }
 
     /// Opens the discovered device, applies its configuration and stores the
     /// handle keyed by hidraw path.
-    fn handle_device_added(&self, device_path: String) {
+    fn handle_device_added(&mut self, device_path: String) {
         info!("Device added: {device_path}");
 
-        match MxMaster3s::open_bolt_receiver_discovered() {
+        match self.open_device() {
             Ok(mut device) => {
                 if let Ok(name) = device.device_name() {
                     info!("Detected: {name}");
@@ -285,12 +265,14 @@ impl DeviceManager {
                         info!("Applying configuration for {name}");
                         Self::apply_config(&mut device, device_config);
                     }
-
-                    self.devices
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(device_path, device);
+                } else {
+                    debug!("Device opened but name read failed; storing handle anyway");
                 }
+
+                self.devices
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(device_path, device);
             }
             Err(e) => {
                 warn!("Failed to open device: {e}");
@@ -298,13 +280,74 @@ impl DeviceManager {
         }
     }
 
+    /// Opens a device, preferring the last successful receiver slot.
+    fn open_device(&mut self) -> std::result::Result<MxMaster3s, masterror::AppError> {
+        if let Some(slot) = self.preferred_slot
+            && let Ok(device) = MxMaster3s::open_bolt_receiver(slot)
+        {
+            return Ok(device);
+        }
+
+        for slot in 1u8..=6 {
+            if let Ok(device) = MxMaster3s::open_bolt_receiver(slot) {
+                self.preferred_slot = Some(slot);
+                return Ok(device);
+            }
+        }
+
+        Err(DeviceErrorKind::NotFound.into())
+    }
+
+    /// Runs a closure against a cached device, discovering one if needed.
+    fn with_device<R, F>(&mut self, f: F) -> std::result::Result<R, masterror::AppError>
+    where
+        F: FnOnce(&mut MxMaster3s) -> std::result::Result<R, masterror::AppError>
+    {
+        // Reuse a cached handle when available.
+        {
+            let mut guard = self
+                .devices
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(device) = guard.values_mut().next() {
+                return f(device);
+            }
+        }
+
+        let mut device = self.open_device()?;
+        if let Ok(name) = device.device_name() {
+            info!("Detected: {name}");
+            if let Some(device_config) = self
+                .config
+                .devices
+                .iter()
+                .find(|d| name.starts_with(&d.name))
+            {
+                info!("Applying configuration for {name}");
+                Self::apply_config(&mut device, device_config);
+            }
+        }
+
+        let mut guard = self
+            .devices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let device = guard.entry("discovered".to_string()).or_insert(device);
+        f(device)
+    }
+
     /// Drops the stored device handle for a removed hidraw path.
-    fn handle_device_removed(&self, device_path: &str) {
+    ///
+    /// The cached handles are keyed by hidraw path, but RPC discovery stores
+    /// under a synthetic key, so any removal invalidates the whole cache to
+    /// avoid talking to a detached device.
+    fn handle_device_removed(&mut self, device_path: &str) {
         info!("Device removed: {device_path}");
         self.devices
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(device_path);
+            .clear();
+        self.preferred_slot = None;
     }
 
     /// Writes DPI, `SmartShift` and hi-res settings onto the device.
@@ -390,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_manager_new_empty() {
-        let manager = DeviceManager::new(Config::default());
+        let manager = DevicePool::new(Config::default());
         assert!(
             manager
                 .devices

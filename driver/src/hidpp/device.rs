@@ -319,8 +319,10 @@ impl HidppDevice {
                 .unwrap_or(DEFAULT_TIMEOUT_MS)
                 .clamp(1, DEFAULT_TIMEOUT_MS);
 
-            if let Some(bytes) = self.read_raw(remaining_ms)
-                && let Ok(response) = HidppPacket::from_bytes(&bytes)
+            let mut buf = [0u8; 64];
+            if let Ok(size) = self.device.read_timeout(&mut buf, remaining_ms)
+                && size > 0
+                && let Ok(response) = HidppPacket::from_bytes(&buf[..size])
             {
                 if response.matches_request(request) {
                     return Ok(response);

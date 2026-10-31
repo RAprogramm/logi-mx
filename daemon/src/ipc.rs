@@ -10,7 +10,7 @@
 
 use std::{path::PathBuf, sync::mpsc, time::Duration};
 
-use logi_mx_driver::prelude::{BatteryInfo, HiResScrollConfig, ReprogControl, SmartShiftConfig};
+use logi_mx_driver::prelude::{HiResScrollConfig, ReprogControl, SmartShiftConfig};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -81,7 +81,6 @@ pub enum Request {
 
 /// Daemon → client response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code, reason = "IPC response used after server wiring")]
 pub enum Response {
     /// Liveness probe reply.
     Pong,
@@ -130,8 +129,6 @@ pub enum Response {
         /// Current config.
         config: HiResScrollConfig
     },
-    /// `Battery` with typed info.
-    BatteryInfo(BatteryInfo),
     /// Generic success for setters.
     Ok,
     /// Human-readable error.
@@ -142,7 +139,6 @@ pub enum Response {
 }
 
 /// Timeout for a single IPC round-trip.
-#[allow(dead_code, reason = "used after server wiring")]
 pub const IPC_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Attempts a single IPC request against the daemon.
@@ -150,7 +146,7 @@ pub const IPC_TIMEOUT: Duration = Duration::from_secs(2);
 /// Returns `None` when the daemon is not running or the socket is
 /// unreachable — callers should fall back to direct HID access.
 #[must_use]
-#[allow(dead_code, reason = "IPC client used after CLI migration")]
+#[allow(dead_code, reason = "IPC client used by CLI and UI crates")]
 pub fn try_request(request: &Request) -> Option<Response> {
     use std::{
         io::{BufRead as _, BufReader, Write as _},

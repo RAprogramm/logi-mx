@@ -8,7 +8,7 @@
 [![AUR votes (bin)](https://img.shields.io/aur/votes/logi-mx-bin)](https://aur.archlinux.org/packages/logi-mx-bin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![REUSE](https://api.reuse.software/badge/github.com/RAprogramm/logi-mx)](https://api.reuse.software/info/github.com/RAprogramm/logi-mx)
-[![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust Version](https://img.shields.io/badge/rust-1.99%2B-orange.svg)](https://www.rust-lang.org)
 
 **Blazing fast Logitech MX series mouse driver and configuration tool for Linux**
 
@@ -161,7 +161,7 @@ Automatic ratchet-to-free-spin transition:
 **Implemented:**
 - DPI adjustment (200-8000)
 - SmartShift configuration
-- Hi-res scroll enable/disable (inversion not yet applied to hardware)
+- Hi-res scroll enable/disable (inversion applied on hardware)
 - Battery status monitoring
 - Daemon with udev hotplug and automatic config application
 - GTK4/libadwaita GUI

@@ -8,6 +8,9 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# `ksni` (system tray) depends on the unmaintained `zvariant_derive` crate.
+# There is no newer `ksni` release yet; tracked for migration to `tray-icon`.
+ignore = ["RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372"]
 
 [licenses]
 version = 2

@@ -342,9 +342,30 @@ impl MxMaster3s {
     pub fn open_bolt_receiver_discovered() -> Result<Self> {
         info!("Discovering MX Master 3S on Bolt receiver slots");
 
+        // Resolve the receiver interface once instead of re-enumerating HID
+        // devices (and rebuilding the HidApi) for every candidate slot.
+        let api = hidapi::HidApi::new()
+            .map_err(|e| AppError::internal("Failed to initialize HID API").with_source(e))?;
+
+        let mut target_path = None;
+        for device_info in api.device_list() {
+            if device_info.vendor_id() == VID_LOGITECH
+                && device_info.product_id() == PID_BOLT_RECEIVER
+                && (device_info.interface_number() == 2 || device_info.interface_number() == -1)
+            {
+                target_path = Some(device_info.path().to_string_lossy().into_owned());
+                break;
+            }
+        }
+
+        let path = target_path
+            .ok_or_else(|| AppError::not_found("HID++ interface not found for device"))?;
+
         for index in RECEIVER_SLOTS {
-            if let Ok(device) = Self::open_bolt_receiver(index) {
-                return Ok(device);
+            if let Ok(mut hidpp) = HidppDevice::open_path(&path, index)
+                && hidpp.ping().is_ok()
+            {
+                return Ok(Self::new(hidpp));
             }
         }
 

@@ -62,22 +62,27 @@ pub type SharedStatus = Arc<Mutex<DeviceStatus>>;
 pub fn refresh_from_device(status: &SharedStatus) {
     match MxMaster3s::open_bolt_receiver_discovered() {
         Ok(mut device) => {
-            let (battery_level, dpi) = {
+            // Read everything from the device *before* taking the lock so the
+            // shared status mutex is never held across blocking HID++ I/O.
+            let battery = device.battery_info().ok();
+            let dpi = device.dpi().ok();
+            let smartshift = device.smartshift().ok();
+
+            let (battery_level, dpi_value) = {
                 let mut guard = status
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard.connected = true;
+                guard.error = None;
 
-                if let Ok(battery) = device.battery_info() {
+                if let Some(battery) = battery {
                     guard.battery_level = battery.level;
                     guard.battery_status = format!("{:?}", battery.status);
                 }
-
-                if let Ok(current_dpi) = device.dpi() {
+                if let Some(current_dpi) = dpi {
                     guard.dpi = current_dpi;
                 }
-
-                if let Ok(ss_config) = device.smartshift() {
+                if let Some(ss_config) = smartshift {
                     guard.smartshift = ss_config.enabled;
                     guard.smartshift_threshold = ss_config.threshold;
                 }
@@ -85,15 +90,14 @@ pub fn refresh_from_device(status: &SharedStatus) {
                 (guard.battery_level, guard.dpi)
             };
 
-            debug!("Tray status refreshed: battery={battery_level}%, dpi={dpi}");
+            debug!("Tray status refreshed: battery={battery_level}%, dpi={dpi_value}");
         }
         Err(e) => {
-            {
-                let mut guard = status
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.connected = false;
-            }
+            let mut guard = status
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.connected = false;
+            guard.error = Some(e.to_string());
             debug!("Device not connected: {e}");
         }
     }

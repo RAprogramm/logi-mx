@@ -294,17 +294,28 @@ fn create_battery_group(
     let bi = battery_icon;
     let to = toast_overlay.clone();
     refresh_btn.connect_clicked(move |_| {
-        if let Some(Response::Battery {
-            level,
-            status
-        }) = try_request(&Request::Battery)
-        {
-            let status_enum = parse_battery_status(&status);
-            bi.set_icon_name(Some(battery_icon_name(level)));
-            br.set_subtitle(&format!("{level}% · {status_enum:?}"));
+        match try_request(&Request::Battery) {
+            Some(Response::Battery {
+                level,
+                status
+            }) => {
+                let status_enum = parse_battery_status(&status);
+                bi.set_icon_name(Some(battery_icon_name(level)));
+                br.set_subtitle(&format!("{level}% · {status_enum:?}"));
 
-            let toast = Toast::new("Battery status updated");
-            to.add_toast(toast);
+                let toast = Toast::new("Battery status updated");
+                to.add_toast(toast);
+            }
+            Some(Response::Error {
+                message
+            }) => {
+                let toast = Toast::new(&format!("Failed to refresh battery: {message}"));
+                to.add_toast(toast);
+            }
+            _ => {
+                let toast = Toast::new("Daemon unavailable");
+                to.add_toast(toast);
+            }
         }
     });
 
@@ -375,13 +386,27 @@ fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> 
     let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
         let dpi = scale_dpi(sc.value());
-        if try_request(&Request::SetDpi {
+        match try_request(&Request::SetDpi {
             value: dpi
-        })
-        .is_some()
-        {
-            let toast = Toast::new(&format!("DPI set to {dpi}"));
-            to.add_toast(toast);
+        }) {
+            Some(Response::Ok) => {
+                let toast = Toast::new(&format!("DPI set to {dpi}"));
+                to.add_toast(toast);
+            }
+            Some(Response::Error {
+                message
+            }) => {
+                let toast = Toast::new(&format!("Failed to set DPI: {message}"));
+                to.add_toast(toast);
+            }
+            None => {
+                let toast = Toast::new("Daemon unavailable");
+                to.add_toast(toast);
+            }
+            _ => {
+                let toast = Toast::new("Unexpected response");
+                to.add_toast(toast);
+            }
         }
     });
 
@@ -456,22 +481,36 @@ fn create_smartshift_group(
             threshold: scale_threshold(ts.value())
         };
 
-        if try_request(&Request::SetSmartShift {
+        match try_request(&Request::SetSmartShift {
             enabled:   config.enabled,
             threshold: config.threshold
-        })
-        .is_some()
-        {
-            let toast = Toast::new(&format!(
-                "SmartShift {} at threshold {}",
-                if config.enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                },
-                config.threshold
-            ));
-            to.add_toast(toast);
+        }) {
+            Some(Response::Ok) => {
+                let toast = Toast::new(&format!(
+                    "SmartShift {} at threshold {}",
+                    if config.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
+                    config.threshold
+                ));
+                to.add_toast(toast);
+            }
+            Some(Response::Error {
+                message
+            }) => {
+                let toast = Toast::new(&format!("Failed to configure SmartShift: {message}"));
+                to.add_toast(toast);
+            }
+            None => {
+                let toast = Toast::new("Daemon unavailable");
+                to.add_toast(toast);
+            }
+            _ => {
+                let toast = Toast::new("Unexpected response");
+                to.add_toast(toast);
+            }
         }
     });
 
@@ -528,22 +567,36 @@ fn create_scroll_group(
             inverted: is.is_active()
         };
 
-        if try_request(&Request::SetHires {
+        match try_request(&Request::SetHires {
             enabled:  config.enabled,
             inverted: config.inverted
-        })
-        .is_some()
-        {
-            let toast = Toast::new(&format!(
-                "Scroll: {} · {}",
-                if config.enabled { "Hi-Res" } else { "Normal" },
-                if config.inverted {
-                    "Natural"
-                } else {
-                    "Traditional"
-                }
-            ));
-            to.add_toast(toast);
+        }) {
+            Some(Response::Ok) => {
+                let toast = Toast::new(&format!(
+                    "Scroll: {} · {}",
+                    if config.enabled { "Hi-Res" } else { "Normal" },
+                    if config.inverted {
+                        "Natural"
+                    } else {
+                        "Traditional"
+                    }
+                ));
+                to.add_toast(toast);
+            }
+            Some(Response::Error {
+                message
+            }) => {
+                let toast = Toast::new(&format!("Failed to configure scroll: {message}"));
+                to.add_toast(toast);
+            }
+            None => {
+                let toast = Toast::new("Daemon unavailable");
+                to.add_toast(toast);
+            }
+            _ => {
+                let toast = Toast::new("Unexpected response");
+                to.add_toast(toast);
+            }
         }
     });
 
