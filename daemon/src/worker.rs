@@ -26,7 +26,7 @@ use crate::{
     status::SharedStatus
 };
 
-/// Interval between periodic tray status refreshes.
+/// Interval between periodic status refreshes.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Commands accepted by the device worker.
@@ -38,12 +38,33 @@ pub enum DeviceEvent {
     Removed(String)
 }
 
+#[cfg(feature = "tray")]
+type TrayHandle = ksni::Handle<crate::tray::LogiTrayIcon>;
+
+/// Tray slot updated after every status refresh; a unit slot without the
+/// tray feature.
+#[cfg(feature = "tray")]
+pub type TraySlot = Arc<Mutex<Option<TrayHandle>>>;
+#[cfg(not(feature = "tray"))]
+pub type TraySlot = ();
+
+#[cfg(feature = "tray")]
+static RUNTIME_HANDLE: Mutex<Option<TokioHandle>> = Mutex::new(None);
+
+#[cfg(feature = "tray")]
+pub fn set_runtime_handle(handle: TokioHandle) {
+    *RUNTIME_HANDLE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
+}
+
 /// Starts the device worker thread.
 ///
 /// # Arguments
 ///
 /// * `config` - Configuration applied to every discovered device.
 /// * `status` - Shared status handle the worker refreshes periodically.
+/// * `tray` - Tray slot refreshed alongside the shared status.
 ///
 /// # Returns
 ///
@@ -52,22 +73,10 @@ pub enum DeviceEvent {
 /// # Errors
 ///
 /// Returns an internal error if the worker thread cannot be spawned.
-#[cfg(feature = "tray")]
-type TrayHandle = ksni::Handle<crate::tray::LogiTrayIcon>;
-
-#[cfg(feature = "tray")]
-static RUNTIME_HANDLE: Mutex<Option<TokioHandle>> = Mutex::new(None);
-
-#[cfg(feature = "tray")]
-pub fn set_runtime_handle(handle: TokioHandle) {
-    *RUNTIME_HANDLE.lock().unwrap() = Some(handle);
-}
-
-#[cfg(feature = "tray")]
 pub fn spawn_device_worker(
     config: Config,
     status: SharedStatus,
-    tray_handle: Arc<Mutex<Option<TrayHandle>>>
+    tray: TraySlot
 ) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
 {
     let (tx, rx) = mpsc::channel();
@@ -75,7 +84,7 @@ pub fn spawn_device_worker(
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
-        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status, &tray_handle))
+        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status, &tray))
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
@@ -83,38 +92,18 @@ pub fn spawn_device_worker(
     Ok((tx, rpc_tx, handle))
 }
 
-#[cfg(not(feature = "tray"))]
-pub fn spawn_device_worker(
-    config: Config,
-    status: SharedStatus
-) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
-{
-    let (tx, rx) = mpsc::channel();
-    let (rpc_tx, rpc_rx) = mpsc::channel();
-
-    let handle = std::thread::Builder::new()
-        .name("logi-mx-device-worker".to_string())
-        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status))
-        .map_err(|e| {
-            masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
-        })?;
-
-    Ok((tx, rpc_tx, handle))
-}
-
-#[cfg(feature = "tray")]
 fn run_device_worker(
     config: Config,
     rx: &mpsc::Receiver<DeviceEvent>,
     rpc_rx: &mpsc::Receiver<RpcRequest>,
     status: &SharedStatus,
-    tray_handle: &Arc<Mutex<Option<TrayHandle>>>
+    tray: &TraySlot
 ) {
     let mut manager = DevicePool::new(config);
+    #[cfg(feature = "notify")]
+    let mut policy = crate::notify::NoticePolicy::new();
 
-    #[cfg(feature = "tray")]
-    refresh_tray_status(status, tray_handle);
-
+    refresh_and_notify(status, tray, &mut policy);
     let mut last_refresh = std::time::Instant::now();
 
     loop {
@@ -122,85 +111,62 @@ fn run_device_worker(
             handle_rpc(req, &mut manager);
         }
 
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(DeviceEvent::Added(path)) => manager.handle_device_added(path),
-            Ok(DeviceEvent::Removed(path)) => manager.handle_device_removed(&path),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if last_refresh.elapsed() >= REFRESH_INTERVAL {
-                    #[cfg(feature = "tray")]
-                    refresh_tray_status(status, tray_handle);
-
-                    #[cfg(not(feature = "tray"))]
-                    let _ = status;
-
-                    last_refresh = std::time::Instant::now();
-                }
-
-                while let Ok(req) = rpc_rx.try_recv() {
-                    handle_rpc(req, &mut manager);
-                }
+        let should_refresh = match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(DeviceEvent::Added(path)) => {
+                manager.handle_device_added(path);
+                true
             }
+            Ok(DeviceEvent::Removed(path)) => {
+                manager.handle_device_removed(&path);
+                true
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => last_refresh.elapsed() >= REFRESH_INTERVAL,
             Err(mpsc::RecvTimeoutError::Disconnected) => break
+        };
+
+        if should_refresh {
+            refresh_and_notify(status, tray, &mut policy);
+            last_refresh = std::time::Instant::now();
         }
     }
 
     debug!("Device worker stopped");
 }
 
-#[cfg(not(feature = "tray"))]
-fn run_device_worker(
-    config: Config,
-    rx: &mpsc::Receiver<DeviceEvent>,
-    rpc_rx: &mpsc::Receiver<RpcRequest>,
-    status: &SharedStatus
-) {
-    let mut manager = DevicePool::new(config);
-
-    let mut last_refresh = std::time::Instant::now();
-
-    loop {
-        while let Ok(req) = rpc_rx.try_recv() {
-            handle_rpc(req, &mut manager);
-        }
-
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(DeviceEvent::Added(path)) => manager.handle_device_added(path),
-            Ok(DeviceEvent::Removed(path)) => manager.handle_device_removed(&path),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if last_refresh.elapsed() >= REFRESH_INTERVAL {
-                    let _ = status;
-                    last_refresh = std::time::Instant::now();
-                }
-
-                while let Ok(req) = rpc_rx.try_recv() {
-                    handle_rpc(req, &mut manager);
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break
-        }
-    }
-
-    debug!("Device worker stopped");
-}
-
-/// Queries the device and republishes the shared status snapshot.
+/// Refreshes the shared status, publishes user notices and updates the tray.
 ///
 /// Runs on the worker thread; blocking HID++ I/O is expected here.
-#[cfg(feature = "tray")]
-#[cfg(feature = "tray")]
-fn refresh_tray_status(status: &SharedStatus, tray_handle: &Arc<Mutex<Option<TrayHandle>>>) {
+fn refresh_and_notify(
+    status: &SharedStatus,
+    tray: &TraySlot,
+    #[cfg(feature = "notify")] policy: &mut crate::notify::NoticePolicy
+) {
     crate::status::refresh_from_device(status);
-    if let Some(handle) = tray_handle.lock().unwrap().as_ref() {
-        let h = handle.clone();
-        if let Some(rt) = RUNTIME_HANDLE.lock().unwrap().as_ref() {
-            rt.block_on(h.update(|_| {}));
+
+    #[cfg(feature = "notify")]
+    {
+        let guard = status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for notice in policy.on_status(&guard, std::time::Instant::now()) {
+            crate::notify::publish(&notice);
         }
     }
-}
 
-#[cfg(not(feature = "tray"))]
-fn refresh_tray_status(status: &SharedStatus) {
-    crate::status::refresh_from_device(status);
+    #[cfg(feature = "tray")]
+    {
+        let handle = tray
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let runtime = RUNTIME_HANDLE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let (Some(handle), Some(runtime)) = (handle, runtime) {
+            runtime.block_on(handle.update(|_| {}));
+        }
+    }
 }
 
 fn handle_rpc(request: RpcRequest, manager: &mut DevicePool) {
@@ -286,6 +252,8 @@ fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Resp
                     host
                 } => {
                     device.set_host(*host)?;
+                    #[cfg(feature = "notify")]
+                    crate::notify::host_switched(*host);
                     ipc::Response::Ok
                 }
             })
@@ -393,7 +361,6 @@ impl DevicePool {
     where
         F: FnOnce(&mut MxMaster3s) -> std::result::Result<R, masterror::AppError>
     {
-        // Reuse a cached handle when available.
         {
             let mut guard = self
                 .devices
@@ -423,7 +390,9 @@ impl DevicePool {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let device = guard.entry("discovered".to_string()).or_insert(device);
-        f(device)
+        let result = f(device);
+        drop(guard);
+        result
     }
 
     /// Drops the stored device handle for a removed hidraw path.
@@ -493,13 +462,16 @@ mod tests {
         std::thread::Builder::new()
             .name("test-worker".to_string())
             .spawn(move || {
+                #[cfg(feature = "tray")]
+                let tray: super::TraySlot = Arc::new(Mutex::new(None));
+                #[cfg(not(feature = "tray"))]
+                let tray: super::TraySlot = ();
                 run_device_worker(
                     Config::default(),
                     &rx,
                     &rpc_rx,
                     &Arc::new(Mutex::new(DeviceStatus::default())),
-                    #[cfg(feature = "tray")]
-                    &Arc::new(Mutex::new(None))
+                    &tray
                 );
             })
             .unwrap_or_else(|e| panic!("Failed to spawn test worker: {e}"))

@@ -7,5 +7,8 @@ pub mod ipc;
 pub mod status;
 pub mod worker;
 
+#[cfg(feature = "notify")]
+pub mod notify;
+
 #[cfg(feature = "tray")]
 pub mod tray;

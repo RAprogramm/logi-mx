@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(long.parameters().len(), 16);
 
         let error = HidppPacket::from_bytes(&[0x10, 0x02, 0x8F, 0x09, 0x15, 0x02, 0x00]).unwrap();
-        assert!(error.parameters().is_empty());
+        assert_eq!(error.parameters().len(), 0);
     }
 }
 

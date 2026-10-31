@@ -900,7 +900,7 @@ mod tests {
         let mut name = String::new();
         let consumed = append_name_chunk(&mut name, &[], 10);
         assert_eq!(consumed, 0);
-        assert!(name.is_empty());
+        assert_eq!(name, "");
     }
 
     #[test]

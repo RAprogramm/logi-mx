@@ -68,7 +68,7 @@ mod tests {
 
         for kind in kinds {
             let error: AppError = kind.into();
-            assert!(!error.to_string().is_empty());
+            assert_ne!(error.to_string(), "");
         }
     }
 

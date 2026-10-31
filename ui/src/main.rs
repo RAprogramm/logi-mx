@@ -7,9 +7,9 @@
 //! either the settings window ([`settings`]) or the full-screen button-mapping
 //! overlay ([`overlay`], enabled with `LOGI_MX_OVERLAY=1`).
 
-mod overlay;
-mod settings;
-mod snapshot;
+pub mod overlay;
+pub mod settings;
+pub mod snapshot;
 
 use gtk4::{CssProvider, glib, prelude::*};
 use libadwaita::Application;

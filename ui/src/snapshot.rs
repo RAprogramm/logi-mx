@@ -12,17 +12,17 @@ const DEFAULT_DPI: u16 = 1000;
 /// The UI opens the device exactly once per launch and seeds every settings
 /// group from this snapshot instead of re-opening the device four times.
 #[derive(Debug, Clone)]
-pub(crate) struct DeviceSnapshot {
+pub struct DeviceSnapshot {
     /// Marketing name reported by the device.
-    pub(crate) name:        String,
+    pub name:        String,
     /// Battery state, when the battery feature answered.
-    pub(crate) battery:     Option<BatteryInfo>,
+    pub battery:     Option<BatteryInfo>,
     /// Currently applied DPI.
-    pub(crate) dpi:         u16,
+    pub dpi:         u16,
     /// Current `SmartShift` configuration.
-    pub(crate) smartshift:  SmartShiftConfig,
+    pub smartshift:  SmartShiftConfig,
     /// Current hi-res wheel configuration.
-    pub(crate) hiresscroll: HiResScrollConfig
+    pub hiresscroll: HiResScrollConfig
 }
 
 /// Opens the device once and reads every supported property.
@@ -40,7 +40,8 @@ pub(crate) struct DeviceSnapshot {
 /// let name = device.device_name()?;
 /// # Ok::<(), masterror::AppError>(())
 /// ```
-pub(crate) fn collect_device_snapshot() -> Option<DeviceSnapshot> {
+#[must_use]
+pub fn collect_device_snapshot() -> Option<DeviceSnapshot> {
     if let Some(Response::Info {
         name,
         dpi,
@@ -71,7 +72,8 @@ pub(crate) fn collect_device_snapshot() -> Option<DeviceSnapshot> {
     collect_device_snapshot_direct()
 }
 
-pub(crate) fn parse_battery_status(status: &str) -> BatteryStatus {
+#[must_use]
+pub fn parse_battery_status(status: &str) -> BatteryStatus {
     match status {
         "Charging" => BatteryStatus::Charging,
         "Full" => BatteryStatus::Full,

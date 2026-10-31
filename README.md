@@ -151,6 +151,8 @@ Automatic ratchet-to-free-spin transition:
 - Gesture support (4 directions: up, down, left, right)
 - Button remapping stored in configuration (wire-level reprogramming in development)
 - Daemon with system tray integration and auto-refresh
+- Desktop notifications (freedesktop D-Bus): connect/disconnect, low and
+  critical battery, Easy-Switch host changes
 - GTK4/libadwaita GUI with modern ToolbarView layout
 - Automatic device discovery on Bolt receiver slots
 - Unified installer with DE detection and autostart
@@ -385,6 +387,19 @@ hl.window_rule({
 })
 ```
 
+Optional: bind the full-screen button-mapping overlay to a key:
+
+```lua
+hl.bind("SUPER", "M", hl.dsp.exec_cmd("LOGI_MX_OVERLAY=1 logi-mx-ui"))
+```
+
+`exec_cmd` runs the command outside the compositor event loop, which is the
+recommended pattern for external tools in Hyprland 0.57.
+
+Desktop notifications from the daemon use the standard
+`org.freedesktop.Notifications` D-Bus interface, so they work with any
+notification server (dunst, mako, hydrus) without extra Hyprland setup.
+
 If you still use the legacy `hyprland.conf` format:
 
 ```
@@ -436,6 +451,34 @@ logi-mx set host 1
 
 # Divert a control to HID++ notifications
 logi-mx set button 0x00C3 --divert
+```
+
+### Desktop Notifications
+
+The daemon sends freedesktop desktop notifications (D-Bus
+`org.freedesktop.Notifications`) for:
+
+| Event | Urgency |
+|-------|---------|
+| Mouse connected / disconnected | normal |
+| Battery at or below 20% | low |
+| Battery at or below 10% | critical |
+| Easy-Switch host changed | normal |
+
+Battery alerts use hysteresis: they fire once per drop, only while
+discharging, and re-arm after charging above the threshold plus 5%.
+Works with any notification server (dunst, mako, GNOME Shell, KDE Plasma,
+hydrus). Disable by building the daemon without the default `notify`
+feature: `cargo build -p logi-mx-daemon --no-default-features --features tray`.
+
+### UI and Overlay
+
+```bash
+# Settings window (Device / Pointer / Wheel tabs)
+logi-mx-ui
+
+# Full-screen button-mapping overlay
+LOGI_MX_OVERLAY=1 logi-mx-ui
 ```
 
 ### Configuration File

@@ -4,6 +4,9 @@
 #[cfg(feature = "tray")]
 mod tray;
 
+#[cfg(feature = "notify")]
+mod notify;
+
 mod ipc;
 mod status;
 mod worker;
@@ -42,7 +45,7 @@ type Result<T> = std::result::Result<T, AppError>;
 ///
 /// The tray and UI require a display server or a desktop environment. Without
 /// one the daemon still manages the device, but it must not attempt to
-/// register a StatusNotifierItem.
+/// register a `StatusNotifierItem`.
 fn has_desktop_session() -> bool {
     std::env::var("WAYLAND_DISPLAY").is_ok()
         || std::env::var("DISPLAY").is_ok()
@@ -174,18 +177,13 @@ async fn main() -> Result<()> {
     }
 
     #[cfg(feature = "tray")]
-    let tray_handle: Arc<Mutex<Option<ksni::Handle<crate::tray::LogiTrayIcon>>>> =
-        Arc::new(Mutex::new(None));
+    let tray_handle: worker::TraySlot = Arc::new(Mutex::new(None));
 
     #[cfg(not(feature = "tray"))]
-    let tray_handle: Arc<Mutex<Option<()>>> = Arc::new(Mutex::new(None));
+    let tray_handle: worker::TraySlot = ();
 
-    #[cfg(feature = "tray")]
     let (device_tx, rpc_tx, worker_handle) =
-        spawn_device_worker(config, Arc::clone(&status), Arc::clone(&tray_handle))?;
-
-    #[cfg(not(feature = "tray"))]
-    let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status))?;
+        spawn_device_worker(config, Arc::clone(&status), tray_handle.clone())?;
 
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {

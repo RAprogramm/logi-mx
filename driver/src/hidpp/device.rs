@@ -546,13 +546,13 @@ mod tests {
 
         for code in error_codes {
             let err = HidppDevice::map_hidpp_error(code);
-            assert!(!err.to_string().is_empty());
+            assert_ne!(err.to_string(), "");
         }
     }
 
     #[test]
     fn test_unknown_error_code() {
         let err = HidppDevice::map_hidpp_error(0xFF);
-        assert!(!err.to_string().is_empty());
+        assert_ne!(err.to_string(), "");
     }
 }

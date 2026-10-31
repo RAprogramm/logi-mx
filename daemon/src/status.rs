@@ -98,6 +98,7 @@ pub fn refresh_from_device(status: &SharedStatus) {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.connected = false;
             guard.error = Some(e.to_string());
+            drop(guard);
             debug!("Device not connected: {e}");
         }
     }

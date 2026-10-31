@@ -59,7 +59,7 @@ const fn scale_threshold(value: f64) -> u8 {
     narrowed
 }
 
-pub(crate) fn build_ui(app: &Application) {
+pub fn build_ui(app: &Application) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Logitech MX Master 3S")
@@ -74,27 +74,24 @@ pub(crate) fn build_ui(app: &Application) {
     let toolbar = ToolbarView::new();
     toolbar.add_top_bar(&header);
 
-    match collect_device_snapshot() {
-        Some(snapshot) => {
-            let banner = create_status_banner(&snapshot);
-            toolbar.add_top_bar(&banner);
+    if let Some(snapshot) = collect_device_snapshot() {
+        let banner = create_status_banner(&snapshot);
+        toolbar.add_top_bar(&banner);
 
-            let stack = create_connected_ui(&snapshot, &toast_overlay);
-            let switcher = ViewSwitcher::builder()
-                .stack(&stack)
-                .policy(ViewSwitcherPolicy::Wide)
-                .build();
-            header.set_title_widget(Some(&switcher));
+        let stack = create_connected_ui(&snapshot, &toast_overlay);
+        let switcher = ViewSwitcher::builder()
+            .stack(&stack)
+            .policy(ViewSwitcherPolicy::Wide)
+            .build();
+        header.set_title_widget(Some(&switcher));
 
-            toast_overlay.set_child(Some(&stack));
-        }
-        None => {
-            let title = WindowTitle::builder()
-                .title("Logitech MX Master 3S")
-                .build();
-            header.set_title_widget(Some(&title));
-            toast_overlay.set_child(Some(&create_disconnected_ui()));
-        }
+        toast_overlay.set_child(Some(&stack));
+    } else {
+        let title = WindowTitle::builder()
+            .title("Logitech MX Master 3S")
+            .build();
+        header.set_title_widget(Some(&title));
+        toast_overlay.set_child(Some(&create_disconnected_ui()));
     }
 
     toolbar.set_content(Some(&toast_overlay));
@@ -112,10 +109,10 @@ pub(crate) fn build_ui(app: &Application) {
 }
 
 fn create_status_banner(snapshot: &DeviceSnapshot) -> Banner {
-    let battery_text = snapshot
-        .battery
-        .map(|b| format!("{}% · {:?}", b.level, b.status))
-        .unwrap_or_else(|| "unknown".to_string());
+    let battery_text = snapshot.battery.map_or_else(
+        || "unknown".to_string(),
+        |b| format!("{}% · {:?}", b.level, b.status)
+    );
     let banner = Banner::new(&format!(
         "Connected: {} · Battery: {} · DPI: {}",
         snapshot.name, battery_text, snapshot.dpi

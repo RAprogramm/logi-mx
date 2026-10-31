@@ -91,7 +91,7 @@ fn test_gesture_direction() {
 fn test_device_config_validation() {
     let config = DeviceConfig::default();
 
-    assert!(!config.name.is_empty());
+    assert_ne!(config.name, "");
     assert!(config.dpi > 0);
     assert!(config.dpi <= 8000);
 }
