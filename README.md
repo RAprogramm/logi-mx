@@ -372,10 +372,22 @@ sudo apt install cargo libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev l
 
 ### Hyprland Configuration
 
-For Hyprland users, add these window rules to `~/.config/hypr/hyprland.conf` for optimal UI experience:
+Hyprland 0.55+ uses Lua configuration (`~/.config/hypr/hyprland.lua`).
+Add these window rules for optimal UI experience:
+
+```lua
+-- Logitech MX Master 3S Configuration Window
+hl.window_rule({
+    name  = "logi-mx-ui",
+    match = { title = "^Logitech MX Master 3S$" },
+    float = true,
+    center = true,
+})
+```
+
+If you still use the legacy `hyprland.conf` format:
 
 ```
-# Logitech MX Master 3S Configuration Window
 windowrulev2 = float, title:(Logitech MX Master 3S)
 windowrulev2 = center, title:(Logitech MX Master 3S)
 ```
