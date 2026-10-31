@@ -36,6 +36,16 @@ enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigCommands
+    },
+
+    Autostart {
+        #[command(subcommand)]
+        action: AutostartCommands
+    },
+
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonCommands
     }
 }
 
@@ -59,6 +69,17 @@ enum SetCommands {
 
         #[arg(long)]
         inverted: bool
+    },
+
+    Button {
+        /// Control ID, e.g. 0x00C3 for the gesture button
+        control_id: u16,
+
+        #[arg(long)]
+        divert: bool,
+
+        #[arg(long)]
+        raw_xy: bool
     }
 }
 
@@ -71,6 +92,19 @@ enum ConfigCommands {
     Export { path: String },
 
     Import { path: String }
+}
+
+#[derive(Subcommand)]
+enum AutostartCommands {
+    Install,
+    Uninstall,
+    Status
+}
+
+#[derive(Subcommand)]
+enum DaemonCommands {
+    Status,
+    Ping
 }
 
 fn main() -> Result<()> {
@@ -91,7 +125,13 @@ fn main() -> Result<()> {
         } => cmd_set(setting),
         Commands::Config {
             action
-        } => cmd_config(action)
+        } => cmd_config(action),
+        Commands::Autostart {
+            action
+        } => cmd_autostart(action),
+        Commands::Daemon {
+            action
+        } => cmd_daemon(action)
     }
 }
 
@@ -464,6 +504,35 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 }
             }
         }
+        SetCommands::Button {
+            control_id,
+            divert,
+            raw_xy
+        } => {
+            info!("Configuring button {control_id:#06x}: divert={divert}, raw_xy={raw_xy}");
+            match try_request(&Request::SetButtonDivert {
+                control_id,
+                divert,
+                raw_xy
+            }) {
+                Some(Response::Ok) => {
+                    writeln!(out, "Button {control_id:#06x} divert: {divert}")
+                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                }
+                Some(Response::Error {
+                    message
+                }) => {
+                    return Err(AppError::internal(message));
+                }
+                _ => {
+                    warn!("Daemon unavailable, falling back to direct device access");
+                    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
+                    device.set_control_divert(control_id, divert, raw_xy)?;
+                    writeln!(out, "Button {control_id:#06x} divert: {divert}")
+                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                }
+            }
+        }
     }
 
     out.flush()
@@ -515,5 +584,80 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
     out.flush()
         .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
 
+    Ok(())
+}
+
+fn cmd_autostart(action: AutostartCommands) -> Result<()> {
+    let home = std::env::var("HOME")
+        .map_err(|e| AppError::internal("HOME not set").with_source(e))?;
+    let service_dir = std::path::PathBuf::from(&home)
+        .join(".config")
+        .join("systemd")
+        .join("user");
+    let service_path = service_dir.join("logi-mx-daemon.service");
+    let service_unit = include_str!("../../logi-mx-daemon.service");
+
+    match action {
+        AutostartCommands::Install => {
+            std::fs::create_dir_all(&service_dir)
+                .map_err(|e| AppError::internal("Failed to create systemd user dir").with_source(e))?;
+            std::fs::write(&service_path, service_unit)
+                .map_err(|e| AppError::internal("Failed to write service file").with_source(e))?;
+
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .status();
+            let status = std::process::Command::new("systemctl")
+                .args(["--user", "enable", "--now", "logi-mx-daemon.service"])
+                .status()
+                .map_err(|e| AppError::internal("Failed to run systemctl").with_source(e))?;
+            if !status.success() {
+                return Err(AppError::internal("Failed to enable daemon service"));
+            }
+            println!("Autostart installed and daemon started.");
+        }
+        AutostartCommands::Uninstall => {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "disable", "--now", "logi-mx-daemon.service"])
+                .status();
+            let _ = std::fs::remove_file(&service_path);
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .status();
+            println!("Autostart removed.");
+        }
+        AutostartCommands::Status => {
+            let status = std::process::Command::new("systemctl")
+                .args(["--user", "is-active", "logi-mx-daemon.service"])
+                .status()
+                .map_err(|e| AppError::internal("Failed to run systemctl").with_source(e))?;
+            if status.success() {
+                println!("Daemon is active.");
+            } else {
+                println!("Daemon is not active.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_daemon(action: DaemonCommands) -> Result<()> {
+    match action {
+        DaemonCommands::Status => {
+            if let Some(Response::Pong) = try_request(&Request::Ping) {
+                println!("Daemon is running.");
+            } else {
+                println!("Daemon is not running.");
+            }
+        }
+        DaemonCommands::Ping => {
+            if try_request(&Request::Ping).is_some() {
+                println!("pong");
+            } else {
+                println!("no daemon");
+            }
+        }
+    }
     Ok(())
 }

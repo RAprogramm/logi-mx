@@ -76,6 +76,15 @@ pub enum Request {
         enabled:  bool,
         /// Inverted flag.
         inverted: bool
+    },
+    /// Divert a programmable control to HID++ notifications.
+    SetButtonDivert {
+        /// HID++ control ID.
+        control_id: u16,
+        /// Whether to divert the control.
+        divert:     bool,
+        /// Whether to also stream raw XY deltas.
+        raw_xy:     bool
     }
 }
 

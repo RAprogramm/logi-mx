@@ -199,6 +199,14 @@ fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Resp
                 device.set_hires_scroll(cfg)?;
                 ipc::Response::Ok
             }
+            ipc::Request::SetButtonDivert {
+                control_id,
+                divert,
+                raw_xy
+            } => {
+                device.set_control_divert(*control_id, *divert, *raw_xy)?;
+                ipc::Response::Ok
+            }
         })
     }) {
         Ok(response) => response,

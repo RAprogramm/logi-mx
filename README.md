@@ -372,6 +372,15 @@ logi-mx set hires --enabled
 
 # Get battery status
 logi-mx battery
+
+# Check daemon status
+logi-mx daemon status
+logi-mx daemon ping
+
+# Enable autostart
+logi-mx autostart install
+logi-mx autostart status
+logi-mx autostart uninstall
 ```
 
 ### Configuration File
