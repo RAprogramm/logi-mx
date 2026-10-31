@@ -300,13 +300,14 @@ impl LogiTrayIcon {
 /// # Errors
 ///
 /// Returns a human-readable error string when the tray cannot be registered.
-pub async fn spawn_tray(status: SharedStatus) -> std::result::Result<(), String> {
+pub async fn spawn_tray(
+    status: SharedStatus
+) -> std::result::Result<ksni::Handle<LogiTrayIcon>, String> {
     let tray_icon = LogiTrayIcon::from_status(status);
 
     tray_icon
         .spawn()
         .await
-        .map(|_| ())
         .map_err(|e| format!("Failed to spawn tray: {e}"))
 }
 

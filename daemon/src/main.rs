@@ -156,7 +156,26 @@ async fn main() -> Result<()> {
     });
 
     let status: SharedStatus = Arc::new(Mutex::new(DeviceStatus::default()));
-    let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status))?;
+
+    #[cfg(feature = "tray")]
+    {
+        crate::worker::set_runtime_handle(tokio::runtime::Handle::current());
+    }
+
+    #[cfg(feature = "tray")]
+    let tray_handle: Arc<Mutex<Option<ksni::Handle<crate::tray::LogiTrayIcon>>>> =
+        Arc::new(Mutex::new(None));
+
+    #[cfg(not(feature = "tray"))]
+    let tray_handle: Arc<Mutex<Option<()>>> = Arc::new(Mutex::new(None));
+
+    #[cfg(feature = "tray")]
+    let (device_tx, rpc_tx, worker_handle) =
+        spawn_device_worker(config, Arc::clone(&status), Arc::clone(&tray_handle))?;
+
+    #[cfg(not(feature = "tray"))]
+    let (device_tx, rpc_tx, worker_handle) =
+        spawn_device_worker(config, Arc::clone(&status))?;
 
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {
@@ -167,7 +186,10 @@ async fn main() -> Result<()> {
 
     #[cfg(feature = "tray")]
     match spawn_tray(Arc::clone(&status)).await {
-        Ok(()) => info!("System tray initialized"),
+        Ok(handle) => {
+            *tray_handle.lock().unwrap() = Some(handle);
+            info!("System tray initialized");
+        }
         Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
     }
 

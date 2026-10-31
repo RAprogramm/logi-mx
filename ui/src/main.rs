@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-use gtk4::{Box, Button, Image, Orientation, Scale, Switch, glib, prelude::*};
+use gtk4::{Box, Button, Orientation, Scale, Switch, glib, prelude::*};
 use libadwaita::{
     ActionRow, Application, ApplicationWindow, Clamp, HeaderBar, PreferencesGroup,
     PreferencesPage, StatusPage, Toast, ToastOverlay, prelude::*
@@ -20,6 +20,14 @@ const SMARTSHIFT_STEP: f64 = 1.0;
 const WIDGET_WIDTH: i32 = 400;
 const DEFAULT_DEVICE_NAME: &str = "MX Master 3S";
 const DEFAULT_DPI: u16 = 1000;
+
+/// Creates an icon image with consistent vertical alignment to avoid GTK
+/// baseline warnings and keep rows visually balanced.
+fn icon(name: &str) -> gtk4::Image {
+    let image = gtk4::Image::from_icon_name(name);
+    image.set_valign(gtk4::Align::Center);
+    image
+}
 
 /// One-shot device state collected at startup.
 ///
@@ -252,12 +260,12 @@ fn create_device_info_group(name: &str) -> PreferencesGroup {
     group.set_title("Device Information");
 
     let name_row = ActionRow::new();
-    name_row.add_prefix(&Image::from_icon_name("input-mouse-symbolic"));
+    name_row.add_prefix(&icon("input-mouse-symbolic"));
     name_row.set_title("Device");
     name_row.set_subtitle(name);
 
     let connection_row = ActionRow::new();
-    connection_row.add_prefix(&Image::from_icon_name("network-wireless-symbolic"));
+    connection_row.add_prefix(&icon("network-wireless-symbolic"));
     connection_row.set_title("Connection");
     connection_row.set_subtitle("Bolt Receiver");
 
@@ -275,7 +283,7 @@ fn create_battery_group(
     group.set_title("Battery");
     group.set_description(Some("Monitor battery status and charging"));
 
-    let battery_icon = Image::from_icon_name("battery-symbolic");
+    let battery_icon = icon("battery-symbolic");
     let battery_row = ActionRow::new();
     battery_row.add_prefix(&battery_icon);
     battery_row.set_title("Battery Level");
@@ -351,7 +359,7 @@ fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> 
     let current_dpi = snapshot.dpi;
 
     let dpi_row = ActionRow::new();
-    dpi_row.add_prefix(&Image::from_icon_name(
+    dpi_row.add_prefix(&icon(
         "preferences-desktop-pointing-symbolic"
     ));
     dpi_row.set_title("Current DPI");
@@ -431,7 +439,7 @@ fn create_smartshift_group(
     let current_config = snapshot.smartshift;
 
     let switch_row = ActionRow::new();
-    switch_row.add_prefix(&Image::from_icon_name("weather-windy-symbolic"));
+    switch_row.add_prefix(&icon("weather-windy-symbolic"));
     switch_row.set_title("Enable SmartShift");
     switch_row.set_subtitle("Auto-switch based on scroll speed");
 
@@ -532,7 +540,7 @@ fn create_scroll_group(
     let current_config = snapshot.hiresscroll;
 
     let hires_row = ActionRow::new();
-    hires_row.add_prefix(&Image::from_icon_name("view-continuous-symbolic"));
+    hires_row.add_prefix(&icon("view-continuous-symbolic"));
     hires_row.set_title("Hi-Res Scrolling");
     hires_row.set_subtitle("Smooth pixel-precise scrolling");
 
@@ -543,7 +551,7 @@ fn create_scroll_group(
     hires_row.set_activatable_widget(Some(&hires_switch));
 
     let inverted_row = ActionRow::new();
-    inverted_row.add_prefix(&Image::from_icon_name("object-flip-vertical-symbolic"));
+    inverted_row.add_prefix(&icon("object-flip-vertical-symbolic"));
     inverted_row.set_title("Natural Scrolling");
     inverted_row.set_subtitle("Invert scroll direction");
 

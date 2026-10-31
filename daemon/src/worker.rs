@@ -22,6 +22,12 @@ use crate::{
     status::SharedStatus
 };
 
+#[cfg(feature = "tray")]
+use std::sync::Arc;
+
+#[cfg(feature = "tray")]
+use tokio::runtime::Handle as TokioHandle;
+
 /// Interval between periodic tray status refreshes.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -48,17 +54,31 @@ pub enum DeviceEvent {
 /// # Errors
 ///
 /// Returns an internal error if the worker thread cannot be spawned.
+#[cfg(feature = "tray")]
+type TrayHandle = ksni::Handle<crate::tray::LogiTrayIcon>;
+
+#[cfg(feature = "tray")]
+static RUNTIME_HANDLE: Mutex<Option<TokioHandle>> = Mutex::new(None);
+
+#[cfg(feature = "tray")]
+pub fn set_runtime_handle(handle: TokioHandle) {
+    *RUNTIME_HANDLE.lock().unwrap() = Some(handle);
+}
+
+#[cfg(feature = "tray")]
 pub fn spawn_device_worker(
     config: Config,
-    status: SharedStatus
-) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
-{
+    status: SharedStatus,
+    tray_handle: Arc<Mutex<Option<TrayHandle>>>
+) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError> {
     let (tx, rx) = mpsc::channel();
     let (rpc_tx, rpc_rx) = mpsc::channel();
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
-        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status))
+        .spawn(move || {
+            run_device_worker(config, &rx, &rpc_rx, &status, &tray_handle)
+        })
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
@@ -66,28 +86,38 @@ pub fn spawn_device_worker(
     Ok((tx, rpc_tx, handle))
 }
 
-/// Runs the device worker event loop until the command channel closes.
-///
-/// With the `tray` feature the shared status is refreshed on startup and
-/// every [`REFRESH_INTERVAL`]; without it the status handle is accepted but
-/// left untouched because nothing subscribes to it.
-#[cfg_attr(
-    not(feature = "tray"),
-    allow(
-        unused_variables,
-        reason = "the status handle is only consumed by the tray refresh"
-    )
-)]
+#[cfg(not(feature = "tray"))]
+pub fn spawn_device_worker(
+    config: Config,
+    status: SharedStatus
+) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError> {
+    let (tx, rx) = mpsc::channel();
+    let (rpc_tx, rpc_rx) = mpsc::channel();
+
+    let handle = std::thread::Builder::new()
+        .name("logi-mx-device-worker".to_string())
+        .spawn(move || {
+            run_device_worker(config, &rx, &rpc_rx, &status)
+        })
+        .map_err(|e| {
+            masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
+        })?;
+
+    Ok((tx, rpc_tx, handle))
+}
+
+#[cfg(feature = "tray")]
 fn run_device_worker(
     config: Config,
     rx: &mpsc::Receiver<DeviceEvent>,
     rpc_rx: &mpsc::Receiver<RpcRequest>,
-    status: &SharedStatus
+    status: &SharedStatus,
+    tray_handle: &Arc<Mutex<Option<TrayHandle>>>
 ) {
     let mut manager = DevicePool::new(config);
 
     #[cfg(feature = "tray")]
-    refresh_tray_status(status);
+    refresh_tray_status(status, tray_handle);
 
     let mut last_refresh = std::time::Instant::now();
 
@@ -102,7 +132,7 @@ fn run_device_worker(
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if last_refresh.elapsed() >= REFRESH_INTERVAL {
                     #[cfg(feature = "tray")]
-                    refresh_tray_status(status);
+                    refresh_tray_status(status, tray_handle);
 
                     #[cfg(not(feature = "tray"))]
                     let _ = status;
@@ -121,10 +151,61 @@ fn run_device_worker(
     debug!("Device worker stopped");
 }
 
+#[cfg(not(feature = "tray"))]
+fn run_device_worker(
+    config: Config,
+    rx: &mpsc::Receiver<DeviceEvent>,
+    rpc_rx: &mpsc::Receiver<RpcRequest>,
+    status: &SharedStatus
+) {
+    let mut manager = DevicePool::new(config);
+
+    let mut last_refresh = std::time::Instant::now();
+
+    loop {
+        while let Ok(req) = rpc_rx.try_recv() {
+            handle_rpc(req, &mut manager);
+        }
+
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(DeviceEvent::Added(path)) => manager.handle_device_added(path),
+            Ok(DeviceEvent::Removed(path)) => manager.handle_device_removed(&path),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if last_refresh.elapsed() >= REFRESH_INTERVAL {
+                    let _ = status;
+                    last_refresh = std::time::Instant::now();
+                }
+
+                while let Ok(req) = rpc_rx.try_recv() {
+                    handle_rpc(req, &mut manager);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break
+        }
+    }
+
+    debug!("Device worker stopped");
+}
+
 /// Queries the device and republishes the shared status snapshot.
 ///
 /// Runs on the worker thread; blocking HID++ I/O is expected here.
 #[cfg(feature = "tray")]
+#[cfg(feature = "tray")]
+fn refresh_tray_status(
+    status: &SharedStatus,
+    tray_handle: &Arc<Mutex<Option<TrayHandle>>>
+) {
+    crate::status::refresh_from_device(status);
+    if let Some(handle) = tray_handle.lock().unwrap().as_ref() {
+        let h = handle.clone();
+        if let Some(rt) = RUNTIME_HANDLE.lock().unwrap().as_ref() {
+            rt.block_on(h.update(|_| {}));
+        }
+    }
+}
+
+#[cfg(not(feature = "tray"))]
 fn refresh_tray_status(status: &SharedStatus) {
     crate::status::refresh_from_device(status);
 }
@@ -421,7 +502,9 @@ mod tests {
                     Config::default(),
                     &rx,
                     &rpc_rx,
-                    &Arc::new(Mutex::new(DeviceStatus::default()))
+                    &Arc::new(Mutex::new(DeviceStatus::default())),
+                    #[cfg(feature = "tray")]
+                    &Arc::new(Mutex::new(None)),
                 );
             })
             .unwrap_or_else(|e| panic!("Failed to spawn test worker: {e}"))
