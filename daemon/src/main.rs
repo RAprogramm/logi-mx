@@ -38,6 +38,17 @@ use crate::{
 
 type Result<T> = std::result::Result<T, AppError>;
 
+/// Reports whether a graphical desktop session is available.
+///
+/// The tray and UI require a display server or a desktop environment. Without
+/// one the daemon still manages the device, but it must not attempt to
+/// register a StatusNotifierItem.
+fn has_desktop_session() -> bool {
+    std::env::var("WAYLAND_DISPLAY").is_ok()
+        || std::env::var("DISPLAY").is_ok()
+        || std::env::var("XDG_CURRENT_DESKTOP").is_ok()
+}
+
 fn lock_file_path(suffix: Option<&str>) -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
@@ -185,25 +196,16 @@ async fn main() -> Result<()> {
     });
 
     #[cfg(feature = "tray")]
-    {
-        let tray_handle = Arc::clone(&tray_handle);
-        let status = Arc::clone(&status);
-        tokio::spawn(async move {
-            loop {
-                if tray_handle.lock().unwrap().is_none() {
-                    match spawn_tray(Arc::clone(&status)).await {
-                        Ok(handle) => {
-                            *tray_handle.lock().unwrap() = Some(handle);
-                            info!("System tray initialized");
-                        }
-                        Err(e) => {
-                            warn!("Failed to initialize tray: {e}. Retrying in 5s.");
-                        }
-                    }
-                }
-                tokio::time::sleep(Duration::from_secs(5)).await;
+    if has_desktop_session() {
+        match spawn_tray(Arc::clone(&status)).await {
+            Ok(handle) => {
+                *tray_handle.lock().unwrap() = Some(handle);
+                info!("System tray initialized");
             }
-        });
+            Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
+        }
+    } else {
+        info!("No desktop session detected, skipping tray");
     }
 
     let (tx, mut rx) = mpsc::channel::<UdevEvent>(32);

@@ -197,13 +197,11 @@ fn refresh_tray_status(
     tray_handle: &Arc<Mutex<Option<TrayHandle>>>
 ) {
     crate::status::refresh_from_device(status);
-    let updated = tray_handle.lock().unwrap().as_ref().map(|handle| {
+    if let Some(handle) = tray_handle.lock().unwrap().as_ref() {
         let h = handle.clone();
-        RUNTIME_HANDLE.lock().unwrap().as_ref().map(|rt| rt.block_on(h.update(|_| {})))
-    });
-    if let Some(Some(None)) = updated {
-        warn!("Tray service is gone, requesting re-registration");
-        *tray_handle.lock().unwrap() = None;
+        if let Some(rt) = RUNTIME_HANDLE.lock().unwrap().as_ref() {
+            rt.block_on(h.update(|_| {}));
+        }
     }
 }
 

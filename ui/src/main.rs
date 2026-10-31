@@ -157,6 +157,11 @@ const fn scale_threshold(value: f64) -> u8 {
 }
 
 fn main() -> glib::ExitCode {
+    if std::env::var("WAYLAND_DISPLAY").is_err() && std::env::var("DISPLAY").is_err() {
+        eprintln!("No graphical session detected; logi-mx-ui requires Wayland or X11");
+        return glib::ExitCode::FAILURE;
+    }
+
     let app = Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| load_css());
     if std::env::var("LOGI_MX_OVERLAY").is_ok() {

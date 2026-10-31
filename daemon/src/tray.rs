@@ -144,6 +144,10 @@ impl Tray for LogiTrayIcon {
         Category::Hardware
     }
 
+    fn watcher_online(&self) {
+        crate::status::refresh_from_device(&self.status);
+    }
+
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let snapshot = self.lock_status().clone();
 
@@ -306,6 +310,7 @@ pub async fn spawn_tray(
     let tray_icon = LogiTrayIcon::from_status(status);
 
     tray_icon
+        .assume_sni_available(true)
         .spawn()
         .await
         .map_err(|e| format!("Failed to spawn tray: {e}"))
