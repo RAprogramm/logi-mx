@@ -38,11 +38,13 @@ package() {
     # Install systemd user service
     install -Dm644 logi-mx-daemon.service "$pkgdir/usr/lib/systemd/user/logi-mx-daemon.service"
 
-    # Install desktop file
+    # Install desktop files
     install -Dm644 logi-mx-daemon.desktop "$pkgdir/usr/share/applications/logi-mx-daemon.desktop"
+    install -Dm644 logi-mx-ui.desktop "$pkgdir/usr/share/applications/logi-mx-ui.desktop"
 
     # Install documentation
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgname/CHANGELOG.md"
 
     # Install license
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

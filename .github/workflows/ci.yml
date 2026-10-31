@@ -523,6 +523,8 @@ jobs:
           cp target/release/logi-mx-ui release/
           cp 90-logi-mx.rules release/
           cp logi-mx-daemon.service release/
+          cp logi-mx-daemon.desktop release/
+          cp logi-mx-ui.desktop release/
           cp README.md LICENSE release/
           tar -czf "logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz" -C release .
       - name: Generate SHA-256 checksum
