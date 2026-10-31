@@ -1,5 +1,18 @@
 # Installation Guide
 
+## Unified Installer
+
+```bash
+# Build and install to /usr/local, enable autostart automatically
+sudo ./scripts/install.sh
+
+# Or install to ~/.local
+PREFIX=~/.local ./scripts/install.sh
+```
+
+The installer detects the desktop environment and configures tray/UI autostart
+when appropriate.
+
 ## Quick Install (Local Build)
 
 ```bash

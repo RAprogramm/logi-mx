@@ -145,12 +145,15 @@ Automatic ratchet-to-free-spin transition:
 - DPI configuration (200-8000 in 50 DPI increments)
 - SmartShift auto-disengage tuning (threshold 1-255)
 - Hi-res scroll control
-- Battery monitoring with charge level
+- Battery monitoring with charge level and level bar
+- Easy-Switch host switching (`logi-mx set host <index>`)
+- Button divert control (`logi-mx set button <id> --divert`)
 - Gesture support (4 directions: up, down, left, right)
 - Button remapping stored in configuration (wire-level reprogramming in development)
-- Daemon with system tray integration
-- GTK4/libadwaita GUI
+- Daemon with system tray integration and auto-refresh
+- GTK4/libadwaita GUI with modern ToolbarView layout
 - Automatic device discovery on Bolt receiver slots
+- Unified installer with DE detection and autostart
 
 **Supported Devices**
 - Logitech MX Master 3S (USB, Bluetooth, Bolt receiver)
@@ -321,6 +324,40 @@ systemctl --user enable --now logi-mx-daemon
 # Logout and login for group changes to take effect
 ```
 
+### Unified Installer
+
+The installer detects the desktop environment and configures the appropriate
+components automatically:
+
+```bash
+# Build and install to /usr/local (requires sudo for udev rules)
+sudo ./scripts/install.sh
+
+# Or install to a custom prefix
+PREFIX=~/.local ./scripts/install.sh
+
+# Disable autostart prompt
+AUTO_START=no ./scripts/install.sh
+```
+
+It installs binaries, udev rules, systemd user service, and (when a DE is
+detected) tray/UI autostart entries.
+
+### Justfile
+
+For local development and maintenance:
+
+```bash
+just build
+just test
+just clippy
+just deny
+just check
+just install
+just run-daemon
+just run-ui
+```
+
 ### Dependencies
 
 **Arch Linux:**
@@ -381,6 +418,12 @@ logi-mx daemon ping
 logi-mx autostart install
 logi-mx autostart status
 logi-mx autostart uninstall
+
+# Switch Easy-Switch host
+logi-mx set host 1
+
+# Divert a control to HID++ notifications
+logi-mx set button 0x00C3 --divert
 ```
 
 ### Configuration File
