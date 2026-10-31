@@ -4,7 +4,7 @@
 use gtk4::{glib, prelude::*, Box, Button, Orientation, Scale, Switch};
 use libadwaita::{
     prelude::*, ActionRow, Application, ApplicationWindow, Clamp, HeaderBar, PreferencesGroup,
-    PreferencesPage, StatusPage, Toast, ToastOverlay,
+    PreferencesPage, StatusPage, Toast, ToastOverlay, ToolbarView, WindowTitle,
 };
 use logi_mx_daemon::ipc::{try_request, Request, Response};
 use logi_mx_driver::prelude::*;
@@ -166,22 +166,27 @@ fn build_ui(app: &Application) {
 
     let header = HeaderBar::new();
     header.set_show_end_title_buttons(true);
+    let title = WindowTitle::builder()
+        .title("Logitech MX Master 3S")
+        .build();
+    header.set_title_widget(Some(&title));
 
     let toast_overlay = ToastOverlay::new();
 
     // Collect a single device snapshot instead of opening the device in
     // every settings group
-    let content = collect_device_snapshot().map_or_else(create_disconnected_ui, |snapshot| {
-        create_connected_ui(&snapshot, &toast_overlay)
-    });
+    let content: gtk4::Widget = match collect_device_snapshot() {
+        Some(snapshot) => create_connected_ui(&snapshot, &toast_overlay).upcast(),
+        None => create_disconnected_ui().upcast(),
+    };
 
     toast_overlay.set_child(Some(&content));
 
-    let main_box = Box::new(Orientation::Vertical, 0);
-    main_box.append(&header);
-    main_box.append(&toast_overlay);
+    let toolbar = ToolbarView::new();
+    toolbar.add_top_bar(&header);
+    toolbar.set_content(Some(&toast_overlay));
 
-    window.set_content(Some(&main_box));
+    window.set_content(Some(&toolbar));
 
     // Ensure application exits when window is closed
     let app_weak = app.downgrade();
@@ -195,21 +200,21 @@ fn build_ui(app: &Application) {
     window.present();
 }
 
-fn create_disconnected_ui() -> Box {
+fn create_disconnected_ui() -> StatusPage {
     let status_page = StatusPage::new();
     status_page.set_icon_name(Some("input-mouse-symbolic"));
     status_page.set_title("Device Not Connected");
     status_page.set_description(Some(
         "Please connect your Logitech MX Master 3S via Bolt receiver",
     ));
-
-    let main_box = Box::new(Orientation::Vertical, 0);
-    main_box.append(&status_page);
-    main_box.set_vexpand(true);
-    main_box
+    status_page.set_vexpand(true);
+    status_page
 }
 
-fn create_connected_ui(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> Box {
+fn create_connected_ui(
+    snapshot: &DeviceSnapshot,
+    toast_overlay: &ToastOverlay,
+) -> gtk4::ScrolledWindow {
     let scrolled = gtk4::ScrolledWindow::new();
     scrolled.set_vexpand(true);
     scrolled.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
@@ -224,32 +229,24 @@ fn create_connected_ui(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) 
     prefs_page.set_margin_start(12);
     prefs_page.set_margin_end(12);
 
-    // Device Info
     let device_info = create_device_info_group(&snapshot.name);
     prefs_page.add(&device_info);
 
-    // Battery
     let battery_group = create_battery_group(snapshot, toast_overlay);
     prefs_page.add(&battery_group);
 
-    // DPI
     let dpi_group = create_dpi_group(snapshot, toast_overlay);
     prefs_page.add(&dpi_group);
 
-    // SmartShift
     let smartshift_group = create_smartshift_group(snapshot, toast_overlay);
     prefs_page.add(&smartshift_group);
 
-    // Scroll
     let scroll_group = create_scroll_group(snapshot, toast_overlay);
     prefs_page.add(&scroll_group);
 
     clamp.set_child(Some(&prefs_page));
     scrolled.set_child(Some(&clamp));
-
-    let main_box = Box::new(Orientation::Vertical, 0);
-    main_box.append(&scrolled);
-    main_box
+    scrolled
 }
 
 fn create_device_info_group(name: &str) -> PreferencesGroup {
