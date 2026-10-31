@@ -4,15 +4,15 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use gtk4::{
-    glib, prelude::*, Box, Button, CssProvider, GestureClick, Label, Orientation, Scale, Switch,
+    Box, Button, CssProvider, GestureClick, Label, Orientation, Scale, Switch, glib, prelude::*
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
-    prelude::*, ActionRow, Application, ApplicationWindow, Banner, HeaderBar, PreferencesGroup,
+    ActionRow, Application, ApplicationWindow, Banner, HeaderBar, PreferencesGroup,
     PreferencesPage, StatusPage, Toast, ToastOverlay, ToolbarView, ViewStack, ViewSwitcher,
-    ViewSwitcherPolicy, WindowTitle,
+    ViewSwitcherPolicy, WindowTitle, prelude::*
 };
-use logi_mx_daemon::ipc::{try_request, Request, Response};
+use logi_mx_daemon::ipc::{Request, Response, try_request};
 use logi_mx_driver::prelude::*;
 
 const APP_ID: &str = "com.logitech.mx.configurator";
@@ -42,15 +42,15 @@ fn icon(name: &str) -> gtk4::Image {
 #[derive(Debug, Clone)]
 struct DeviceSnapshot {
     /// Marketing name reported by the device.
-    name: String,
+    name:        String,
     /// Battery state, when the battery feature answered.
-    battery: Option<BatteryInfo>,
+    battery:     Option<BatteryInfo>,
     /// Currently applied DPI.
-    dpi: u16,
+    dpi:         u16,
     /// Current `SmartShift` configuration.
-    smartshift: SmartShiftConfig,
+    smartshift:  SmartShiftConfig,
     /// Current hi-res wheel configuration.
-    hiresscroll: HiResScrollConfig,
+    hiresscroll: HiResScrollConfig
 }
 
 /// Opens the device once and reads every supported property.
@@ -73,15 +73,18 @@ fn collect_device_snapshot() -> Option<DeviceSnapshot> {
         name,
         dpi,
         smartshift,
-        hires,
+        hires
     }) = try_request(&Request::Info)
     {
         let battery = try_request(&Request::Battery).and_then(|r| match r {
-            Response::Battery { level, status } => Some(BatteryInfo {
+            Response::Battery {
                 level,
-                status: parse_battery_status(&status),
+                status
+            } => Some(BatteryInfo {
+                level,
+                status: parse_battery_status(&status)
             }),
-            _ => None,
+            _ => None
         });
 
         return Some(DeviceSnapshot {
@@ -89,7 +92,7 @@ fn collect_device_snapshot() -> Option<DeviceSnapshot> {
             battery,
             dpi,
             smartshift,
-            hiresscroll: hires,
+            hiresscroll: hires
         });
     }
 
@@ -101,7 +104,7 @@ fn parse_battery_status(status: &str) -> BatteryStatus {
         "Charging" => BatteryStatus::Charging,
         "Full" => BatteryStatus::Full,
         "Discharging" => BatteryStatus::Discharging,
-        _ => BatteryStatus::Unknown,
+        _ => BatteryStatus::Unknown
     }
 }
 
@@ -121,7 +124,7 @@ fn collect_device_snapshot_direct() -> Option<DeviceSnapshot> {
         battery,
         dpi,
         smartshift,
-        hiresscroll,
+        hiresscroll
     })
 }
 
@@ -186,12 +189,12 @@ fn load_css() {
         .level-bar {
             min-height: 8px;
         }
-        ",
+        "
     );
     gtk4::style_context_add_provider_for_display(
         &gtk4::gdk::Display::default().expect("could not connect to display"),
         &provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION
     );
 }
 
@@ -267,7 +270,7 @@ fn create_disconnected_ui() -> StatusPage {
     status_page.set_icon_name(Some("input-mouse-symbolic"));
     status_page.set_title("Device Not Connected");
     status_page.set_description(Some(
-        "Please connect your Logitech MX Master 3S via Bolt receiver",
+        "Please connect your Logitech MX Master 3S via Bolt receiver"
     ));
     status_page.set_vexpand(true);
     status_page
@@ -318,7 +321,7 @@ fn create_device_info_group(name: &str) -> PreferencesGroup {
 
 fn create_battery_group(
     snapshot: &DeviceSnapshot,
-    toast_overlay: &ToastOverlay,
+    toast_overlay: &ToastOverlay
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Battery");
@@ -343,7 +346,7 @@ fn create_battery_group(
             battery_row.set_subtitle(&format!("{}% · {:?}", battery.level, battery.status));
             battery_bar.set_value(f64::from(battery.level));
         }
-        None => battery_row.set_subtitle("Unable to read"),
+        None => battery_row.set_subtitle("Unable to read")
     }
 
     let refresh_btn = Button::with_label("Refresh");
@@ -354,7 +357,10 @@ fn create_battery_group(
     let bb = battery_bar.clone();
     let to = toast_overlay.clone();
     refresh_btn.connect_clicked(move |_| match try_request(&Request::Battery) {
-        Some(Response::Battery { level, status }) => {
+        Some(Response::Battery {
+            level,
+            status
+        }) => {
             let status_enum = parse_battery_status(&status);
             bi.set_icon_name(Some(battery_icon_name(level)));
             br.set_subtitle(&format!("{level}% · {status_enum:?}"));
@@ -363,7 +369,9 @@ fn create_battery_group(
             let toast = Toast::new("Battery status updated");
             to.add_toast(toast);
         }
-        Some(Response::Error { message }) => {
+        Some(Response::Error {
+            message
+        }) => {
             let toast = Toast::new(&format!("Failed to refresh battery: {message}"));
             to.add_toast(toast);
         }
@@ -390,7 +398,7 @@ const fn battery_icon_name(level: u8) -> &'static str {
         41..=60 => "battery-level-40-symbolic",
         61..=80 => "battery-level-60-symbolic",
         81..=90 => "battery-level-80-symbolic",
-        _ => "battery-level-100-symbolic",
+        _ => "battery-level-100-symbolic"
     }
 }
 
@@ -441,12 +449,16 @@ fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> 
     let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
         let dpi = scale_dpi(sc.value());
-        match try_request(&Request::SetDpi { value: dpi }) {
+        match try_request(&Request::SetDpi {
+            value: dpi
+        }) {
             Some(Response::Ok) => {
                 let toast = Toast::new(&format!("DPI set to {dpi}"));
                 to.add_toast(toast);
             }
-            Some(Response::Error { message }) => {
+            Some(Response::Error {
+                message
+            }) => {
                 let toast = Toast::new(&format!("Failed to set DPI: {message}"));
                 to.add_toast(toast);
             }
@@ -471,12 +483,12 @@ fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> 
 /// Builds the `SmartShift` toggle and threshold group.
 fn create_smartshift_group(
     snapshot: &DeviceSnapshot,
-    toast_overlay: &ToastOverlay,
+    toast_overlay: &ToastOverlay
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("SmartShift");
     group.set_description(Some(
-        "Automatic switching between ratchet and freespin modes",
+        "Automatic switching between ratchet and freespin modes"
     ));
 
     let current_config = snapshot.smartshift;
@@ -502,7 +514,7 @@ fn create_smartshift_group(
         Orientation::Horizontal,
         SMARTSHIFT_MIN,
         SMARTSHIFT_MAX,
-        SMARTSHIFT_STEP,
+        SMARTSHIFT_STEP
     );
     threshold_scale.set_value(f64::from(current_config.threshold));
     threshold_scale.set_draw_value(true);
@@ -530,13 +542,13 @@ fn create_smartshift_group(
     let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
         let config = SmartShiftConfig {
-            enabled: sw.is_active(),
-            threshold: scale_threshold(ts.value()),
+            enabled:   sw.is_active(),
+            threshold: scale_threshold(ts.value())
         };
 
         match try_request(&Request::SetSmartShift {
-            enabled: config.enabled,
-            threshold: config.threshold,
+            enabled:   config.enabled,
+            threshold: config.threshold
         }) {
             Some(Response::Ok) => {
                 let toast = Toast::new(&format!(
@@ -550,7 +562,9 @@ fn create_smartshift_group(
                 ));
                 to.add_toast(toast);
             }
-            Some(Response::Error { message }) => {
+            Some(Response::Error {
+                message
+            }) => {
                 let toast = Toast::new(&format!("Failed to configure SmartShift: {message}"));
                 to.add_toast(toast);
             }
@@ -574,7 +588,7 @@ fn create_smartshift_group(
 
 fn create_scroll_group(
     snapshot: &DeviceSnapshot,
-    toast_overlay: &ToastOverlay,
+    toast_overlay: &ToastOverlay
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Scroll Settings");
@@ -615,13 +629,13 @@ fn create_scroll_group(
     let to = toast_overlay.clone();
     apply_btn.connect_clicked(move |_| {
         let config = HiResScrollConfig {
-            enabled: hs.is_active(),
-            inverted: is.is_active(),
+            enabled:  hs.is_active(),
+            inverted: is.is_active()
         };
 
         match try_request(&Request::SetHires {
-            enabled: config.enabled,
-            inverted: config.inverted,
+            enabled:  config.enabled,
+            inverted: config.inverted
         }) {
             Some(Response::Ok) => {
                 let toast = Toast::new(&format!(
@@ -635,7 +649,9 @@ fn create_scroll_group(
                 ));
                 to.add_toast(toast);
             }
-            Some(Response::Error { message }) => {
+            Some(Response::Error {
+                message
+            }) => {
                 let toast = Toast::new(&format!("Failed to configure scroll: {message}"));
                 to.add_toast(toast);
             }
@@ -668,7 +684,7 @@ enum MouseButton {
     Back,
     Forward,
     Gesture,
-    ModeShift,
+    ModeShift
 }
 
 impl MouseButton {
@@ -679,7 +695,7 @@ impl MouseButton {
         MouseButton::Back,
         MouseButton::Forward,
         MouseButton::Gesture,
-        MouseButton::ModeShift,
+        MouseButton::ModeShift
     ];
 
     const fn label(self) -> &'static str {
@@ -690,7 +706,7 @@ impl MouseButton {
             MouseButton::Back => "Back",
             MouseButton::Forward => "Forward",
             MouseButton::Gesture => "Gesture",
-            MouseButton::ModeShift => "Mode Shift",
+            MouseButton::ModeShift => "Mode Shift"
         }
     }
 
@@ -702,15 +718,15 @@ impl MouseButton {
             MouseButton::Back => (180.0, 350.0),
             MouseButton::Forward => (220.0, 350.0),
             MouseButton::Gesture => (180.0, 450.0),
-            MouseButton::ModeShift => (300.0, 100.0),
+            MouseButton::ModeShift => (300.0, 100.0)
         }
     }
 }
 
 #[derive(Default)]
 struct OverlayState {
-    selected: Option<MouseButton>,
-    assignments: HashMap<MouseButton, String>,
+    selected:    Option<MouseButton>,
+    assignments: HashMap<MouseButton, String>
 }
 
 fn build_overlay(app: &Application) {
@@ -767,7 +783,7 @@ fn build_overlay(app: &Application) {
         ("Toggle SmartShift", "Toggle SmartShift"),
         ("Keypress: Ctrl+C", "Keypress: Ctrl+C"),
         ("Keypress: Ctrl+V", "Keypress: Ctrl+V"),
-        ("None", "None"),
+        ("None", "None")
     ];
     for (label, action) in actions {
         let btn = Button::with_label(label);
@@ -889,14 +905,14 @@ fn rounded_rect(cr: &gtk4::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f6
         y + h - r,
         r,
         std::f64::consts::FRAC_PI_2,
-        std::f64::consts::PI,
+        std::f64::consts::PI
     );
     cr.arc(
         x + r,
         y + r,
         r,
         std::f64::consts::PI,
-        3.0 * std::f64::consts::FRAC_PI_2,
+        3.0 * std::f64::consts::FRAC_PI_2
     );
     cr.close_path();
 }

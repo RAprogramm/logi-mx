@@ -7,6 +7,8 @@
 //! every device access is routed through this dedicated OS thread. The tokio
 //! event loop only forwards events and never touches the device.
 
+#[cfg(feature = "tray")]
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     sync::{Mutex, mpsc},
@@ -15,18 +17,14 @@ use std::{
 };
 
 use logi_mx_driver::prelude::*;
+#[cfg(feature = "tray")]
+use tokio::runtime::Handle as TokioHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     ipc::{self, RpcRequest, RpcSender},
     status::SharedStatus
 };
-
-#[cfg(feature = "tray")]
-use std::sync::Arc;
-
-#[cfg(feature = "tray")]
-use tokio::runtime::Handle as TokioHandle;
 
 /// Interval between periodic tray status refreshes.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -70,15 +68,14 @@ pub fn spawn_device_worker(
     config: Config,
     status: SharedStatus,
     tray_handle: Arc<Mutex<Option<TrayHandle>>>
-) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError> {
+) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
+{
     let (tx, rx) = mpsc::channel();
     let (rpc_tx, rpc_rx) = mpsc::channel();
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
-        .spawn(move || {
-            run_device_worker(config, &rx, &rpc_rx, &status, &tray_handle)
-        })
+        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status, &tray_handle))
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
@@ -90,15 +87,14 @@ pub fn spawn_device_worker(
 pub fn spawn_device_worker(
     config: Config,
     status: SharedStatus
-) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError> {
+) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
+{
     let (tx, rx) = mpsc::channel();
     let (rpc_tx, rpc_rx) = mpsc::channel();
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
-        .spawn(move || {
-            run_device_worker(config, &rx, &rpc_rx, &status)
-        })
+        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status))
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
@@ -192,10 +188,7 @@ fn run_device_worker(
 /// Runs on the worker thread; blocking HID++ I/O is expected here.
 #[cfg(feature = "tray")]
 #[cfg(feature = "tray")]
-fn refresh_tray_status(
-    status: &SharedStatus,
-    tray_handle: &Arc<Mutex<Option<TrayHandle>>>
-) {
+fn refresh_tray_status(status: &SharedStatus, tray_handle: &Arc<Mutex<Option<TrayHandle>>>) {
     crate::status::refresh_from_device(status);
     if let Some(handle) = tray_handle.lock().unwrap().as_ref() {
         let h = handle.clone();
@@ -216,86 +209,88 @@ fn handle_rpc(request: RpcRequest, manager: &mut DevicePool) {
 }
 
 fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Response {
-    match manager.with_device(|device| -> std::result::Result<ipc::Response, masterror::AppError> {
-        Ok(match request {
-            ipc::Request::Ping => ipc::Response::Pong,
-            ipc::Request::Info => handle_info(device),
-            ipc::Request::Battery => handle_battery(device),
-            ipc::Request::Hosts => {
-                let (hosts, current) = device.host_info()?;
-                ipc::Response::Hosts {
-                    hosts,
-                    current
+    match manager.with_device(
+        |device| -> std::result::Result<ipc::Response, masterror::AppError> {
+            Ok(match request {
+                ipc::Request::Ping => ipc::Response::Pong,
+                ipc::Request::Info => handle_info(device),
+                ipc::Request::Battery => handle_battery(device),
+                ipc::Request::Hosts => {
+                    let (hosts, current) = device.host_info()?;
+                    ipc::Response::Hosts {
+                        hosts,
+                        current
+                    }
                 }
-            }
-            ipc::Request::Buttons => {
-                let controls = device.list_reprog_controls()?;
-                ipc::Response::Buttons {
-                    controls
+                ipc::Request::Buttons => {
+                    let controls = device.list_reprog_controls()?;
+                    ipc::Response::Buttons {
+                        controls
+                    }
                 }
-            }
-            ipc::Request::Dpi => {
-                let value = device.dpi()?;
-                ipc::Response::Dpi {
+                ipc::Request::Dpi => {
+                    let value = device.dpi()?;
+                    ipc::Response::Dpi {
+                        value
+                    }
+                }
+                ipc::Request::SmartShift => {
+                    let config = device.smartshift()?;
+                    ipc::Response::SmartShift {
+                        config
+                    }
+                }
+                ipc::Request::HiresScroll => {
+                    let config = device.hires_scroll()?;
+                    ipc::Response::HiresScroll {
+                        config
+                    }
+                }
+                ipc::Request::SetDpi {
                     value
+                } => {
+                    device.set_dpi(*value)?;
+                    ipc::Response::Ok
                 }
-            }
-            ipc::Request::SmartShift => {
-                let config = device.smartshift()?;
-                ipc::Response::SmartShift {
-                    config
+                ipc::Request::SetSmartShift {
+                    enabled,
+                    threshold
+                } => {
+                    let cfg = SmartShiftConfig {
+                        enabled:   *enabled,
+                        threshold: *threshold
+                    };
+                    device.set_smartshift(cfg)?;
+                    ipc::Response::Ok
                 }
-            }
-            ipc::Request::HiresScroll => {
-                let config = device.hires_scroll()?;
-                ipc::Response::HiresScroll {
-                    config
+                ipc::Request::SetHires {
+                    enabled,
+                    inverted
+                } => {
+                    let cfg = HiResScrollConfig {
+                        enabled:  *enabled,
+                        inverted: *inverted
+                    };
+                    device.set_hires_scroll(cfg)?;
+                    ipc::Response::Ok
                 }
-            }
-            ipc::Request::SetDpi {
-                value
-            } => {
-                device.set_dpi(*value)?;
-                ipc::Response::Ok
-            }
-            ipc::Request::SetSmartShift {
-                enabled,
-                threshold
-            } => {
-                let cfg = SmartShiftConfig {
-                    enabled:   *enabled,
-                    threshold: *threshold
-                };
-                device.set_smartshift(cfg)?;
-                ipc::Response::Ok
-            }
-            ipc::Request::SetHires {
-                enabled,
-                inverted
-            } => {
-                let cfg = HiResScrollConfig {
-                    enabled:  *enabled,
-                    inverted: *inverted
-                };
-                device.set_hires_scroll(cfg)?;
-                ipc::Response::Ok
-            }
-            ipc::Request::SetButtonDivert {
-                control_id,
-                divert,
-                raw_xy
-            } => {
-                device.set_control_divert(*control_id, *divert, *raw_xy)?;
-                ipc::Response::Ok
-            }
-            ipc::Request::SetHost {
-                host
-            } => {
-                device.set_host(*host)?;
-                ipc::Response::Ok
-            }
-        })
-    }) {
+                ipc::Request::SetButtonDivert {
+                    control_id,
+                    divert,
+                    raw_xy
+                } => {
+                    device.set_control_divert(*control_id, *divert, *raw_xy)?;
+                    ipc::Response::Ok
+                }
+                ipc::Request::SetHost {
+                    host
+                } => {
+                    device.set_host(*host)?;
+                    ipc::Response::Ok
+                }
+            })
+        }
+    ) {
         Ok(response) => response,
         Err(e) => ipc::Response::Error {
             message: e.to_string()
@@ -327,17 +322,17 @@ fn handle_battery(device: &mut MxMaster3s) -> ipc::Response {
 }
 
 struct DevicePool {
-    devices:         Mutex<HashMap<String, MxMaster3s>>,
-    config:          Config,
-    preferred_slot:  Option<u8>
+    devices:        Mutex<HashMap<String, MxMaster3s>>,
+    config:         Config,
+    preferred_slot: Option<u8>
 }
 
 impl DevicePool {
     fn new(config: Config) -> Self {
         Self {
-            devices:         Mutex::new(HashMap::new()),
+            devices: Mutex::new(HashMap::new()),
             config,
-            preferred_slot:  None
+            preferred_slot: None
         }
     }
 
@@ -504,7 +499,7 @@ mod tests {
                     &rpc_rx,
                     &Arc::new(Mutex::new(DeviceStatus::default())),
                     #[cfg(feature = "tray")]
-                    &Arc::new(Mutex::new(None)),
+                    &Arc::new(Mutex::new(None))
                 );
             })
             .unwrap_or_else(|e| panic!("Failed to spawn test worker: {e}"))

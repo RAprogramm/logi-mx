@@ -185,8 +185,7 @@ async fn main() -> Result<()> {
         spawn_device_worker(config, Arc::clone(&status), Arc::clone(&tray_handle))?;
 
     #[cfg(not(feature = "tray"))]
-    let (device_tx, rpc_tx, worker_handle) =
-        spawn_device_worker(config, Arc::clone(&status))?;
+    let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status))?;
 
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {

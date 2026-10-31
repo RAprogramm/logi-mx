@@ -406,8 +406,9 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 value
             }) {
                 Some(Response::Ok) => {
-                    writeln!(out, "DPI set to {value}")
-                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                    writeln!(out, "DPI set to {value}").map_err(|e| {
+                        AppError::internal("Failed to write output").with_source(e)
+                    })?;
                 }
                 Some(Response::Error {
                     message
@@ -418,8 +419,9 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                     warn!("Daemon unavailable, falling back to direct device access");
                     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
                     device.set_dpi(value)?;
-                    writeln!(out, "DPI set to {value}")
-                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                    writeln!(out, "DPI set to {value}").map_err(|e| {
+                        AppError::internal("Failed to write output").with_source(e)
+                    })?;
                 }
             }
         }
@@ -521,8 +523,9 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 raw_xy
             }) {
                 Some(Response::Ok) => {
-                    writeln!(out, "Button {control_id:#06x} divert: {divert}")
-                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                    writeln!(out, "Button {control_id:#06x} divert: {divert}").map_err(|e| {
+                        AppError::internal("Failed to write output").with_source(e)
+                    })?;
                 }
                 Some(Response::Error {
                     message
@@ -533,8 +536,9 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                     warn!("Daemon unavailable, falling back to direct device access");
                     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
                     device.set_control_divert(control_id, divert, raw_xy)?;
-                    writeln!(out, "Button {control_id:#06x} divert: {divert}")
-                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                    writeln!(out, "Button {control_id:#06x} divert: {divert}").map_err(|e| {
+                        AppError::internal("Failed to write output").with_source(e)
+                    })?;
                 }
             }
         }
@@ -546,8 +550,9 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 host: index
             }) {
                 Some(Response::Ok) => {
-                    writeln!(out, "Switched to host {index}")
-                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                    writeln!(out, "Switched to host {index}").map_err(|e| {
+                        AppError::internal("Failed to write output").with_source(e)
+                    })?;
                 }
                 Some(Response::Error {
                     message
@@ -558,8 +563,9 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                     warn!("Daemon unavailable, falling back to direct device access");
                     let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
                     device.set_host(index)?;
-                    writeln!(out, "Switched to host {index}")
-                        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
+                    writeln!(out, "Switched to host {index}").map_err(|e| {
+                        AppError::internal("Failed to write output").with_source(e)
+                    })?;
                 }
             }
         }
@@ -618,8 +624,8 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
 }
 
 fn cmd_autostart(action: AutostartCommands) -> Result<()> {
-    let home = std::env::var("HOME")
-        .map_err(|e| AppError::internal("HOME not set").with_source(e))?;
+    let home =
+        std::env::var("HOME").map_err(|e| AppError::internal("HOME not set").with_source(e))?;
     let service_dir = std::path::PathBuf::from(&home)
         .join(".config")
         .join("systemd")
@@ -629,8 +635,9 @@ fn cmd_autostart(action: AutostartCommands) -> Result<()> {
 
     match action {
         AutostartCommands::Install => {
-            std::fs::create_dir_all(&service_dir)
-                .map_err(|e| AppError::internal("Failed to create systemd user dir").with_source(e))?;
+            std::fs::create_dir_all(&service_dir).map_err(|e| {
+                AppError::internal("Failed to create systemd user dir").with_source(e)
+            })?;
             std::fs::write(&service_path, service_unit)
                 .map_err(|e| AppError::internal("Failed to write service file").with_source(e))?;
 
