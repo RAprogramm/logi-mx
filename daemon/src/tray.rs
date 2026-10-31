@@ -144,7 +144,6 @@ impl Tray for LogiTrayIcon {
         Category::Hardware
     }
 
-
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let snapshot = self.lock_status().clone();
 
