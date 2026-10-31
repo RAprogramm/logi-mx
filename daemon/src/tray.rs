@@ -144,9 +144,6 @@ impl Tray for LogiTrayIcon {
         Category::Hardware
     }
 
-    fn watcher_online(&self) {
-        crate::status::refresh_from_device(&self.status);
-    }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let snapshot = self.lock_status().clone();
