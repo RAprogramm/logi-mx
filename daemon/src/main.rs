@@ -185,12 +185,25 @@ async fn main() -> Result<()> {
     });
 
     #[cfg(feature = "tray")]
-    match spawn_tray(Arc::clone(&status)).await {
-        Ok(handle) => {
-            *tray_handle.lock().unwrap() = Some(handle);
-            info!("System tray initialized");
-        }
-        Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
+    {
+        let tray_handle = Arc::clone(&tray_handle);
+        let status = Arc::clone(&status);
+        tokio::spawn(async move {
+            loop {
+                if tray_handle.lock().unwrap().is_none() {
+                    match spawn_tray(Arc::clone(&status)).await {
+                        Ok(handle) => {
+                            *tray_handle.lock().unwrap() = Some(handle);
+                            info!("System tray initialized");
+                        }
+                        Err(e) => {
+                            warn!("Failed to initialize tray: {e}. Retrying in 5s.");
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        });
     }
 
     let (tx, mut rx) = mpsc::channel::<UdevEvent>(32);
