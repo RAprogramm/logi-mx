@@ -287,9 +287,8 @@ fn create_battery_group(
     battery_bar.set_min_value(0.0);
     battery_bar.set_max_value(100.0);
     battery_bar.set_value(0.0);
-    battery_bar.set_width_request(WIDGET_WIDTH);
-    battery_bar.set_margin_top(6);
-    battery_bar.set_margin_bottom(6);
+    battery_bar.set_width_request(120);
+    battery_bar.set_valign(gtk4::Align::Center);
 
     match snapshot.battery {
         Some(battery) => {
@@ -327,11 +326,11 @@ fn create_battery_group(
         }
     });
 
+    battery_row.add_suffix(&battery_bar);
     battery_row.add_suffix(&refresh_btn);
     battery_row.set_activatable_widget(Some(&refresh_btn));
 
     group.add(&battery_row);
-    group.add(&battery_bar);
     group
 }
 
@@ -360,7 +359,7 @@ fn create_dpi_group(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) -> 
     let current_dpi = snapshot.dpi;
 
     let dpi_row = ActionRow::new();
-    dpi_row.add_prefix(&icon("preferences-desktop-pointing-symbolic"));
+    dpi_row.add_prefix(&icon("input-mouse-symbolic"));
     dpi_row.set_title("Current DPI");
     dpi_row.set_subtitle(&format!("{current_dpi} DPI"));
 
