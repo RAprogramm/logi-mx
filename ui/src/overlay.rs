@@ -154,10 +154,10 @@ fn create_window(app: &Application) -> ApplicationWindow {
     window.set_anchor(Edge::Bottom, true);
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
-    window.set_margin_top(OVERLAY_MARGIN);
-    window.set_margin_bottom(OVERLAY_MARGIN);
-    window.set_margin_start(OVERLAY_MARGIN);
-    window.set_margin_end(OVERLAY_MARGIN);
+    window.set_margin(Edge::Top, OVERLAY_MARGIN);
+    window.set_margin(Edge::Bottom, OVERLAY_MARGIN);
+    window.set_margin(Edge::Left, OVERLAY_MARGIN);
+    window.set_margin(Edge::Right, OVERLAY_MARGIN);
 
     window
 }
@@ -272,13 +272,13 @@ fn attach_draw_callback(
             let sy = LAYOUT_H / f64::from(surface.height());
             let _ = cr.save();
             cr.scale(sx, sy);
-            cr.set_source_surface(surface, 0.0, 0.0);
+            let _ = cr.set_source_surface(surface, 0.0, 0.0);
             let _ = cr.paint();
-            cr.restore();
+            let _ = cr.restore();
         }
 
         draw_highlights(&st, cr);
-        cr.restore();
+        let _ = cr.restore();
     });
 }
 
@@ -286,23 +286,25 @@ fn attach_draw_callback(
 fn render_device_svg() -> Option<gtk4::cairo::ImageSurface> {
     let tree = usvg::Tree::from_data(DEVICE_SVG.as_bytes(), &usvg::Options::default()).ok()?;
     let size = tree.size();
-    let scale = f64::from(SVG_RENDER_WIDTH) / f64::from(size.width());
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "the raster width constant is exactly representable as f32"
+    )]
+    let scale = SVG_RENDER_WIDTH as f32 / size.width();
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "the raster height is clamped to a sane pixel range"
     )]
-    let height = (f64::from(size.height()) * scale)
-        .round()
-        .clamp(1.0, 8192.0) as u32;
+    let height = (size.height() * scale).round().clamp(1.0, 8192.0) as u32;
     let width = SVG_RENDER_WIDTH;
 
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
-    let transform = resvg::tiny_skia::Transform::from_scale(scale as f32, scale as f32);
+    let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     let mut data = pixmap.take();
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
 
