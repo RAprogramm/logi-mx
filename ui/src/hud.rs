@@ -20,32 +20,32 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU32, Ordering}
     },
     thread,
-    time::Duration,
+    time::Duration
 };
 
 use gtk4::{
-    glib, Box as GtkBox, Button, CheckButton, DropDown, Entry, EventControllerKey,
-    EventControllerMotion, GestureClick, Label, Orientation, Scale, ScrolledWindow, Switch,
+    Box as GtkBox, Button, CheckButton, DropDown, Entry, EventControllerKey,
+    EventControllerMotion, GestureClick, Label, Orientation, Scale, ScrolledWindow, Switch, glib
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
-    prelude::*, ActionRow, Application, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay,
-    ViewStack, ViewSwitcher, ViewSwitcherPolicy,
+    ActionRow, Application, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay, ViewStack,
+    ViewSwitcher, ViewSwitcherPolicy, prelude::*
 };
 use logi_mx_daemon::ipc::{
-    self, LiveFrame, Response, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT,
-    BTN_BIT_MIDDLE, BTN_BIT_RIGHT,
+    self, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT, BTN_BIT_MIDDLE,
+    BTN_BIT_RIGHT, LiveFrame, Response
 };
 use logi_mx_driver::{
     devices::control_id,
-    prelude::{HiResScrollConfig, SmartShiftConfig},
+    prelude::{HiResScrollConfig, SmartShiftConfig}
 };
 
-use crate::snapshot::{collect_device_snapshot, DeviceSnapshot};
+use crate::snapshot::{DeviceSnapshot, collect_device_snapshot};
 
 /// Device layout embedded from `assets/logitech-mx-master-3s.svg`.
 const DEVICE_SVG: &str = include_str!("../assets/logitech-mx-master-3s.svg");
@@ -95,7 +95,7 @@ enum BgMode {
     /// Compositor blur behind a barely tinted fill.
     Blur,
     /// Compositor blur behind a dark fill.
-    BlurDim,
+    BlurDim
 }
 
 impl BgMode {
@@ -109,7 +109,7 @@ impl BgMode {
         match self {
             Self::None => None,
             Self::Blur => Some("hud-tint"),
-            Self::Dim | Self::BlurDim => Some("hud-dim"),
+            Self::Dim | Self::BlurDim => Some("hud-dim")
         }
     }
 
@@ -127,7 +127,7 @@ impl BgMode {
             (false, false) => Self::None,
             (true, false) => Self::Dim,
             (false, true) => Self::Blur,
-            (true, true) => Self::BlurDim,
+            (true, true) => Self::BlurDim
         }
     }
 
@@ -136,7 +136,7 @@ impl BgMode {
             Self::None => "none",
             Self::Dim => "dim",
             Self::Blur => "blur",
-            Self::BlurDim => "blur-dim",
+            Self::BlurDim => "blur-dim"
         }
     }
 
@@ -201,7 +201,7 @@ enum MouseButton {
     DpiShift,
     Back,
     Forward,
-    Gesture,
+    Gesture
 }
 
 impl MouseButton {
@@ -212,7 +212,7 @@ impl MouseButton {
         Self::DpiShift,
         Self::Back,
         Self::Forward,
-        Self::Gesture,
+        Self::Gesture
     ];
 
     /// HID++ reprogrammable control ID of this button.
@@ -224,7 +224,7 @@ impl MouseButton {
             Self::DpiShift => control_id::SMARTSHIFT_TOGGLE,
             Self::Back => control_id::BACK_BUTTON,
             Self::Forward => control_id::FORWARD_BUTTON,
-            Self::Gesture => control_id::GESTURE_BUTTON,
+            Self::Gesture => control_id::GESTURE_BUTTON
         }
     }
 
@@ -237,7 +237,7 @@ impl MouseButton {
         Self::Forward,
         Self::Gesture,
         Self::Left,
-        Self::Right,
+        Self::Right
     ];
 
     const fn label(self) -> &'static str {
@@ -248,7 +248,7 @@ impl MouseButton {
             Self::DpiShift => "DPI Shift",
             Self::Back => "Back",
             Self::Forward => "Forward",
-            Self::Gesture => "Gesture",
+            Self::Gesture => "Gesture"
         }
     }
 
@@ -262,7 +262,7 @@ impl MouseButton {
             Self::DpiShift => (45.9, 44.1, 4.0, 7.2),
             Self::Back => (20.1, 47.5, 1.4, 9.0),
             Self::Forward => (20.1, 58.0, 1.4, 9.0),
-            Self::Gesture => (8.42, 61.69, 1.08, 6.3),
+            Self::Gesture => (8.42, 61.69, 1.08, 6.3)
         }
     }
 
@@ -282,7 +282,7 @@ impl MouseButton {
             Self::Forward => "button3-anchor",
             Self::Back => "button4-anchor",
             Self::Gesture => "button5-anchor",
-            Self::DpiShift => "button6-anchor",
+            Self::DpiShift => "button6-anchor"
         }
     }
 
@@ -295,7 +295,7 @@ impl MouseButton {
             Self::Forward => "button3",
             Self::Back => "button4",
             Self::Gesture => "button5",
-            Self::DpiShift => "button6",
+            Self::DpiShift => "button6"
         }
     }
 
@@ -308,7 +308,7 @@ impl MouseButton {
             Self::Back => Some(BTN_BIT_BACK),
             Self::Forward => Some(BTN_BIT_FORWARD),
             Self::Gesture => Some(BTN_BIT_GESTURE),
-            Self::DpiShift => None,
+            Self::DpiShift => None
         }
     }
 
@@ -322,14 +322,14 @@ impl MouseButton {
 /// Smoothed live input picture shown on the diagram.
 #[derive(Default, Debug)]
 struct LiveVisual {
-    buttons: u32,
+    buttons:     u32,
     /// Buttons pressed between two HUD frames; keeps brief taps visible.
-    flash: u32,
+    flash:       u32,
     wheel_speed: f64,
-    wheel_dir: i32,
-    hwheel_dir: i32,
-    extra_keys: Vec<u16>,
-    connected: bool,
+    wheel_dir:   i32,
+    hwheel_dir:  i32,
+    extra_keys:  Vec<u16>,
+    connected:   bool
 }
 
 impl LiveVisual {
@@ -381,11 +381,11 @@ fn blend(previous: f64, sample: f64) -> f64 {
 
 #[derive(Default)]
 struct HudState {
-    selected: Option<MouseButton>,
-    hover: Option<MouseButton>,
+    selected:    Option<MouseButton>,
+    hover:       Option<MouseButton>,
     assignments: HashMap<MouseButton, String>,
-    live: LiveVisual,
-    bg: BgMode,
+    live:        LiveVisual,
+    bg:          BgMode
 }
 
 /// Shared handle to the button rows of the open window, keyed by button.
@@ -490,6 +490,9 @@ fn build_hud(app: &Application) {
     overlay.add_overlay(&leaders);
     window.set_content(Some(&overlay));
     apply_bg_classes(&window, state.borrow().bg);
+    if let Err(e) = crate::hyprland::set_hud_blur(state.borrow().bg.wants_blur()) {
+        tracing::warn!("Failed to sync the compositor blur rule: {e}");
+    }
 
     ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = Some(window.clone()));
     window.connect_close_request(|_| {
@@ -569,7 +572,7 @@ fn create_panel(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     window: &ApplicationWindow,
-    snapshot: Option<&DeviceSnapshot>,
+    snapshot: Option<&DeviceSnapshot>
 ) -> ToastOverlay {
     let toast = ToastOverlay::new();
     toast.set_size_request(PANEL_WIDTH, -1);
@@ -591,26 +594,26 @@ fn create_panel(
             buttons_page(state, drawing, &toast),
             "buttons",
             "Buttons",
-            "input-mouse-symbolic",
+            "input-mouse-symbolic"
         ),
         (
             wheel_page(snapshot, &toast),
             "wheel",
             "Wheel",
-            "view-continuous-symbolic",
+            "view-continuous-symbolic"
         ),
         (
             pointer_page(snapshot, &toast),
             "pointer",
             "Pointer",
-            "preferences-desktop-input-symbolic",
+            "preferences-desktop-input-symbolic"
         ),
         (
             device_page(state, window, snapshot, &toast),
             "device",
             "Device",
-            "battery-symbolic",
-        ),
+            "battery-symbolic"
+        )
     ];
     for (page, name, title, icon) in pages {
         stack.add_titled(&page, Some(name), title);
@@ -649,7 +652,7 @@ const REMAP_TARGETS: [(&str, u16); 8] = [
     ("Act as Forward", control_id::FORWARD_BUTTON),
     ("Act as Gesture", control_id::GESTURE_BUTTON),
     ("Act as DPI Shift", control_id::SMARTSHIFT_TOGGLE),
-    ("Restore native", 0x0000),
+    ("Restore native", 0x0000)
 ];
 
 /// Builds the button list: activating a row selects that button and highlights
@@ -657,14 +660,13 @@ const REMAP_TARGETS: [(&str, u16); 8] = [
 /// subtitle shows its current assignment.
 fn buttons_list_section(
     state: &Rc<RefCell<HudState>>,
-    drawing: &gtk4::DrawingArea,
-) -> (
-    PreferencesGroup,
-    RowMap,
-) {
+    drawing: &gtk4::DrawingArea
+) -> (PreferencesGroup, RowMap) {
     let group = PreferencesGroup::new();
     group.set_title("Buttons");
-    group.set_description(Some("Hover or select a button to highlight it on the diagram"));
+    group.set_description(Some(
+        "Hover or select a button to highlight it on the diagram"
+    ));
     let rows: RowMap = Rc::new(RefCell::new(HashMap::new()));
     for button in MouseButton::ALL {
         let row = ActionRow::builder()
@@ -718,7 +720,7 @@ fn set_assignment(
     rows: &RowMap,
     drawing: &gtk4::DrawingArea,
     button: MouseButton,
-    action: Option<String>,
+    action: Option<String>
 ) {
     let subtitle = action.map_or_else(
         || {
@@ -731,7 +733,7 @@ fn set_assignment(
                 .assignments
                 .insert(button, action.clone());
             action
-        },
+        }
     );
     if let Some(row) = rows.borrow().get(&button) {
         row.set_subtitle(&subtitle);
@@ -746,7 +748,7 @@ fn remap_section(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     toast: &ToastOverlay,
-    rows: &RowMap,
+    rows: &RowMap
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Act as");
@@ -756,7 +758,7 @@ fn remap_section(
         &REMAP_TARGETS
             .iter()
             .map(|(label, _)| *label)
-            .collect::<Vec<&str>>(),
+            .collect::<Vec<&str>>()
     );
     target.set_hexpand(true);
 
@@ -778,13 +780,13 @@ fn remap_section(
         let (label, target_cid) = REMAP_TARGETS[index];
         let response = ipc::try_request(&ipc::Request::SetButtonRemap {
             control_id: selected.cid(),
-            target_cid,
+            target_cid
         });
         let remapped = matches!(response, Some(Response::Ok));
         report(
             response,
             &toast_clone,
-            &format!("{} now acts as {label}", selected.label()),
+            &format!("{} now acts as {label}", selected.label())
         );
         if remapped {
             set_assignment(
@@ -792,7 +794,7 @@ fn remap_section(
                 &rows_apply,
                 &drawing_clone,
                 selected,
-                (target_cid != 0).then(|| label.to_string()),
+                (target_cid != 0).then(|| label.to_string())
             );
         }
     });
@@ -812,7 +814,7 @@ fn custom_section(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     toast: &ToastOverlay,
-    rows: &RowMap,
+    rows: &RowMap
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Custom");
@@ -845,7 +847,7 @@ fn custom_section(
             &rows_custom,
             &drawing_custom,
             selected,
-            Some(action.clone()),
+            Some(action.clone())
         );
         toast_custom.add_toast(Toast::new(&format!("{} → {action}", selected.label())));
     });
@@ -864,10 +866,12 @@ fn custom_section(
 fn buttons_page(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
-    toast: &ToastOverlay,
+    toast: &ToastOverlay
 ) -> ScrolledWindow {
     let scroll = page_scroll();
-    scroll.vadjustment().connect_value_changed(move |_| queue_leaders());
+    scroll
+        .vadjustment()
+        .connect_value_changed(move |_| queue_leaders());
     let box_ = GtkBox::new(Orientation::Vertical, 0);
     let (buttons_group, rows) = buttons_list_section(state, drawing);
     box_.append(&buttons_group);
@@ -903,7 +907,7 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
         Orientation::Horizontal,
         SMARTSHIFT_MIN,
         SMARTSHIFT_MAX,
-        SMARTSHIFT_STEP,
+        SMARTSHIFT_STEP
     );
     threshold_scale.set_value(f64::from(smartshift.threshold));
     threshold_scale.set_draw_value(true);
@@ -921,8 +925,8 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     let to = toast.clone();
     shift_apply.connect_clicked(move |_| {
         let request = ipc::Request::SetSmartShift {
-            enabled: sw.is_active(),
-            threshold: scale_threshold(ts.value()),
+            enabled:   sw.is_active(),
+            threshold: scale_threshold(ts.value())
         };
         report(ipc::try_request(&request), &to, "SmartShift applied");
     });
@@ -962,8 +966,8 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     let to = toast.clone();
     scroll_apply.connect_clicked(move |_| {
         let request = ipc::Request::SetHires {
-            enabled: hs.is_active(),
-            inverted: inv.is_active(),
+            enabled:  hs.is_active(),
+            inverted: inv.is_active()
         };
         report(ipc::try_request(&request), &to, "Scroll settings applied");
     });
@@ -1011,9 +1015,11 @@ fn pointer_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scro
     apply.connect_clicked(move |_| {
         let dpi = scale_dpi(sc.value());
         report(
-            ipc::try_request(&ipc::Request::SetDpi { value: dpi }),
+            ipc::try_request(&ipc::Request::SetDpi {
+                value: dpi
+            }),
             &to,
-            &format!("DPI set to {dpi}"),
+            &format!("DPI set to {dpi}")
         );
     });
 
@@ -1035,7 +1041,7 @@ fn pointer_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scro
 fn background_section(
     state: &Rc<RefCell<HudState>>,
     window: &ApplicationWindow,
-    toast: &ToastOverlay,
+    toast: &ToastOverlay
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Background");
@@ -1092,7 +1098,7 @@ fn device_page(
     state: &Rc<RefCell<HudState>>,
     window: &ApplicationWindow,
     snapshot: Option<&DeviceSnapshot>,
-    toast: &ToastOverlay,
+    toast: &ToastOverlay
 ) -> ScrolledWindow {
     let scroll = page_scroll();
     let box_ = GtkBox::new(Orientation::Vertical, 0);
@@ -1109,16 +1115,19 @@ fn device_page(
         |s| {
             s.battery.map_or_else(
                 || "unknown".to_string(),
-                |b| format!("{}% · {:?}", b.level, b.status),
+                |b| format!("{}% · {:?}", b.level, b.status)
             )
-        },
+        }
     ));
     let refresh = Button::with_label("Refresh");
     refresh.add_css_class("pill");
     let br = battery_row.clone();
     let to = toast.clone();
     refresh.connect_clicked(move |_| match ipc::try_request(&ipc::Request::Battery) {
-        Some(Response::Battery { level, status }) => {
+        Some(Response::Battery {
+            level,
+            status
+        }) => {
             br.set_subtitle(&format!("{level}% · {status}"));
         }
         _ => {
@@ -1139,17 +1148,21 @@ fn device_page(
     let to = toast.clone();
     configure.connect_clicked(move |_| {
         let message = match crate::hyprland::ensure_integration() {
-            Ok(crate::hyprland::Outcome::Configured { path }) => {
+            Ok(crate::hyprland::Outcome::Configured {
+                path
+            }) => {
                 format!("Hyprland configured: {path}")
             }
-            Ok(crate::hyprland::Outcome::AlreadyConfigured { path }) => {
+            Ok(crate::hyprland::Outcome::AlreadyConfigured {
+                path
+            }) => {
                 format!("Already configured: {path}")
             }
             Ok(crate::hyprland::Outcome::NotHyprland) => "Not running under Hyprland".to_string(),
             Ok(crate::hyprland::Outcome::NoConfig) => {
                 "Hyprland config not found in ~/.config/hypr".to_string()
             }
-            Err(e) => format!("Hyprland setup failed: {e}"),
+            Err(e) => format!("Hyprland setup failed: {e}")
         };
         to.add_toast(Toast::new(&message));
     });
@@ -1182,8 +1195,10 @@ fn page_scroll() -> ScrolledWindow {
 fn report(response: Option<Response>, toast: &ToastOverlay, success: &str) {
     let message = match response {
         Some(Response::Ok) => success.to_string(),
-        Some(Response::Error { message }) => message,
-        _ => "Daemon unavailable".to_string(),
+        Some(Response::Error {
+            message
+        }) => message,
+        _ => "Daemon unavailable".to_string()
     };
     toast.add_toast(Toast::new(&message));
 }
@@ -1281,7 +1296,7 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea) {
                     &burst_thread,
                     &connected_thread,
                     &stop_thread,
-                    &wake,
+                    &wake
                 );
             }
         })
@@ -1314,7 +1329,7 @@ fn pump_live_socket(
     burst: &Arc<AtomicU32>,
     connected: &Arc<AtomicBool>,
     stop: &AtomicBool,
-    wake: &dyn Fn(),
+    wake: &dyn Fn()
 ) {
     let _ = socket.set_read_timeout(Some(LIVE_POLL_TIMEOUT));
     let mut reader = BufReader::new(socket);
@@ -1338,7 +1353,7 @@ fn pump_live_socket(
                     break;
                 }
             }
-            Err(_) => break,
+            Err(_) => break
         }
     }
     connected.store(false, Ordering::Relaxed);
@@ -1398,7 +1413,7 @@ fn attach_draw_callback(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     image: &Rc<OnceCell<Option<gtk4::cairo::ImageSurface>>>,
-    masks: &Rc<HashMap<MouseButton, gtk4::cairo::ImageSurface>>,
+    masks: &Rc<ButtonMasks>
 ) {
     let state_draw = Rc::clone(state);
     let image_draw = Rc::clone(image);
@@ -1425,9 +1440,9 @@ fn attach_draw_callback(
                 (sx, sy)
             });
 
-        draw_selection(&st, cr);
         if let Some((sx, sy)) = surface_scale {
-            draw_pressed_shapes(&st, cr, sx, sy, &masks_draw);
+            draw_selection(&st, cr, sx, sy, &masks_draw);
+            draw_pressed_shapes(&st, cr, sx, sy, &masks_draw.fill);
         }
         let _ = cr.restore();
 
@@ -1466,7 +1481,7 @@ fn render_svg_to_surface(svg: &[u8]) -> Option<gtk4::cairo::ImageSurface> {
         gtk4::cairo::Format::ARgb32,
         width.cast_signed(),
         height.cast_signed(),
-        (width * 4).cast_signed(),
+        (width * 4).cast_signed()
     )
     .ok()
 }
@@ -1477,30 +1492,64 @@ fn render_device_svg() -> Option<gtk4::cairo::ImageSurface> {
 }
 
 /// Builds a standalone SVG containing only the device element with the
-/// given id, so it can be rendered as an alpha mask aligned with the base
-/// image.
-fn device_element_svg(id: &str) -> Option<String> {
+/// given id, injecting `style` presentation attributes into its tag.
+///
+/// The layout SVG keeps button shapes attribute-free, so injected `fill`
+/// and `stroke` attributes always apply without conflicts.
+fn device_element_svg_styled(id: &str, style: &str) -> Option<String> {
     let marker = format!("id=\"{id}\"");
     let at = DEVICE_SVG.find(&marker)?;
     let open = DEVICE_SVG[..at].rfind('<')?;
     let close = DEVICE_SVG[at..].find("/>")? + at + 2;
     let element = &DEVICE_SVG[open..close];
+    let element = if style.is_empty() {
+        std::borrow::Cow::Borrowed(element)
+    } else {
+        std::borrow::Cow::Owned(element.replacen("/>", &format!(" {style}/>"), 1))
+    };
     Some(format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {LAYOUT_W} {LAYOUT_H}\">\
          <g transform=\"translate(0,{DEVICE_GROUP_DY})\">{element}</g></svg>"
     ))
 }
 
+/// Builds a standalone SVG containing only the device element with the
+/// given id, so it can be rendered as an alpha mask aligned with the base
+/// image.
+fn device_element_svg(id: &str) -> Option<String> {
+    device_element_svg_styled(id, "")
+}
+
 /// Alpha masks of every button shape, rendered once from the layout SVG.
-fn build_button_masks() -> HashMap<MouseButton, gtk4::cairo::ImageSurface> {
-    MouseButton::ALL
-        .iter()
-        .filter_map(|button| {
-            let svg = device_element_svg(button.element_id())?;
-            let surface = render_svg_to_surface(svg.as_bytes())?;
-            Some((*button, surface))
-        })
-        .collect()
+#[derive(Default)]
+struct ButtonMasks {
+    /// Exact shape of each button, tinted for highlights and presses.
+    fill:    HashMap<MouseButton, gtk4::cairo::ImageSurface>,
+    /// Contour of each button, painted as the selection outline.
+    outline: HashMap<MouseButton, gtk4::cairo::ImageSurface>
+}
+
+/// Stroke width of the selection outline, in layout units.
+const OUTLINE_STROKE: f64 = 0.5;
+
+/// Renders the fill and outline alpha masks of every button shape.
+fn build_button_masks() -> ButtonMasks {
+    let mut masks = ButtonMasks::default();
+    let outline_style =
+        format!("fill=\"none\" stroke=\"#000000\" stroke-width=\"{OUTLINE_STROKE}\"");
+    for button in MouseButton::ALL {
+        if let Some(svg) = device_element_svg(button.element_id())
+            && let Some(surface) = render_svg_to_surface(svg.as_bytes())
+        {
+            masks.fill.insert(button, surface);
+        }
+        if let Some(svg) = device_element_svg_styled(button.element_id(), &outline_style)
+            && let Some(surface) = render_svg_to_surface(svg.as_bytes())
+        {
+            masks.outline.insert(button, surface);
+        }
+    }
+    masks
 }
 
 /// Computes uniform scale and centering offsets for the layout space.
@@ -1518,7 +1567,37 @@ fn to_layout(px: f64, py: f64, width: i32, height: i32) -> (f64, f64) {
     ((px - offset_x) / scale, (py - offset_y) / scale)
 }
 
-fn draw_selection(st: &HudState, cr: &gtk4::cairo::Context) {
+/// Paints one button's alpha mask with a flat color, aligned to the base
+/// image through the raster-to-layout scale.
+fn paint_button_shape(
+    cr: &gtk4::cairo::Context,
+    sx: f64,
+    sy: f64,
+    mask: &gtk4::cairo::ImageSurface,
+    color: (f64, f64, f64, f64)
+) {
+    let pattern = gtk4::cairo::SurfacePattern::create(mask);
+    let _ = cr.save();
+    cr.scale(sx, sy);
+    cr.set_source_rgba(color.0, color.1, color.2, color.3);
+    let _ = cr.mask(&pattern);
+    let _ = cr.restore();
+}
+
+/// Highlight colors: hover and selection share the accent, assignments are
+/// tinted blue.
+const ACCENT: (f64, f64, f64) = (0.93, 0.66, 0.46);
+const ASSIGNED: (f64, f64, f64) = (0.42, 0.60, 0.80);
+
+/// Highlights hovered, selected and assigned buttons by tinting their exact
+/// SVG shapes; the selection additionally carries a contour outline.
+fn draw_selection(
+    st: &HudState,
+    cr: &gtk4::cairo::Context,
+    sx: f64,
+    sy: f64,
+    masks: &ButtonMasks
+) {
     for button in MouseButton::ALL {
         let selected = st.selected == Some(button);
         let hovered = st.hover == Some(button);
@@ -1527,19 +1606,18 @@ fn draw_selection(st: &HudState, cr: &gtk4::cairo::Context) {
             continue;
         }
 
-        let (x, y, w, h) = button.region();
-        if selected || hovered {
-            cr.set_source_rgba(0.93, 0.66, 0.46, 0.55);
+        let Some(fill) = masks.fill.get(&button) else {
+            continue;
+        };
+        let color = if selected || hovered {
+            (ACCENT.0, ACCENT.1, ACCENT.2, 0.55)
         } else {
-            cr.set_source_rgba(0.42, 0.60, 0.80, 0.50);
-        }
-        rounded_rect(cr, x, y, w, h, 0.8);
-        let _ = cr.fill_preserve();
+            (ASSIGNED.0, ASSIGNED.1, ASSIGNED.2, 0.50)
+        };
+        paint_button_shape(cr, sx, sy, fill, color);
 
-        if selected {
-            cr.set_source_rgb(0.93, 0.66, 0.46);
-            cr.set_line_width(0.5);
-            let _ = cr.stroke();
+        if selected && let Some(outline) = masks.outline.get(&button) {
+            paint_button_shape(cr, sx, sy, outline, (ACCENT.0, ACCENT.1, ACCENT.2, 1.0));
         }
     }
 }
@@ -1550,7 +1628,7 @@ fn draw_pressed_shapes(
     cr: &gtk4::cairo::Context,
     sx: f64,
     sy: f64,
-    masks: &HashMap<MouseButton, gtk4::cairo::ImageSurface>,
+    masks: &HashMap<MouseButton, gtk4::cairo::ImageSurface>
 ) {
     for button in MouseButton::ALL {
         let Some(bit) = button.live_bit() else {
@@ -1562,13 +1640,7 @@ fn draw_pressed_shapes(
         let Some(mask) = masks.get(&button) else {
             continue;
         };
-        let pattern = gtk4::cairo::SurfacePattern::create(mask);
-
-        let _ = cr.save();
-        cr.scale(sx, sy);
-        cr.set_source_rgba(0.93, 0.66, 0.46, 0.9);
-        let _ = cr.mask(&pattern);
-        let _ = cr.restore();
+        paint_button_shape(cr, sx, sy, mask, (ACCENT.0, ACCENT.1, ACCENT.2, 0.9));
     }
 }
 
@@ -1582,7 +1654,7 @@ fn draw_wheel_indicator(
     cr: &gtk4::cairo::Context,
     scale: f64,
     offset_x: f64,
-    offset_y: f64,
+    offset_y: f64
 ) {
     let intensity = (st.live.wheel_speed / WHEEL_FULL_SCALE).min(1.0);
     if intensity <= 0.01 {
@@ -1615,12 +1687,12 @@ fn draw_wheel_indicator(
         };
         cr.move_to(
             cx - (if vertical { half } else { 0.0 }),
-            cy - (if vertical { 0.0 } else { half }),
+            cy - (if vertical { 0.0 } else { half })
         );
         cr.line_to(cx + px * 0.4, cy + py * 0.4);
         cr.line_to(
             cx + (if vertical { half } else { 0.0 }),
-            cy + (if vertical { 0.0 } else { half }),
+            cy + (if vertical { 0.0 } else { half })
         );
         let _ = cr.stroke();
     }
@@ -1639,7 +1711,7 @@ fn attach_leaders_draw(
     state: &Rc<RefCell<HudState>>,
     leaders: &gtk4::DrawingArea,
     drawing: &gtk4::DrawingArea,
-    window: &ApplicationWindow,
+    window: &ApplicationWindow
 ) {
     let state_draw = Rc::clone(state);
     let diagram = drawing.clone();
@@ -1734,7 +1806,7 @@ fn parse_anchor(svg: &str, anchor_id: &str) -> Option<(f64, f64)> {
     let tail = &svg[svg.find(anchor_id)?..];
     Some((
         parse_attr_number(tail, "cx")?,
-        parse_attr_number(tail, "cy")?,
+        parse_attr_number(tail, "cy")?
     ))
 }
 
@@ -1742,46 +1814,6 @@ fn parse_attr_number(text: &str, attribute: &str) -> Option<f64> {
     let tail = &text[text.find(attribute)? + attribute.len()..];
     let tail = &tail[tail.find('"')? + 1..];
     tail[..tail.find('"')?].parse().ok()
-}
-
-fn rounded_rect(
-    cr: &gtk4::cairo::Context,
-    left: f64,
-    top: f64,
-    width: f64,
-    height: f64,
-    radius: f64,
-) {
-    cr.new_sub_path();
-    cr.arc(
-        left + width - radius,
-        top + radius,
-        radius,
-        -std::f64::consts::FRAC_PI_2,
-        0.0,
-    );
-    cr.arc(
-        left + width - radius,
-        top + height - radius,
-        radius,
-        0.0,
-        std::f64::consts::FRAC_PI_2,
-    );
-    cr.arc(
-        left + radius,
-        top + height - radius,
-        radius,
-        std::f64::consts::PI,
-        3.0 * std::f64::consts::FRAC_PI_2,
-    );
-    cr.arc(
-        left + radius,
-        top + radius,
-        radius,
-        std::f64::consts::PI,
-        3.0 * std::f64::consts::FRAC_PI_2,
-    );
-    cr.close_path();
 }
 
 #[cfg(test)]
@@ -1819,6 +1851,26 @@ mod tests {
     #[test]
     fn element_svg_rejects_unknown_ids() {
         assert!(device_element_svg("button99").is_none());
+    }
+
+    #[test]
+    fn styled_element_svg_injects_attributes_before_close() {
+        let svg = device_element_svg_styled("button4", "fill=\"none\" stroke=\"#000000\"")
+            .expect("button4 present");
+        assert!(svg.contains("fill=\"none\" stroke=\"#000000\"/>"));
+        assert!(svg.contains("id=\"button4\""));
+    }
+
+    #[test]
+    fn styled_element_svg_rejects_unknown_ids() {
+        assert!(device_element_svg_styled("button99", "fill=\"none\"").is_none());
+    }
+
+    #[test]
+    fn button_masks_cover_every_button() {
+        let masks = build_button_masks();
+        assert_eq!(masks.fill.len(), MouseButton::ALL.len());
+        assert_eq!(masks.outline.len(), MouseButton::ALL.len());
     }
 
     #[test]
