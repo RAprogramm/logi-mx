@@ -170,6 +170,15 @@ impl Tray for LogiTrayIcon {
                 ..Default::default()
             }
             .into(),
+            MenuItem::Separator,
+            StandardItem {
+                label: format!("logi-mx v{}", env!("CARGO_PKG_VERSION")),
+                icon_name: "help-about".into(),
+                activate: Box::new(|_| {}),
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
         ]);
 
         menu
@@ -437,6 +446,20 @@ mod tests {
         }
 
         assert!(tray.lock_status().connected);
+    }
+
+    #[test]
+    fn test_menu_ends_with_disabled_version_item() {
+        let tray = LogiTrayIcon::new();
+        let menu = tray.menu();
+
+        match menu.last() {
+            Some(MenuItem::Standard(item)) => {
+                assert!(item.label.contains(env!("CARGO_PKG_VERSION")));
+                assert!(!item.enabled);
+            }
+            _ => panic!("Expected a trailing version item")
+        }
     }
 
     #[test]
