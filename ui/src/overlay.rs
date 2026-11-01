@@ -5,15 +5,16 @@
 //!
 //! The device diagram is the reference MX Master 3S layout SVG rendered with
 //! `resvg` on a transparent surface; clickable hotspots are aligned with the
-//! SVG button geometry and highlighted on top of the image. Leader lines run
-//! from thumb buttons to the left edge and from the remaining buttons to the
-//! right. An assignment panel sits on the right. Activated with
-//! `LOGI_MX_OVERLAY=1`.
+//! SVG button geometry and highlighted on top of the image. Every button is
+//! called out from its SVG anchor point with a leader line to the left or
+//! right edge, labelled with what it does and its current assignment. An
+//! assignment panel sits on the right. Activated with `LOGI_MX_OVERLAY=1`.
 
 use std::{
     cell::{OnceCell, RefCell},
     collections::HashMap,
-    rc::Rc
+    rc::Rc,
+    sync::OnceLock
 };
 
 use gtk4::{Box, Button, EventControllerKey, GestureClick, Label, Orientation, glib, prelude::*};
@@ -36,6 +37,10 @@ const OVERLAY_MARGIN: i32 = 80;
 const HIT_PADDING: f64 = 2.5;
 /// Minimum hotspot width before padding is applied, in layout units.
 const THIN_HOTSPOT: f64 = 6.0;
+/// Minimum distance between a leader line end and its label block, in px.
+const LABEL_EDGE_PX: f64 = 8.0;
+/// Minimum vertical distance between neighbouring leader labels.
+const LABEL_MIN_GAP: f64 = 6.0;
 
 /// Reprogrammable buttons of the device diagram.
 ///
@@ -97,7 +102,7 @@ impl MouseButton {
             Self::DpiShift => (45.9, 44.1, 4.0, 7.2),
             Self::Back => (20.1, 47.5, 1.4, 9.0),
             Self::Forward => (20.1, 58.0, 1.4, 9.0),
-            Self::Gesture => (32.6, 59.5, 1.7, 6.3)
+            Self::Gesture => (8.42, 61.69, 1.08, 6.3)
         }
     }
 
@@ -114,6 +119,19 @@ impl MouseButton {
     /// go left; everything else is called out to the right.
     const fn leader_to_left(self) -> bool {
         matches!(self, Self::Back | Self::Forward | Self::Gesture)
+    }
+
+    /// Id of the anchor circle for this button inside the layout SVG.
+    const fn anchor_id(self) -> &'static str {
+        match self {
+            Self::Left => "button0-anchor",
+            Self::Right => "button1-anchor",
+            Self::Wheel => "button2-anchor",
+            Self::Forward => "button3-anchor",
+            Self::Back => "button4-anchor",
+            Self::Gesture => "button5-anchor",
+            Self::DpiShift => "button6-anchor"
+        }
     }
 
     /// Reports whether a layout-space point falls inside the hit rectangle.
@@ -331,7 +349,7 @@ fn attach_draw_callback(
             let _ = cr.restore();
         }
 
-        draw_highlights(&st, cr);
+        draw_highlights(&st, cr, width, height);
         let _ = cr.restore();
     });
 }
@@ -386,10 +404,8 @@ fn to_layout(px: f64, py: f64, width: i32, height: i32) -> (f64, f64) {
     ((px - offset_x) / scale, (py - offset_y) / scale)
 }
 
-fn draw_highlights(st: &OverlayState, cr: &gtk4::cairo::Context) {
-    for button in MouseButton::ALL {
-        draw_leader(cr, button, st.selected == Some(button));
-    }
+fn draw_highlights(st: &OverlayState, cr: &gtk4::cairo::Context, width: i32, height: i32) {
+    draw_leaders(st, cr, width, height);
 
     for button in MouseButton::ALL {
         let selected = st.selected == Some(button);
@@ -415,27 +431,153 @@ fn draw_highlights(st: &OverlayState, cr: &gtk4::cairo::Context) {
     }
 }
 
-/// Draws one callout line, to the left edge for thumb buttons and to the
-/// right edge for everything else.
-fn draw_leader(cr: &gtk4::cairo::Context, button: MouseButton, selected: bool) {
-    let (x, y, w, h) = button.region();
-    let start_y = y + h / 2.0;
-    let (start_x, end_x) = if button.leader_to_left() {
-        (x, 0.0)
-    } else {
-        (x + w, LAYOUT_W)
-    };
+/// Draws one callout per button from its SVG anchor point to the layout
+/// edge, labelled with what the button does and its current assignment.
+///
+/// Labels on each side are sorted by anchor height and pushed apart so they
+/// never overlap; the leader bends at a knee near the edge to reach its
+/// label row.
+fn draw_leaders(st: &OverlayState, cr: &gtk4::cairo::Context, width: i32, height: i32) {
+    let anchors = button_anchors();
+    let (scale, offset_x, _) = fit_transform(f64::from(width), f64::from(height));
 
-    if selected {
-        cr.set_source_rgb(0.93, 0.66, 0.46);
-        cr.set_line_width(0.4);
-    } else {
-        cr.set_source_rgba(0.6, 0.6, 0.6, 0.55);
-        cr.set_line_width(0.25);
+    for to_left in [true, false] {
+        let mut side: Vec<(MouseButton, f64, f64)> = MouseButton::ALL
+            .iter()
+            .filter(|button| button.leader_to_left() == to_left)
+            .filter_map(|button| anchors.get(button).map(|&(ax, ay)| (*button, ax, ay)))
+            .collect();
+        side.sort_by(|(_, _, a), (_, _, b)| a.total_cmp(b));
+        let rows = resolve_rows(&side, LABEL_MIN_GAP);
+
+        let knee_x = if to_left { -0.5 } else { LAYOUT_W + 0.5 };
+        let label_x = if to_left {
+            (LABEL_EDGE_PX - offset_x) / scale
+        } else {
+            (f64::from(width) - LABEL_EDGE_PX - offset_x) / scale
+        };
+
+        for (button, ax, ay, label_y) in rows {
+            let selected = st.selected == Some(button);
+            if selected {
+                cr.set_source_rgba(0.93, 0.66, 0.46, 0.95);
+                cr.set_line_width(0.4);
+            } else {
+                cr.set_source_rgba(0.62, 0.65, 0.70, 0.55);
+                cr.set_line_width(0.25);
+            }
+
+            let title = button.label().to_uppercase();
+            let assignment = st.assignments.get(&button);
+            let block_w = measure_text(cr, &title, 2.7)
+                .max(assignment.map_or(0.0, |action| measure_text(cr, action, 2.0)));
+            let line_end = if to_left {
+                label_x + block_w + 1.5
+            } else {
+                label_x - block_w - 1.5
+            };
+
+            cr.move_to(ax, ay);
+            cr.line_to(knee_x, ay);
+            cr.line_to(knee_x, label_y);
+            cr.line_to(line_end, label_y);
+            let _ = cr.stroke();
+
+            cr.new_path();
+            cr.arc(ax, ay, 0.75, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+
+            draw_label(cr, &title, 2.7, label_x, label_y - 0.5, to_left);
+            if let Some(action) = assignment {
+                draw_label(cr, action, 2.0, label_x, label_y + 2.6, to_left);
+            }
+        }
     }
-    cr.move_to(start_x, start_y);
-    cr.line_to(end_x, start_y);
-    let _ = cr.stroke();
+}
+
+/// Measures text width at the given size in the current transform units.
+fn measure_text(cr: &gtk4::cairo::Context, text: &str, size: f64) -> f64 {
+    select_label_font(cr, size);
+    cr.text_extents(text).map_or(0.0, |extents| extents.width())
+}
+
+/// Assigns label rows on one side so neighbouring callouts never overlap.
+///
+/// Keeps each label at its anchor height when there is room and pushes it
+/// down otherwise; input must be sorted by anchor height.
+fn resolve_rows(
+    side: &[(MouseButton, f64, f64)],
+    min_gap: f64
+) -> Vec<(MouseButton, f64, f64, f64)> {
+    let mut rows = Vec::with_capacity(side.len());
+    let mut previous_y = f64::MIN;
+    for &(button, ax, ay) in side {
+        let label_y = ay.max(previous_y + min_gap);
+        previous_y = label_y;
+        rows.push((button, ax, ay, label_y));
+    }
+    rows
+}
+
+/// Renders one leader label: left-aligned at `anchor_x` for the left side,
+/// right-aligned at `anchor_x` for the right side.
+fn draw_label(
+    cr: &gtk4::cairo::Context,
+    text: &str,
+    size: f64,
+    anchor_x: f64,
+    baseline_y: f64,
+    to_left: bool
+) {
+    select_label_font(cr, size);
+    cr.set_source_rgba(0.88, 0.90, 0.94, 0.92);
+
+    if let Ok(extents) = cr.text_extents(text) {
+        let x = if to_left {
+            anchor_x - extents.x_bearing()
+        } else {
+            anchor_x - extents.x_bearing() - extents.width()
+        };
+        cr.move_to(x, baseline_y - extents.y_bearing());
+        let _ = cr.show_text(text);
+    }
+}
+
+fn select_label_font(cr: &gtk4::cairo::Context, size: f64) {
+    cr.select_font_face(
+        "Sans",
+        gtk4::cairo::FontSlant::Normal,
+        gtk4::cairo::FontWeight::Normal
+    );
+    cr.set_font_size(size);
+}
+
+/// Anchor points of every button, parsed once from the layout SVG.
+fn button_anchors() -> &'static HashMap<MouseButton, (f64, f64)> {
+    static ANCHORS: OnceLock<HashMap<MouseButton, (f64, f64)>> = OnceLock::new();
+    ANCHORS.get_or_init(|| {
+        MouseButton::ALL
+            .iter()
+            .filter_map(|button| {
+                parse_anchor(DEVICE_SVG, button.anchor_id()).map(|point| (*button, point))
+            })
+            .collect()
+    })
+}
+
+/// Extracts `(cx, cy)` of the anchor circle with the given id.
+fn parse_anchor(svg: &str, anchor_id: &str) -> Option<(f64, f64)> {
+    let tail = &svg[svg.find(anchor_id)?..];
+    Some((
+        parse_attr_number(tail, "cx")?,
+        parse_attr_number(tail, "cy")?
+    ))
+}
+
+fn parse_attr_number(text: &str, attribute: &str) -> Option<f64> {
+    let tail = &text[text.find(attribute)? + attribute.len()..];
+    let tail = &tail[tail.find('"')? + 1..];
+    tail[..tail.find('"')?].parse().ok()
 }
 
 fn rounded_rect(
@@ -501,5 +643,53 @@ mod tests {
     fn left_leaders_start_inside_the_layout() {
         let (x, _, _, _) = MouseButton::Back.region();
         assert!(x > 0.0 && x < 25.0);
+    }
+
+    #[test]
+    fn every_button_has_an_svg_anchor() {
+        assert_eq!(button_anchors().len(), MouseButton::ALL.len());
+    }
+
+    #[test]
+    fn gesture_anchor_sits_on_the_rotated_tab() {
+        let (x, y) = *button_anchors()
+            .get(&MouseButton::Gesture)
+            .expect("gesture anchor present");
+        assert!(x < 12.0 && (60.0..70.0).contains(&y));
+    }
+
+    #[test]
+    fn resolve_rows_pushes_overlapping_labels_down() {
+        let side = vec![
+            (MouseButton::Back, 20.8, 52.0),
+            (MouseButton::Forward, 20.8, 62.5),
+            (MouseButton::Gesture, 9.0, 64.8),
+        ];
+        let rows = resolve_rows(&side, LABEL_MIN_GAP);
+
+        assert!((rows[0].3 - 52.0).abs() < f64::EPSILON);
+        assert!((rows[1].3 - 62.5).abs() < f64::EPSILON);
+        assert!(rows[2].3 >= rows[1].3 + LABEL_MIN_GAP);
+    }
+
+    #[test]
+    fn resolve_rows_keeps_spaced_labels_at_anchor_height() {
+        let side = vec![
+            (MouseButton::Right, 61.1, 17.1),
+            (MouseButton::Wheel, 47.7, 27.7),
+            (MouseButton::Left, 34.4, 38.2),
+        ];
+        let rows = resolve_rows(&side, LABEL_MIN_GAP);
+
+        assert!((rows[0].3 - 17.1).abs() < f64::EPSILON);
+        assert!((rows[1].3 - 27.7).abs() < f64::EPSILON);
+        assert!((rows[2].3 - 38.2).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_anchor_reads_circle_coordinates() {
+        let svg = r#"<circle id="button0-anchor" cx="34.382" cy="38.154" r="0.8"/>"#;
+        assert_eq!(parse_anchor(svg, "button0-anchor"), Some((34.382, 38.154)));
+        assert_eq!(parse_anchor(svg, "missing-anchor"), None);
     }
 }
