@@ -10,7 +10,10 @@ use libadwaita::{
 use logi_mx_daemon::ipc::{Request, Response, try_request};
 use logi_mx_driver::prelude::*;
 
-use crate::snapshot::{DeviceSnapshot, collect_device_snapshot, parse_battery_status};
+use crate::{
+    hyprland::Outcome,
+    snapshot::{DeviceSnapshot, collect_device_snapshot, parse_battery_status}
+};
 
 const DPI_MIN: f64 = 400.0;
 const DPI_MAX: f64 = 8000.0;
@@ -140,6 +143,7 @@ fn create_connected_ui(snapshot: &DeviceSnapshot, toast_overlay: &ToastOverlay) 
     device_page.add_css_class("settings-page");
     device_page.add(&create_device_info_group(&snapshot.name));
     device_page.add(&create_battery_group(snapshot, toast_overlay));
+    device_page.add(&create_integration_group(toast_overlay));
     stack.add_titled(&device_page, Some("device"), "Device");
 
     let pointer_page = PreferencesPage::new();
@@ -243,6 +247,43 @@ fn create_battery_group(
     battery_row.set_activatable_widget(Some(&refresh_btn));
 
     group.add(&battery_row);
+    group
+}
+
+/// Builds the desktop-integration group with the Hyprland setup button.
+fn create_integration_group(toast_overlay: &ToastOverlay) -> PreferencesGroup {
+    let group = PreferencesGroup::new();
+    group.set_title("Desktop Integration");
+    group.set_description(Some("Window rules and overlay keybind for Hyprland"));
+
+    let row = ActionRow::new();
+    row.add_prefix(&icon("preferences-system-symbolic"));
+    row.set_title("Hyprland");
+    row.set_subtitle("Float and center the settings window, bind the overlay");
+
+    let button = Button::with_label("Configure");
+    button.add_css_class("pill");
+    button.set_tooltip_text(Some("Check the Hyprland config and apply the integration"));
+    let to = toast_overlay.clone();
+    button.connect_clicked(move |_| {
+        let message = match crate::hyprland::ensure_integration() {
+            Ok(Outcome::Configured {
+                path
+            }) => format!("Hyprland configured: {path}"),
+            Ok(Outcome::AlreadyConfigured {
+                path
+            }) => format!("Already configured: {path}"),
+            Ok(Outcome::NotHyprland) => "Not running under Hyprland".to_string(),
+            Ok(Outcome::NoConfig) => "Hyprland config not found in ~/.config/hypr".to_string(),
+            Err(e) => format!("Hyprland setup failed: {e}")
+        };
+        to.add_toast(Toast::new(&message));
+    });
+
+    row.add_suffix(&button);
+    row.set_activatable_widget(Some(&button));
+
+    group.add(&row);
     group
 }
 

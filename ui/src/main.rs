@@ -7,6 +7,7 @@
 //! either the settings window ([`settings`]) or the full-screen button-mapping
 //! overlay ([`overlay`], enabled with `LOGI_MX_OVERLAY=1`).
 
+pub mod hyprland;
 pub mod overlay;
 pub mod settings;
 pub mod snapshot;
