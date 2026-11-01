@@ -6,8 +6,8 @@
 //! The device diagram is the reference MX Master 3S layout SVG rendered with
 //! `resvg` on a transparent surface. Every button is called out from its SVG
 //! anchor with a leader line labelled with what it does. Live kernel input
-//! events streamed by the daemon highlight the exact pressed button shapes,
-//! show pointer speed and wheel direction/velocity, so the device can be
+//! events streamed by the daemon highlight the exact pressed button shapes
+//! and show wheel direction and velocity, so the device can be
 //! verified visually. A settings panel on the right exposes DPI, scroll
 //! behaviour, battery and desktop integration. Toggled by the tray or the
 //! configured keybind; a second activation closes it.
@@ -18,29 +18,29 @@ use std::{
     io::BufReader,
     rc::Rc,
     sync::{
+        atomic::{AtomicBool, Ordering},
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering}
     },
     thread,
-    time::Duration
+    time::Duration,
 };
 
 use gtk4::{
-    Box as GtkBox, Button, EventControllerKey, GestureClick, Label, Orientation, Scale,
-    ScrolledWindow, Switch, glib
+    glib, Box as GtkBox, Button, EventControllerKey, GestureClick, Label, Orientation, Scale,
+    ScrolledWindow, Switch,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
-    ActionRow, Application, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay, ViewStack,
-    ViewSwitcher, ViewSwitcherPolicy, prelude::*
+    prelude::*, ActionRow, Application, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay,
+    ViewStack, ViewSwitcher, ViewSwitcherPolicy,
 };
 use logi_mx_daemon::ipc::{
-    self, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT, BTN_BIT_MIDDLE,
-    BTN_BIT_RIGHT, LiveFrame, Response
+    self, LiveFrame, Response, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT,
+    BTN_BIT_MIDDLE, BTN_BIT_RIGHT,
 };
 use logi_mx_driver::prelude::{HiResScrollConfig, SmartShiftConfig};
 
-use crate::snapshot::{DeviceSnapshot, collect_device_snapshot};
+use crate::snapshot::{collect_device_snapshot, DeviceSnapshot};
 
 /// Device layout embedded from `assets/logitech-mx-master-3s.svg`.
 const DEVICE_SVG: &str = include_str!("../assets/logitech-mx-master-3s.svg");
@@ -72,8 +72,6 @@ const DPI_STEP: f64 = 100.0;
 const SMARTSHIFT_MIN: f64 = 1.0;
 const SMARTSHIFT_MAX: f64 = 255.0;
 const SMARTSHIFT_STEP: f64 = 1.0;
-/// Pointer speed that saturates the speedometer bar, in px/s.
-const SPEED_FULL_SCALE: f64 = 3000.0;
 /// Scroll velocity that saturates the wheel chevrons, in notches/s.
 const WHEEL_FULL_SCALE: f64 = 25.0;
 /// Exponential smoothing factor applied to every new live sample.
@@ -97,7 +95,7 @@ enum MouseButton {
     DpiShift,
     Back,
     Forward,
-    Gesture
+    Gesture,
 }
 
 impl MouseButton {
@@ -108,7 +106,7 @@ impl MouseButton {
         Self::DpiShift,
         Self::Back,
         Self::Forward,
-        Self::Gesture
+        Self::Gesture,
     ];
 
     /// Hit-test order: small hotspots first so padding never lets a large
@@ -120,7 +118,7 @@ impl MouseButton {
         Self::Forward,
         Self::Gesture,
         Self::Left,
-        Self::Right
+        Self::Right,
     ];
 
     const fn label(self) -> &'static str {
@@ -131,7 +129,7 @@ impl MouseButton {
             Self::DpiShift => "DPI Shift",
             Self::Back => "Back",
             Self::Forward => "Forward",
-            Self::Gesture => "Gesture"
+            Self::Gesture => "Gesture",
         }
     }
 
@@ -145,7 +143,7 @@ impl MouseButton {
             Self::DpiShift => (45.9, 44.1, 4.0, 7.2),
             Self::Back => (20.1, 47.5, 1.4, 9.0),
             Self::Forward => (20.1, 58.0, 1.4, 9.0),
-            Self::Gesture => (8.42, 61.69, 1.08, 6.3)
+            Self::Gesture => (8.42, 61.69, 1.08, 6.3),
         }
     }
 
@@ -173,7 +171,7 @@ impl MouseButton {
             Self::Forward => "button3-anchor",
             Self::Back => "button4-anchor",
             Self::Gesture => "button5-anchor",
-            Self::DpiShift => "button6-anchor"
+            Self::DpiShift => "button6-anchor",
         }
     }
 
@@ -186,7 +184,7 @@ impl MouseButton {
             Self::Forward => "button3",
             Self::Back => "button4",
             Self::Gesture => "button5",
-            Self::DpiShift => "button6"
+            Self::DpiShift => "button6",
         }
     }
 
@@ -199,7 +197,7 @@ impl MouseButton {
             Self::Back => Some(BTN_BIT_BACK),
             Self::Forward => Some(BTN_BIT_FORWARD),
             Self::Gesture => Some(BTN_BIT_GESTURE),
-            Self::DpiShift => None
+            Self::DpiShift => None,
         }
     }
 
@@ -213,13 +211,12 @@ impl MouseButton {
 /// Smoothed live input picture shown on the diagram.
 #[derive(Default, Debug)]
 struct LiveVisual {
-    buttons:     u32,
-    speed:       f64,
+    buttons: u32,
     wheel_speed: f64,
-    wheel_dir:   i32,
-    hwheel_dir:  i32,
-    extra_keys:  Vec<u16>,
-    connected:   bool
+    wheel_dir: i32,
+    hwheel_dir: i32,
+    extra_keys: Vec<u16>,
+    connected: bool,
 }
 
 impl LiveVisual {
@@ -230,15 +227,6 @@ impl LiveVisual {
         self.connected = true;
 
         let dt = f64::from(frame.dt_ms.max(1)) / 1000.0;
-        let dx = f64::from(frame.dx);
-        let dy = f64::from(frame.dy);
-        let instant_speed = dx.hypot(dy) / dt;
-        self.speed = if self.speed == 0.0 {
-            instant_speed
-        } else {
-            blend(self.speed, instant_speed)
-        };
-
         let wheel_units = (frame.wheel.abs() * 120).max(frame.wheel_hi.abs());
         let instant_wheel = f64::from(wheel_units) / dt / 120.0;
         self.wheel_speed = if self.wheel_speed == 0.0 {
@@ -255,15 +243,17 @@ impl LiveVisual {
     }
 
     /// Fades the velocity gauges toward zero while the device is idle.
-    fn decay(&mut self) {
-        self.speed *= 0.6;
-        self.wheel_speed *= 0.6;
-        if self.speed < 1.0 {
-            self.speed = 0.0;
+    ///
+    /// Returns whether any gauge value actually moved.
+    fn decay(&mut self) -> bool {
+        if self.wheel_speed == 0.0 {
+            return false;
         }
+        self.wheel_speed *= 0.6;
         if self.wheel_speed < 0.5 {
             self.wheel_speed = 0.0;
         }
+        true
     }
 }
 
@@ -275,9 +265,9 @@ fn blend(previous: f64, sample: f64) -> f64 {
 
 #[derive(Default)]
 struct HudState {
-    selected:    Option<MouseButton>,
+    selected: Option<MouseButton>,
     assignments: HashMap<MouseButton, String>,
-    live:        LiveVisual
+    live: LiveVisual,
 }
 
 thread_local! {
@@ -400,7 +390,7 @@ fn create_panel(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     window: &ApplicationWindow,
-    snapshot: Option<&DeviceSnapshot>
+    snapshot: Option<&DeviceSnapshot>,
 ) -> (ToastOverlay, Label) {
     let toast = ToastOverlay::new();
     toast.set_size_request(PANEL_WIDTH, -1);
@@ -428,26 +418,26 @@ fn create_panel(
             buttons_page(state, drawing),
             "buttons",
             "Buttons",
-            "input-mouse-symbolic"
+            "input-mouse-symbolic",
         ),
         (
             wheel_page(snapshot, &toast),
             "wheel",
             "Wheel",
-            "view-continuous-symbolic"
+            "view-continuous-symbolic",
         ),
         (
             pointer_page(snapshot, &toast),
             "pointer",
             "Pointer",
-            "preferences-desktop-input-symbolic"
+            "preferences-desktop-input-symbolic",
         ),
         (
             device_page(snapshot, &toast),
             "device",
             "Device",
-            "battery-symbolic"
-        )
+            "battery-symbolic",
+        ),
     ];
     for (page, name, title, icon) in pages {
         stack.add_titled(&page, Some(name), title);
@@ -486,7 +476,7 @@ fn buttons_page(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea) -> S
         "Toggle SmartShift",
         "Keypress: Ctrl+C",
         "Keypress: Ctrl+V",
-        "None"
+        "None",
     ];
     for action in actions {
         let button = Button::with_label(action);
@@ -534,7 +524,7 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
         Orientation::Horizontal,
         SMARTSHIFT_MIN,
         SMARTSHIFT_MAX,
-        SMARTSHIFT_STEP
+        SMARTSHIFT_STEP,
     );
     threshold_scale.set_value(f64::from(smartshift.threshold));
     threshold_scale.set_draw_value(true);
@@ -552,8 +542,8 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     let to = toast.clone();
     shift_apply.connect_clicked(move |_| {
         let request = ipc::Request::SetSmartShift {
-            enabled:   sw.is_active(),
-            threshold: scale_threshold(ts.value())
+            enabled: sw.is_active(),
+            threshold: scale_threshold(ts.value()),
         };
         report(ipc::try_request(&request), &to, "SmartShift applied");
     });
@@ -593,8 +583,8 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     let to = toast.clone();
     scroll_apply.connect_clicked(move |_| {
         let request = ipc::Request::SetHires {
-            enabled:  hs.is_active(),
-            inverted: inv.is_active()
+            enabled: hs.is_active(),
+            inverted: inv.is_active(),
         };
         report(ipc::try_request(&request), &to, "Scroll settings applied");
     });
@@ -642,11 +632,9 @@ fn pointer_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scro
     apply.connect_clicked(move |_| {
         let dpi = scale_dpi(sc.value());
         report(
-            ipc::try_request(&ipc::Request::SetDpi {
-                value: dpi
-            }),
+            ipc::try_request(&ipc::Request::SetDpi { value: dpi }),
             &to,
-            &format!("DPI set to {dpi}")
+            &format!("DPI set to {dpi}"),
         );
     });
 
@@ -678,19 +666,16 @@ fn device_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scrol
         |s| {
             s.battery.map_or_else(
                 || "unknown".to_string(),
-                |b| format!("{}% · {:?}", b.level, b.status)
+                |b| format!("{}% · {:?}", b.level, b.status),
             )
-        }
+        },
     ));
     let refresh = Button::with_label("Refresh");
     refresh.add_css_class("pill");
     let br = battery_row.clone();
     let to = toast.clone();
     refresh.connect_clicked(move |_| match ipc::try_request(&ipc::Request::Battery) {
-        Some(Response::Battery {
-            level,
-            status
-        }) => {
+        Some(Response::Battery { level, status }) => {
             br.set_subtitle(&format!("{level}% · {status}"));
         }
         _ => {
@@ -711,21 +696,17 @@ fn device_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scrol
     let to = toast.clone();
     configure.connect_clicked(move |_| {
         let message = match crate::hyprland::ensure_integration() {
-            Ok(crate::hyprland::Outcome::Configured {
-                path
-            }) => {
+            Ok(crate::hyprland::Outcome::Configured { path }) => {
                 format!("Hyprland configured: {path}")
             }
-            Ok(crate::hyprland::Outcome::AlreadyConfigured {
-                path
-            }) => {
+            Ok(crate::hyprland::Outcome::AlreadyConfigured { path }) => {
                 format!("Already configured: {path}")
             }
             Ok(crate::hyprland::Outcome::NotHyprland) => "Not running under Hyprland".to_string(),
             Ok(crate::hyprland::Outcome::NoConfig) => {
                 "Hyprland config not found in ~/.config/hypr".to_string()
             }
-            Err(e) => format!("Hyprland setup failed: {e}")
+            Err(e) => format!("Hyprland setup failed: {e}"),
         };
         to.add_toast(Toast::new(&message));
     });
@@ -757,10 +738,8 @@ fn page_scroll() -> ScrolledWindow {
 fn report(response: Option<Response>, toast: &ToastOverlay, success: &str) {
     let message = match response {
         Some(Response::Ok) => success.to_string(),
-        Some(Response::Error {
-            message
-        }) => message,
-        _ => "Daemon unavailable".to_string()
+        Some(Response::Error { message }) => message,
+        _ => "Daemon unavailable".to_string(),
     };
     toast.add_toast(Toast::new(&message));
 }
@@ -857,12 +836,7 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label:
         if ACTIVE_WINDOW.with(|window| window.borrow().is_none()) {
             return glib::ControlFlow::Break;
         }
-        let changed = {
-            let mut st = state_decay.borrow_mut();
-            let before = (st.live.speed, st.live.wheel_speed);
-            st.live.decay();
-            before != (st.live.speed, st.live.wheel_speed)
-        };
+        let changed = state_decay.borrow_mut().live.decay();
         if changed {
             drawing_decay.queue_draw();
         }
@@ -876,7 +850,7 @@ fn pump_live_socket(
     slot: &Arc<Mutex<Option<LiveFrame>>>,
     connected: &Arc<AtomicBool>,
     stop: &AtomicBool,
-    wake: &dyn Fn()
+    wake: &dyn Fn(),
 ) {
     let _ = socket.set_read_timeout(Some(LIVE_POLL_TIMEOUT));
     let mut reader = BufReader::new(socket);
@@ -899,7 +873,7 @@ fn pump_live_socket(
                     break;
                 }
             }
-            Err(_) => break
+            Err(_) => break,
         }
     }
     connected.store(false, Ordering::Relaxed);
@@ -911,18 +885,10 @@ fn live_summary(live: &LiveVisual) -> String {
     if !live.connected {
         return "Live telemetry: waiting for the daemon".to_string();
     }
-    if live.speed < 1.0
-        && live.buttons == 0
-        && live.wheel_speed < 0.5
-        && live.extra_keys.is_empty()
-    {
+    if live.buttons == 0 && live.wheel_speed < 0.5 && live.extra_keys.is_empty() {
         return "Live: connected · waiting for input".to_string();
     }
-    let mut text = format!(
-        "Live: {} px/s · wheel {:.0}/s",
-        live.speed.round(),
-        live.wheel_speed
-    );
+    let mut text = format!("Live: wheel {:.0}/s", live.wheel_speed);
     if !live.extra_keys.is_empty() {
         let codes: Vec<String> = live.extra_keys.iter().map(ToString::to_string).collect();
         text.push_str(" · raw keys ");
@@ -934,7 +900,7 @@ fn live_summary(live: &LiveVisual) -> String {
 fn attach_hit_testing(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
-    status_label: &Label
+    status_label: &Label,
 ) {
     let gesture = GestureClick::new();
     let state_gesture = Rc::clone(state);
@@ -959,7 +925,7 @@ fn attach_draw_callback(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     image: &Rc<OnceCell<Option<gtk4::cairo::ImageSurface>>>,
-    masks: &Rc<HashMap<MouseButton, gtk4::cairo::ImageSurface>>
+    masks: &Rc<HashMap<MouseButton, gtk4::cairo::ImageSurface>>,
 ) {
     let state_draw = Rc::clone(state);
     let image_draw = Rc::clone(image);
@@ -993,7 +959,7 @@ fn attach_draw_callback(
         }
         let _ = cr.restore();
 
-        draw_speedometer(&st, cr, width, height);
+        draw_wheel_indicator(&st, cr, width);
     });
 }
 
@@ -1028,7 +994,7 @@ fn render_svg_to_surface(svg: &[u8]) -> Option<gtk4::cairo::ImageSurface> {
         gtk4::cairo::Format::ARgb32,
         width.cast_signed(),
         height.cast_signed(),
-        (width * 4).cast_signed()
+        (width * 4).cast_signed(),
     )
     .ok()
 }
@@ -1110,7 +1076,7 @@ fn draw_pressed_shapes(
     cr: &gtk4::cairo::Context,
     sx: f64,
     sy: f64,
-    masks: &HashMap<MouseButton, gtk4::cairo::ImageSurface>
+    masks: &HashMap<MouseButton, gtk4::cairo::ImageSurface>,
 ) {
     for button in MouseButton::ALL {
         let Some(bit) = button.live_bit() else {
@@ -1130,41 +1096,6 @@ fn draw_pressed_shapes(
         let _ = cr.mask(&pattern);
         let _ = cr.restore();
     }
-}
-
-/// Draws the pointer speed readout with a proportional bar, bottom-left.
-#[allow(
-    clippy::suboptimal_flops,
-    reason = "plain arithmetic keeps gauge geometry readable"
-)]
-fn draw_speedometer(st: &HudState, cr: &gtk4::cairo::Context, width: i32, height: i32) {
-    let speed = st.live.speed;
-    if speed < 1.0 {
-        return;
-    }
-
-    let margin = 24.0;
-    let baseline = f64::from(height) - margin;
-    select_label_font(cr, 14.0);
-    cr.set_source_rgba(0.88, 0.90, 0.94, 0.95);
-    let text = format!("{speed:.0} px/s");
-    if let Ok(extents) = cr.text_extents(&text) {
-        cr.move_to(margin - extents.x_bearing(), baseline - extents.y_bearing());
-        let _ = cr.show_text(&text);
-    }
-
-    let bar_w = 160.0;
-    let bar_h = 5.0;
-    let filled = bar_w * (speed / SPEED_FULL_SCALE).min(1.0);
-    let bar_y = baseline + 6.0;
-    cr.set_source_rgba(1.0, 1.0, 1.0, 0.18);
-    rounded_rect(cr, margin, bar_y, bar_w, bar_h, 2.5);
-    let _ = cr.fill();
-    cr.set_source_rgba(0.93, 0.66, 0.46, 0.95);
-    rounded_rect(cr, margin, bar_y, filled.max(bar_h), bar_h, 2.5);
-    let _ = cr.fill();
-
-    draw_wheel_indicator(st, cr, width);
 }
 
 /// Draws chevrons near the wheel showing scroll direction and velocity.
@@ -1203,12 +1134,12 @@ fn draw_wheel_indicator(st: &HudState, cr: &gtk4::cairo::Context, _width: i32) {
         };
         cr.move_to(
             cx - (if vertical { half } else { 0.0 }),
-            cy - (if vertical { 0.0 } else { half })
+            cy - (if vertical { 0.0 } else { half }),
         );
         cr.line_to(cx + px * 0.4, cy + py * 0.4);
         cr.line_to(
             cx + (if vertical { half } else { 0.0 }),
-            cy + (if vertical { 0.0 } else { half })
+            cy + (if vertical { 0.0 } else { half }),
         );
         let _ = cr.stroke();
     }
@@ -1290,7 +1221,7 @@ fn measure_text(cr: &gtk4::cairo::Context, text: &str, size: f64) -> f64 {
 /// down otherwise; input must be sorted by anchor height.
 fn resolve_rows(
     side: &[(MouseButton, f64, f64)],
-    min_gap: f64
+    min_gap: f64,
 ) -> Vec<(MouseButton, f64, f64, f64)> {
     let mut rows = Vec::with_capacity(side.len());
     let mut previous_y = f64::MIN;
@@ -1310,7 +1241,7 @@ fn draw_label(
     size: f64,
     anchor_x: f64,
     baseline_y: f64,
-    to_left: bool
+    to_left: bool,
 ) {
     select_label_font(cr, size);
     cr.set_source_rgba(0.88, 0.90, 0.94, 0.92);
@@ -1330,7 +1261,7 @@ fn select_label_font(cr: &gtk4::cairo::Context, size: f64) {
     cr.select_font_face(
         "Sans",
         gtk4::cairo::FontSlant::Normal,
-        gtk4::cairo::FontWeight::Normal
+        gtk4::cairo::FontWeight::Normal,
     );
     cr.set_font_size(size);
 }
@@ -1353,7 +1284,7 @@ fn parse_anchor(svg: &str, anchor_id: &str) -> Option<(f64, f64)> {
     let tail = &svg[svg.find(anchor_id)?..];
     Some((
         parse_attr_number(tail, "cx")?,
-        parse_attr_number(tail, "cy")?
+        parse_attr_number(tail, "cy")?,
     ))
 }
 
@@ -1369,7 +1300,7 @@ fn rounded_rect(
     top: f64,
     width: f64,
     height: f64,
-    radius: f64
+    radius: f64,
 ) {
     cr.new_sub_path();
     cr.arc(
@@ -1377,28 +1308,28 @@ fn rounded_rect(
         top + radius,
         radius,
         -std::f64::consts::FRAC_PI_2,
-        0.0
+        0.0,
     );
     cr.arc(
         left + width - radius,
         top + height - radius,
         radius,
         0.0,
-        std::f64::consts::FRAC_PI_2
+        std::f64::consts::FRAC_PI_2,
     );
     cr.arc(
         left + radius,
         top + height - radius,
         radius,
         std::f64::consts::PI,
-        3.0 * std::f64::consts::FRAC_PI_2
+        3.0 * std::f64::consts::FRAC_PI_2,
     );
     cr.arc(
         left + radius,
         top + radius,
         radius,
         std::f64::consts::PI,
-        3.0 * std::f64::consts::FRAC_PI_2
+        3.0 * std::f64::consts::FRAC_PI_2,
     );
     cr.close_path();
 }
@@ -1484,8 +1415,9 @@ mod tests {
     }
 
     #[test]
-    fn live_speed_blends_motion_over_time() {
+    fn motion_frame_marks_connection() {
         let mut live = LiveVisual::default();
+        assert!(!live.connected);
         let frame = LiveFrame {
             dx: 30,
             dy: 40,
@@ -1494,8 +1426,8 @@ mod tests {
         };
         live.apply(&frame);
 
-        assert!((live.speed - 5000.0).abs() < 1.0);
         assert!(live.connected);
+        assert_eq!(live.wheel_speed, 0.0);
     }
 
     #[test]
