@@ -9,18 +9,18 @@
 use std::io::Write as IoWrite;
 
 use clap::{Parser, Subcommand};
-use logi_mx_daemon::ipc::{Request, Response, try_request};
+use logi_mx_daemon::ipc::{try_request, Request, Response};
 use logi_mx_driver::prelude::*;
 use masterror::prelude::*;
 use tracing::{info, warn};
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser)]
 #[command(name = "logi-mx")]
 #[command(about = "Logitech MX series mouse configuration tool", long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands
+    command: Commands,
 }
 
 #[derive(Subcommand)]
@@ -35,29 +35,29 @@ enum Commands {
 
     Set {
         #[command(subcommand)]
-        setting: SetCommands
+        setting: SetCommands,
     },
 
     Config {
         #[command(subcommand)]
-        action: ConfigCommands
+        action: ConfigCommands,
     },
 
     Autostart {
         #[command(subcommand)]
-        action: AutostartCommands
+        action: AutostartCommands,
     },
 
     Daemon {
         #[command(subcommand)]
-        action: DaemonCommands
-    }
+        action: DaemonCommands,
+    },
 }
 
 #[derive(Subcommand, Clone, Copy)]
 enum SetCommands {
     Dpi {
-        value: u16
+        value: u16,
     },
 
     Smartshift {
@@ -65,7 +65,7 @@ enum SetCommands {
         enabled: bool,
 
         #[arg(long, default_value_t = 20)]
-        threshold: u8
+        threshold: u8,
     },
 
     Hires {
@@ -73,7 +73,7 @@ enum SetCommands {
         enabled: bool,
 
         #[arg(long)]
-        inverted: bool
+        inverted: bool,
     },
 
     Button {
@@ -84,13 +84,21 @@ enum SetCommands {
         divert: bool,
 
         #[arg(long)]
-        raw_xy: bool
+        raw_xy: bool,
+    },
+
+    Remap {
+        /// Control ID to remap, e.g. 0x00C3 for the gesture button
+        control_id: u16,
+
+        /// Target control ID, or 0 to restore native behaviour
+        target_cid: u16,
     },
 
     Host {
         /// Zero-based host index
-        index: u8
-    }
+        index: u8,
+    },
 }
 
 #[derive(Subcommand)]
@@ -101,20 +109,20 @@ enum ConfigCommands {
 
     Export { path: String },
 
-    Import { path: String }
+    Import { path: String },
 }
 
 #[derive(Subcommand)]
 enum AutostartCommands {
     Install,
     Uninstall,
-    Status
+    Status,
 }
 
 #[derive(Subcommand)]
 enum DaemonCommands {
     Status,
-    Ping
+    Ping,
 }
 
 /// Buffered stdout writer that maps I/O failures to [`AppError`].
@@ -150,13 +158,11 @@ impl Out {
 fn apply_setting(
     request: &Request,
     direct: impl FnOnce(&mut MxMaster3s) -> Result<()>,
-    message: std::fmt::Arguments<'_>
+    message: std::fmt::Arguments<'_>,
 ) -> Result<()> {
     match try_request(request) {
         Some(Response::Ok) => {}
-        Some(Response::Error {
-            message
-        }) => return Err(AppError::internal(message)),
+        Some(Response::Error { message }) => return Err(AppError::internal(message)),
         _ => {
             warn!("Daemon unavailable, falling back to direct device access");
             let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
@@ -182,18 +188,10 @@ fn main() -> Result<()> {
         Commands::Battery => cmd_battery(),
         Commands::Hosts => cmd_hosts(),
         Commands::Buttons => cmd_buttons(),
-        Commands::Set {
-            setting
-        } => cmd_set(setting),
-        Commands::Config {
-            action
-        } => cmd_config(action),
-        Commands::Autostart {
-            action
-        } => cmd_autostart(&action),
-        Commands::Daemon {
-            action
-        } => cmd_daemon(&action)
+        Commands::Set { setting } => cmd_set(setting),
+        Commands::Config { action } => cmd_config(action),
+        Commands::Autostart { action } => cmd_autostart(&action),
+        Commands::Daemon { action } => cmd_daemon(&action),
     }
 }
 
@@ -204,7 +202,7 @@ fn cmd_info() -> Result<()> {
         name,
         dpi,
         smartshift,
-        hires
+        hires,
     }) = try_request(&Request::Info)
     {
         let mut out = Out::new();
@@ -236,7 +234,7 @@ fn render_info(
     name: &str,
     dpi: u16,
     smartshift: SmartShiftConfig,
-    hires: HiResScrollConfig
+    hires: HiResScrollConfig,
 ) -> Result<()> {
     out.line(format_args!("Device Information:"))?;
     out.line(format_args!("  Name: {name}"))?;
@@ -259,11 +257,7 @@ fn render_info(
 fn cmd_battery() -> Result<()> {
     info!("Checking battery...");
 
-    if let Some(Response::Battery {
-        level,
-        status
-    }) = try_request(&Request::Battery)
-    {
+    if let Some(Response::Battery { level, status }) = try_request(&Request::Battery) {
         let mut out = Out::new();
         render_battery(&mut out, level, &status)?;
         return out.finish();
@@ -293,11 +287,7 @@ fn render_battery(out: &mut Out, level: u8, status: &str) -> Result<()> {
 fn cmd_hosts() -> Result<()> {
     info!("Reading Easy-Switch host info...");
 
-    if let Some(Response::Hosts {
-        hosts,
-        current
-    }) = try_request(&Request::Hosts)
-    {
+    if let Some(Response::Hosts { hosts, current }) = try_request(&Request::Hosts) {
         let mut out = Out::new();
         render_hosts(&mut out, hosts, current)?;
         return out.finish();
@@ -327,10 +317,7 @@ fn render_hosts(out: &mut Out, hosts: u8, current: u8) -> Result<()> {
 fn cmd_buttons() -> Result<()> {
     info!("Listing reprogrammable controls...");
 
-    if let Some(Response::Buttons {
-        controls
-    }) = try_request(&Request::Buttons)
-    {
+    if let Some(Response::Buttons { controls }) = try_request(&Request::Buttons) {
         let mut out = Out::new();
         out.line(format_args!("Reprogrammable Controls: {}", controls.len()))?;
         for control in controls {
@@ -377,96 +364,80 @@ fn cmd_buttons_direct() -> Result<()> {
 
 fn cmd_set(setting: SetCommands) -> Result<()> {
     match setting {
-        SetCommands::Dpi {
-            value
-        } => {
+        SetCommands::Dpi { value } => {
             info!("Setting DPI to {}...", value);
             apply_setting(
-                &Request::SetDpi {
-                    value
-                },
+                &Request::SetDpi { value },
                 |device| device.set_dpi(value),
-                format_args!("DPI set to {value}")
+                format_args!("DPI set to {value}"),
             )
         }
-        SetCommands::Smartshift {
-            enabled,
-            threshold
-        } => {
+        SetCommands::Smartshift { enabled, threshold } => {
             info!(
                 "Configuring SmartShift: enabled={}, threshold={}",
                 enabled, threshold
             );
             apply_setting(
-                &Request::SetSmartShift {
-                    enabled,
-                    threshold
-                },
-                |device| {
-                    device.set_smartshift(SmartShiftConfig {
-                        enabled,
-                        threshold
-                    })
-                },
+                &Request::SetSmartShift { enabled, threshold },
+                |device| device.set_smartshift(SmartShiftConfig { enabled, threshold }),
                 format_args!(
                     "SmartShift configured: {} (threshold: {})",
                     if enabled { "enabled" } else { "disabled" },
                     threshold
-                )
+                ),
             )
         }
-        SetCommands::Hires {
-            enabled,
-            inverted
-        } => {
+        SetCommands::Hires { enabled, inverted } => {
             info!(
                 "Configuring hi-res scroll: enabled={}, inverted={}",
                 enabled, inverted
             );
             apply_setting(
-                &Request::SetHires {
-                    enabled,
-                    inverted
-                },
-                |device| {
-                    device.set_hires_scroll(HiResScrollConfig {
-                        enabled,
-                        inverted
-                    })
-                },
+                &Request::SetHires { enabled, inverted },
+                |device| device.set_hires_scroll(HiResScrollConfig { enabled, inverted }),
                 format_args!(
                     "Hi-res scroll: {}, inverted: {}",
                     if enabled { "enabled" } else { "disabled" },
                     if inverted { "yes" } else { "no" }
-                )
+                ),
             )
         }
         SetCommands::Button {
             control_id,
             divert,
-            raw_xy
+            raw_xy,
         } => {
             info!("Configuring button {control_id:#06x}: divert={divert}, raw_xy={raw_xy}");
             apply_setting(
                 &Request::SetButtonDivert {
                     control_id,
                     divert,
-                    raw_xy
+                    raw_xy,
                 },
                 |device| device.set_control_divert(control_id, divert, raw_xy),
-                format_args!("Button {control_id:#06x} divert: {divert}")
+                format_args!("Button {control_id:#06x} divert: {divert}"),
             )
         }
-        SetCommands::Host {
-            index
+        SetCommands::Remap {
+            control_id,
+            target_cid,
         } => {
+            info!("Remapping control {control_id:#06x} to {target_cid:#06x}");
+            apply_setting(
+                &Request::SetButtonRemap {
+                    control_id,
+                    target_cid,
+                },
+                |device| device.set_control_remap(control_id, target_cid),
+                format_args!("Control {control_id:#06x} remapped to {target_cid:#06x}"),
+            )
+        }
+        SetCommands::Host { index } => {
             info!("Switching to host {index}...");
             apply_setting(
-                &Request::SetHost {
-                    host: index
-                },
+                &Request::SetHost { host: index },
                 |device| device.set_host(index),
-                format_args!("Switched to host {index}")
+                format_args!("Switched to host {index}"),
             )
         }
     }
@@ -487,9 +458,7 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
             out.line(format_args!("Config location: {}", config_path.display()))?;
             out.line(format_args!("Edit the file with your preferred editor"))?;
         }
-        ConfigCommands::Export {
-            path
-        } => {
+        ConfigCommands::Export { path } => {
             let config = load_config()?;
             let toml_str = toml::to_string_pretty(&config)
                 .map_err(|e| AppError::internal("Failed to serialize config").with_source(e))?;
@@ -497,9 +466,7 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
                 .map_err(|e| AppError::internal("Failed to write config").with_source(e))?;
             out.line(format_args!("Config exported to {path}"))?;
         }
-        ConfigCommands::Import {
-            path
-        } => {
+        ConfigCommands::Import { path } => {
             let config = load_config_from_path(std::path::Path::new(&path))?;
             save_config(&config)?;
             out.line(format_args!("Config imported from {path}"))?;

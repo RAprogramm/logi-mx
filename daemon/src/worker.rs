@@ -267,6 +267,13 @@ fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Resp
                     device.set_control_divert(*control_id, *divert, *raw_xy)?;
                     ipc::Response::Ok
                 }
+                ipc::Request::SetButtonRemap {
+                    control_id,
+                    target_cid
+                } => {
+                    device.set_control_remap(*control_id, *target_cid)?;
+                    ipc::Response::Ok
+                }
                 ipc::Request::SetHost {
                     host
                 } => {

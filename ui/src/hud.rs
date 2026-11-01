@@ -38,7 +38,10 @@ use logi_mx_daemon::ipc::{
     self, LiveFrame, Response, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT,
     BTN_BIT_MIDDLE, BTN_BIT_RIGHT,
 };
-use logi_mx_driver::prelude::{HiResScrollConfig, SmartShiftConfig};
+use logi_mx_driver::{
+    devices::control_id,
+    prelude::{HiResScrollConfig, SmartShiftConfig},
+};
 
 use crate::snapshot::{collect_device_snapshot, DeviceSnapshot};
 
@@ -108,6 +111,19 @@ impl MouseButton {
         Self::Forward,
         Self::Gesture,
     ];
+
+    /// HID++ reprogrammable control ID of this button.
+    const fn cid(self) -> u16 {
+        match self {
+            Self::Left => control_id::LEFT_BUTTON,
+            Self::Right => control_id::RIGHT_BUTTON,
+            Self::Wheel => control_id::MIDDLE_BUTTON,
+            Self::DpiShift => control_id::SMARTSHIFT_TOGGLE,
+            Self::Back => control_id::BACK_BUTTON,
+            Self::Forward => control_id::FORWARD_BUTTON,
+            Self::Gesture => control_id::GESTURE_BUTTON,
+        }
+    }
 
     /// Hit-test order: small hotspots first so padding never lets a large
     /// region steal their clicks.
@@ -415,7 +431,7 @@ fn create_panel(
     let stack = ViewStack::new();
     let pages = [
         (
-            buttons_page(state, drawing),
+            buttons_page(state, drawing, &toast),
             "buttons",
             "Buttons",
             "input-mouse-symbolic",
@@ -465,29 +481,61 @@ fn create_panel(
     (toast, live_label)
 }
 
+/// Native remap targets offered on the assignments page: label and CID.
+/// `0x0000` restores the device-native behaviour of the selected control.
+const REMAP_TARGETS: [(&str, u16); 8] = [
+    ("Act as Left", control_id::LEFT_BUTTON),
+    ("Act as Right", control_id::RIGHT_BUTTON),
+    ("Act as Middle", control_id::MIDDLE_BUTTON),
+    ("Act as Back", control_id::BACK_BUTTON),
+    ("Act as Forward", control_id::FORWARD_BUTTON),
+    ("Act as Gesture", control_id::GESTURE_BUTTON),
+    ("Act as DPI Shift", control_id::SMARTSHIFT_TOGGLE),
+    ("Restore native", 0x0000),
+];
+
 /// Creates the button assignment page.
-fn buttons_page(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea) -> ScrolledWindow {
+fn buttons_page(
+    state: &Rc<RefCell<HudState>>,
+    drawing: &gtk4::DrawingArea,
+    toast: &ToastOverlay,
+) -> ScrolledWindow {
     let scroll = page_scroll();
     let group = PreferencesGroup::new();
     group.set_title("Assignments");
-    group.set_description(Some("Select a button on the diagram, then pick an action"));
+    group.set_description(Some(
+        "Select a button on the diagram, then pick what it should act as",
+    ));
 
-    let actions = [
-        "Toggle SmartShift",
-        "Keypress: Ctrl+C",
-        "Keypress: Ctrl+V",
-        "None",
-    ];
-    for action in actions {
-        let button = Button::with_label(action);
+    for (label, target_cid) in REMAP_TARGETS {
+        let button = Button::with_label(label);
         button.add_css_class("pill");
         let state_clone = Rc::clone(state);
         let drawing_clone = drawing.clone();
-        let action = action.to_string();
+        let toast_clone = toast.clone();
         button.connect_clicked(move |_| {
-            let mut st = state_clone.borrow_mut();
-            if let Some(selected) = st.selected {
-                st.assignments.insert(selected, action.clone());
+            let Some(selected) = state_clone.borrow().selected else {
+                toast_clone.add_toast(Toast::new("Select a button on the diagram first"));
+                return;
+            };
+            let control_id = selected.cid();
+            let response = ipc::try_request(&ipc::Request::SetButtonRemap {
+                control_id,
+                target_cid,
+            });
+            let remapped = matches!(response, Some(Response::Ok));
+            report(
+                response,
+                &toast_clone,
+                &format!("{} now acts as {label}", selected.label()),
+            );
+            if remapped {
+                let mut st = state_clone.borrow_mut();
+                if target_cid == 0 {
+                    st.assignments.remove(&selected);
+                } else {
+                    st.assignments.insert(selected, label.to_string());
+                }
                 drawing_clone.queue_draw();
             }
         });

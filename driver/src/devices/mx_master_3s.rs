@@ -597,6 +597,41 @@ impl MxMaster3s {
         Ok(())
     }
 
+    /// Remaps one control to another native control, keeping its divert flags.
+    ///
+    /// The device itself performs the remap: pressing `control_id` behaves
+    /// exactly as if `target_cid` were pressed, with no host-side daemon
+    /// involved. Pass `0x0000` as `target_cid` to restore native behaviour.
+    ///
+    /// # Arguments
+    ///
+    /// * `control_id` - Physical control to remap (CID).
+    /// * `target_cid` - Control the press should act as, or `0x0000` to clear.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the feature is unsupported or
+    /// the request fails.
+    pub fn set_control_remap(&mut self, control_id: u16, target_cid: u16) -> Result<()> {
+        let feature_index = self.hidpp.feature_index(FEATURE_REPROG_CONTROLS)?;
+        let (flags, _) = self.control_divert(control_id)?;
+
+        self.hidpp.send_command(
+            feature_index,
+            ReprogControlsFunction::SetControlReporting as u8,
+            &[
+                (control_id >> 8) as u8,
+                (control_id & 0xFF) as u8,
+                flags,
+                (target_cid >> 8) as u8,
+                (target_cid & 0xFF) as u8
+            ]
+        )?;
+
+        info!("Control {control_id:04X} remapped to {target_cid:04X}");
+        Ok(())
+    }
+
     fn battery_via(&mut self, feature_id: u16, function: u8) -> Result<BatteryInfo> {
         let feature_index = self.hidpp.feature_index(feature_id)?;
         let response = self.hidpp.send_command(feature_index, function, &[])?;

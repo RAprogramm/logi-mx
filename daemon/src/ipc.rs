@@ -129,6 +129,13 @@ pub enum Request {
         /// Whether to also stream raw XY deltas.
         raw_xy:     bool
     },
+    /// Remap a programmable control to another native control on the device.
+    SetButtonRemap {
+        /// HID++ control ID to remap.
+        control_id: u16,
+        /// Target control ID, or `0x0000` to restore native behaviour.
+        target_cid: u16
+    },
     /// Switch to an Easy-Switch host.
     SetHost {
         /// Zero-based host index.
