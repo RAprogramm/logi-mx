@@ -82,6 +82,12 @@ fn load_css() {
             background: none;
             background-color: transparent;
         }
+        window.hud-dim {
+            background: rgba(0, 0, 0, 0.45);
+        }
+        window.hud-tint {
+            background: rgba(0, 0, 0, 0.02);
+        }
         "
     );
     if let Some(display) = gtk4::gdk::Display::default() {

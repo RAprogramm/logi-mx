@@ -20,7 +20,7 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex, OnceLock,
     },
     thread,
@@ -28,8 +28,8 @@ use std::{
 };
 
 use gtk4::{
-    glib, Box as GtkBox, Button, DropDown, Entry, EventControllerKey, GestureClick, Label,
-    Orientation, Scale, ScrolledWindow, Switch,
+    glib, Box as GtkBox, Button, CheckButton, DropDown, Entry, EventControllerKey, GestureClick,
+    Label, Orientation, Scale, ScrolledWindow, Switch,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
@@ -122,30 +122,36 @@ enum BgMode {
 }
 
 impl BgMode {
-    /// All modes in dropdown order.
+    /// Every mode, in token order.
     const ALL: [Self; 4] = [Self::None, Self::Dim, Self::Blur, Self::BlurDim];
 
-    const fn label(self) -> &'static str {
+    /// The CSS class painting the window backdrop. The translucent fill is
+    /// also the medium the compositor blur shows through, so blur-only mode
+    /// tints the window faintly.
+    const fn window_class(self) -> Option<&'static str> {
         match self {
-            Self::None => "None",
-            Self::Dim => "Dim",
-            Self::Blur => "Blur",
-            Self::BlurDim => "Blur + Dim",
-        }
-    }
-
-    /// Alpha of the backdrop fill; the fill is also the medium the compositor
-    /// blur shows through, so blur modes always tint at least faintly.
-    const fn dim_alpha(self) -> f64 {
-        match self {
-            Self::None => 0.0,
-            Self::Blur => 0.02,
-            Self::Dim | Self::BlurDim => 0.45,
+            Self::None => None,
+            Self::Blur => Some("hud-tint"),
+            Self::Dim | Self::BlurDim => Some("hud-dim"),
         }
     }
 
     const fn wants_blur(self) -> bool {
         matches!(self, Self::Blur | Self::BlurDim)
+    }
+
+    const fn dim_on(self) -> bool {
+        matches!(self, Self::Dim | Self::BlurDim)
+    }
+
+    /// Combines the two independent backdrop checkboxes into a mode.
+    const fn from_bools(dim: bool, blur: bool) -> Self {
+        match (dim, blur) {
+            (false, false) => Self::None,
+            (true, false) => Self::Dim,
+            (false, true) => Self::Blur,
+            (true, true) => Self::BlurDim,
+        }
     }
 
     const fn token(self) -> &'static str {
@@ -194,6 +200,15 @@ fn save_background(mode: BgMode) {
     }
     if let Err(e) = fs::write(&path, mode.token()) {
         tracing::warn!("Failed to save the background mode: {e}");
+    }
+}
+
+/// Paints the window backdrop for the mode through CSS classes.
+fn apply_bg_classes(window: &ApplicationWindow, mode: BgMode) {
+    window.remove_css_class("hud-dim");
+    window.remove_css_class("hud-tint");
+    if let Some(class) = mode.window_class() {
+        window.add_css_class(class);
     }
 }
 
@@ -342,6 +357,8 @@ impl MouseButton {
 #[derive(Default, Debug)]
 struct LiveVisual {
     buttons: u32,
+    /// Buttons pressed between two HUD frames; keeps brief taps visible.
+    flash: u32,
     wheel_speed: f64,
     wheel_dir: i32,
     hwheel_dir: i32,
@@ -372,18 +389,21 @@ impl LiveVisual {
         }
     }
 
-    /// Fades the velocity gauges toward zero while the device is idle.
+    /// Fades the velocity gauges toward zero and clears the tap flashes while
+    /// the device is idle.
     ///
     /// Returns whether any gauge value actually moved.
     fn decay(&mut self) -> bool {
-        if self.wheel_speed == 0.0 {
-            return false;
+        let mut changed = self.flash != 0;
+        self.flash = 0;
+        if self.wheel_speed != 0.0 {
+            self.wheel_speed *= 0.6;
+            if self.wheel_speed < 0.5 {
+                self.wheel_speed = 0.0;
+            }
+            changed = true;
         }
-        self.wheel_speed *= 0.6;
-        if self.wheel_speed < 0.5 {
-            self.wheel_speed = 0.0;
-        }
-        true
+        changed
     }
 }
 
@@ -450,10 +470,15 @@ fn build_hud(app: &Application) {
     start_live(&state, &drawing, &live_label);
 
     let root = GtkBox::new(Orientation::Horizontal, 0);
+    root.set_margin_top(HUD_MARGIN);
+    root.set_margin_bottom(HUD_MARGIN);
+    root.set_margin_start(HUD_MARGIN);
+    root.set_margin_end(HUD_MARGIN);
     root.append(&drawing);
     root.append(&panel);
 
     window.set_content(Some(&root));
+    apply_bg_classes(&window, state.borrow().bg);
 
     ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = Some(window.clone()));
     window.connect_close_request(|_| {
@@ -488,10 +513,6 @@ fn create_window(app: &Application) -> ApplicationWindow {
     window.set_anchor(Edge::Bottom, true);
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
-    window.set_margin(Edge::Top, HUD_MARGIN);
-    window.set_margin(Edge::Bottom, HUD_MARGIN);
-    window.set_margin(Edge::Left, HUD_MARGIN);
-    window.set_margin(Edge::Right, HUD_MARGIN);
 
     window
 }
@@ -568,7 +589,7 @@ fn create_panel(
             "preferences-desktop-input-symbolic",
         ),
         (
-            device_page(state, drawing, snapshot, &toast),
+            device_page(state, window, snapshot, &toast),
             "device",
             "Device",
             "battery-symbolic",
@@ -958,54 +979,61 @@ fn pointer_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scro
     scroll
 }
 
-/// Builds the backdrop section: pick the treatment behind the diagram.
-/// Changing it persists the choice and syncs the Hyprland blur rule.
+/// Builds the backdrop section: two independent checkboxes for dimming and
+/// compositor blur, so any of the four combinations is reachable. Changing
+/// either persists the mode, repaints the window backdrop and syncs the
+/// Hyprland blur rule.
 fn background_section(
     state: &Rc<RefCell<HudState>>,
-    drawing: &gtk4::DrawingArea,
+    window: &ApplicationWindow,
     toast: &ToastOverlay,
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Background");
-    group.set_description(Some("Backdrop behind the diagram"));
-    let row = ActionRow::new();
-    row.set_title("Backdrop");
-    let drop = DropDown::from_strings(
-        &BgMode::ALL
-            .iter()
-            .map(|mode| mode.label())
-            .collect::<Vec<&str>>(),
-    );
-    drop.set_selected(
-        u32::try_from(
-            BgMode::ALL
-                .iter()
-                .position(|mode| *mode == state.borrow().bg)
-                .unwrap_or_default(),
-        )
-        .unwrap_or_default(),
-    );
-    drop.set_valign(gtk4::Align::Center);
-    let state_bg = Rc::clone(state);
-    let drawing_bg = drawing.clone();
-    let toast_bg = toast.clone();
-    drop.connect_selected_notify(move |picker| {
-        let Some(&mode) = BgMode::ALL.get(usize::try_from(picker.selected()).unwrap_or(usize::MAX))
-        else {
-            return;
-        };
-        if state_bg.borrow().bg == mode {
+    group.set_description(Some("Backdrop behind the HUD"));
+
+    let mode = state.borrow().bg;
+
+    let dim_row = ActionRow::new();
+    dim_row.set_title("Dim");
+    let dim_check = CheckButton::new();
+    dim_check.set_active(mode.dim_on());
+    dim_check.set_valign(gtk4::Align::Center);
+    dim_row.add_suffix(&dim_check);
+    dim_row.set_activatable_widget(Some(&dim_check));
+
+    let blur_row = ActionRow::new();
+    blur_row.set_title("Blur");
+    let blur_check = CheckButton::new();
+    blur_check.set_active(mode.wants_blur());
+    blur_check.set_valign(gtk4::Align::Center);
+    blur_row.add_suffix(&blur_check);
+    blur_row.set_activatable_widget(Some(&blur_check));
+
+    let state_sync = Rc::clone(state);
+    let window_sync = window.clone();
+    let toast_sync = toast.clone();
+    let dim_sync = dim_check.clone();
+    let blur_sync = blur_check.clone();
+    let sync = Rc::new(move || {
+        let next = BgMode::from_bools(dim_sync.is_active(), blur_sync.is_active());
+        if state_sync.borrow().bg == next {
             return;
         }
-        state_bg.borrow_mut().bg = mode;
-        save_background(mode);
-        drawing_bg.queue_draw();
-        if let Err(e) = crate::hyprland::set_hud_blur(mode.wants_blur()) {
-            toast_bg.add_toast(Toast::new(&format!("Blur unavailable: {e}")));
+        state_sync.borrow_mut().bg = next;
+        save_background(next);
+        apply_bg_classes(&window_sync, next);
+        if let Err(e) = crate::hyprland::set_hud_blur(next.wants_blur()) {
+            toast_sync.add_toast(Toast::new(&format!("Blur unavailable: {e}")));
         }
     });
-    row.add_suffix(&drop);
-    group.add(&row);
+    let sync_dim = Rc::clone(&sync);
+    let sync_blur = Rc::clone(&sync);
+    dim_check.connect_toggled(move |_| sync_dim());
+    blur_check.connect_toggled(move |_| sync_blur());
+
+    group.add(&dim_row);
+    group.add(&blur_row);
     group
 }
 
@@ -1013,7 +1041,7 @@ fn background_section(
 /// version.
 fn device_page(
     state: &Rc<RefCell<HudState>>,
-    drawing: &gtk4::DrawingArea,
+    window: &ApplicationWindow,
     snapshot: Option<&DeviceSnapshot>,
     toast: &ToastOverlay,
 ) -> ScrolledWindow {
@@ -1086,7 +1114,7 @@ fn device_page(
     version_group.add(&version_row);
 
     box_.append(&info_group);
-    box_.append(&background_section(state, drawing, toast));
+    box_.append(&background_section(state, window, toast));
     box_.append(&integration_group);
     box_.append(&version_group);
     scroll.set_child(Some(&box_));
@@ -1143,21 +1171,25 @@ const fn scale_threshold(value: f64) -> u8 {
 fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label: &Label) {
     let stop = Arc::new(AtomicBool::new(false));
     let slot = Arc::new(Mutex::new(None::<LiveFrame>));
+    let burst = Arc::new(AtomicU32::new(0));
 
     let connected = Arc::new(AtomicBool::new(false));
     let slot_hook = Arc::clone(&slot);
+    let burst_hook = Arc::clone(&burst);
     let connected_hook = Arc::clone(&connected);
     let state_hook = Rc::clone(state);
     let drawing_hook = drawing.clone();
     let label_hook = label.clone();
     let hook: Rc<dyn Fn()> = Rc::new(move || {
         let frame = slot_hook.lock().ok().and_then(|mut guard| guard.take());
+        let flashed = burst_hook.swap(0, Ordering::Relaxed);
         {
             let mut st = state_hook.borrow_mut();
             st.live.connected = connected_hook.load(Ordering::Relaxed);
             if let Some(frame) = frame {
                 st.live.apply(&frame);
             }
+            st.live.flash |= flashed;
         }
         let summary = live_summary(&state_hook.borrow().live);
         label_hook.set_text(&summary);
@@ -1169,6 +1201,7 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label:
     let context = glib::MainContext::default();
     let stop_thread = Arc::clone(&stop);
     let slot_thread = Arc::clone(&slot);
+    let burst_thread = Arc::clone(&burst);
     let connected_thread = Arc::clone(&connected);
     let pending = Arc::new(AtomicBool::new(false));
     let wake = move || {
@@ -1196,7 +1229,14 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label:
                 };
                 connected_thread.store(true, Ordering::Relaxed);
                 wake();
-                pump_live_socket(socket, &slot_thread, &connected_thread, &stop_thread, &wake);
+                pump_live_socket(
+                    socket,
+                    &slot_thread,
+                    &burst_thread,
+                    &connected_thread,
+                    &stop_thread,
+                    &wake,
+                );
             }
         })
     {
@@ -1218,9 +1258,14 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label:
 }
 
 /// Reads frames from one live socket into the shared slot until it drops.
+///
+/// Every frame's button bits are also folded into `burst`, so a press that
+/// starts and ends between two main-context wakes still reaches the flash
+/// mask instead of being overwritten by the newest frame.
 fn pump_live_socket(
     socket: std::os::unix::net::UnixStream,
     slot: &Arc<Mutex<Option<LiveFrame>>>,
+    burst: &Arc<AtomicU32>,
     connected: &Arc<AtomicBool>,
     stop: &AtomicBool,
     wake: &dyn Fn(),
@@ -1236,6 +1281,7 @@ fn pump_live_socket(
                 let Ok(Response::Live(frame)) = parsed else {
                     continue;
                 };
+                burst.fetch_or(frame.buttons, Ordering::Relaxed);
                 if let Ok(mut guard) = slot.lock() {
                     *guard = Some(frame);
                 }
@@ -1258,7 +1304,7 @@ fn live_summary(live: &LiveVisual) -> String {
     if !live.connected {
         return "Live telemetry: waiting for the daemon".to_string();
     }
-    if live.buttons == 0 && live.wheel_speed < 0.5 && live.extra_keys.is_empty() {
+    if live.buttons | live.flash == 0 && live.wheel_speed < 0.5 && live.extra_keys.is_empty() {
         return "Live: connected · waiting for input".to_string();
     }
     let mut text = format!("Live: wheel {:.0}/s", live.wheel_speed);
@@ -1305,10 +1351,6 @@ fn attach_draw_callback(
     let masks_draw = Rc::clone(masks);
     drawing.set_draw_func(move |_, cr, width, height| {
         let st = state_draw.borrow();
-        if st.bg.dim_alpha() > 0.0 {
-            cr.set_source_rgba(0.0, 0.0, 0.0, st.bg.dim_alpha());
-            let _ = cr.paint();
-        }
         let (scale, offset_x, offset_y) = fit_transform(f64::from(width), f64::from(height));
 
         let _ = cr.save();
@@ -1468,7 +1510,7 @@ fn draw_pressed_shapes(
         let Some(bit) = button.live_bit() else {
             continue;
         };
-        if st.live.buttons & bit == 0 {
+        if (st.live.buttons | st.live.flash) & bit == 0 {
             continue;
         }
         let Some(mask) = masks.get(&button) else {
@@ -1896,5 +1938,39 @@ mod tests {
             ..LiveVisual::default()
         };
         assert!(live_summary(&live).contains("raw keys 279"));
+    }
+
+    #[test]
+    fn flash_survives_release_and_decays_away() {
+        let mut live = LiveVisual::default();
+        let pressed = LiveFrame {
+            buttons: BTN_BIT_LEFT,
+            ..LiveFrame::default()
+        };
+        live.apply(&pressed);
+        live.flash |= BTN_BIT_LEFT;
+
+        let released = LiveFrame {
+            buttons: 0,
+            ..LiveFrame::default()
+        };
+        live.apply(&released);
+        assert_eq!(live.buttons, 0);
+        assert_ne!(live.flash & BTN_BIT_LEFT, 0);
+
+        assert!(live.decay());
+        assert_eq!(live.flash, 0);
+        assert!(!live.decay());
+    }
+
+    #[test]
+    fn background_mode_round_trips_through_bools_and_tokens() {
+        for mode in BgMode::ALL {
+            assert_eq!(BgMode::from_bools(mode.dim_on(), mode.wants_blur()), mode);
+            assert_eq!(BgMode::from_token(mode.token()), mode);
+        }
+        assert_eq!(BgMode::from_bools(false, false), BgMode::None);
+        assert_eq!(BgMode::from_bools(true, true), BgMode::BlurDim);
+        assert_eq!(BgMode::from_token("garbage"), BgMode::default());
     }
 }
