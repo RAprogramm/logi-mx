@@ -1,14 +1,16 @@
-// SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
 //! System tray integration for the daemon.
 //!
 //! Exposes the device state from [`crate::status`] through an `ksni` tray
-//! icon and offers menu actions such as status refresh, UI launch and
-//! graceful shutdown.
+//! icon and offers menu actions such as status refresh, UI launch, a full
+//! restart of daemon, driver, tray and UI, and graceful shutdown.
 
 use std::{
     env::current_exe,
+    fs,
+    os::unix::ffi::OsStrExt as _,
     path::PathBuf,
     process::{Command, exit},
     sync::{Arc, Mutex},
@@ -72,6 +74,101 @@ where
 {
     if let Err(e) = thread::Builder::new().name(name.to_string()).spawn(f) {
         error!("Failed to spawn {name} thread: {e}");
+    }
+}
+
+/// Runtime-dir marker recording that the configuration UI was open when a
+/// full restart was requested.
+fn ui_restart_marker() -> PathBuf {
+    let runtime_dir =
+        std::env::var("XDG_RUNTIME_DIR").map_or_else(|_| std::env::temp_dir(), PathBuf::from);
+    runtime_dir.join("logi-mx-ui-restart")
+}
+
+/// Reports whether the process belongs to the configuration UI.
+fn process_is_ui(pid: i32) -> bool {
+    fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|cmdline| {
+        cmdline
+            .split(|byte| *byte == 0)
+            .next()
+            .is_some_and(|argv0| {
+                PathBuf::from(std::ffi::OsStr::from_bytes(argv0))
+                    .file_name()
+                    .is_some_and(|name| name == "logi-mx-ui")
+            })
+    })
+}
+
+/// Sends SIGTERM to every running `logi-mx-ui` process.
+///
+/// Returns whether at least one process was signalled, so the restart flow
+/// can reopen the window afterwards.
+fn terminate_configuration_ui() -> bool {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return false;
+    };
+
+    let mut terminated = false;
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse().ok())
+        else {
+            continue;
+        };
+        if !process_is_ui(pid) {
+            continue;
+        }
+
+        // SAFETY: the PID was just read from /proc and verified to belong to
+        // a logi-mx-ui process; signalling it only requests a graceful exit.
+        if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
+            info!("Terminated configuration UI process {pid}");
+            terminated = true;
+        }
+    }
+    terminated
+}
+
+/// Restarts the whole stack: UI windows, daemon, driver worker and tray.
+///
+/// Under systemd a graceful exit is enough — `Restart=always` starts a fresh
+/// instance while the socket stays listening. When started manually, a
+/// replacement daemon is spawned first; it takes over through the instance
+/// lock.
+fn restart_everything() {
+    info!("Full restart requested from the tray");
+
+    if terminate_configuration_ui() {
+        let _ = fs::write(ui_restart_marker(), "");
+    }
+
+    if std::env::var("INVOCATION_ID").is_err() {
+        match current_exe() {
+            Ok(exe) => {
+                if let Err(e) = Command::new(&exe).spawn() {
+                    error!("Failed to spawn replacement daemon: {e}");
+                }
+            }
+            Err(e) => error!("Failed to resolve daemon path for restart: {e}")
+        }
+    }
+
+    // SAFETY: SIGTERM to self is delivered through the daemon's own signal
+    // listener and runs the regular graceful shutdown path.
+    unsafe {
+        libc::kill(libc::getpid(), libc::SIGTERM);
+    }
+}
+
+/// Reopens the configuration UI when a full restart found it open.
+pub fn restore_ui_after_restart() {
+    let marker = ui_restart_marker();
+    if marker.is_file() {
+        let _ = fs::remove_file(&marker);
+        info!("Restoring configuration UI after restart");
+        spawn_tray_task("tray-restore-ui", launch_configuration_ui);
     }
 }
 
@@ -160,6 +257,16 @@ impl Tray for LogiTrayIcon {
 
         menu.extend(vec![
             MenuItem::Separator,
+            StandardItem {
+                label: "Restart".into(),
+                icon_name: "system-restart".into(),
+                activate: Box::new(|_this: &mut Self| {
+                    spawn_tray_task("tray-restart", restart_everything);
+                }),
+                enabled: true,
+                ..Default::default()
+            }
+            .into(),
             StandardItem {
                 label: "Exit".into(),
                 icon_name: "application-exit".into(),
@@ -459,6 +566,53 @@ mod tests {
             }
             _ => panic!("Expected a trailing version item")
         }
+    }
+
+    #[test]
+    fn test_menu_offers_restart_before_exit() {
+        let tray = LogiTrayIcon::new();
+        let menu = tray.menu();
+
+        let labels: Vec<&str> = menu
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Standard(standard) => Some(standard.label.as_str()),
+                _ => None
+            })
+            .collect();
+        let restart = labels
+            .iter()
+            .position(|label| *label == "Restart")
+            .expect("Restart item present");
+        let exit = labels
+            .iter()
+            .position(|label| *label == "Exit")
+            .expect("Exit item present");
+        assert!(restart < exit);
+    }
+
+    #[test]
+    fn test_process_is_ui_rejects_foreign_processes() {
+        let self_pid = i32::try_from(std::process::id()).unwrap_or(1);
+        assert!(!process_is_ui(1));
+        assert!(!process_is_ui(self_pid));
+    }
+
+    #[test]
+    fn test_ui_restart_marker_lives_in_runtime_dir() {
+        assert!(
+            ui_restart_marker()
+                .to_string_lossy()
+                .contains("logi-mx-ui-restart")
+        );
+    }
+
+    #[test]
+    fn test_restore_ui_without_marker_is_noop() {
+        let marker = ui_restart_marker();
+        let _ = fs::remove_file(&marker);
+        restore_ui_after_restart();
+        assert!(!marker.exists());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
 #[cfg(feature = "tray")]
@@ -215,6 +215,7 @@ async fn run() -> Result<()> {
             }
             Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
         }
+        tray::restore_ui_after_restart();
     } else {
         info!("No desktop session detected, skipping tray");
     }
