@@ -26,8 +26,8 @@ use std::{
 };
 
 use gtk4::{
-    glib, Box as GtkBox, Button, DropDown, EventControllerKey, GestureClick, Label, Orientation,
-    Scale, ScrolledWindow, Switch,
+    glib, Box as GtkBox, Button, DropDown, Entry, EventControllerKey, GestureClick, Label,
+    Orientation, Scale, ScrolledWindow, Switch,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
@@ -74,8 +74,6 @@ const BODY_MAX_X: f64 = 74.7;
 const LABEL_FONT_PX: f64 = 13.0;
 /// Font size of the assignment line under a leader title, in pixels.
 const ASSIGNMENT_FONT_PX: f64 = 11.0;
-/// Extra height a leader row reserves for its assignment line, in pixels.
-const LABEL_ASSIGNMENT_PX: f64 = 15.0;
 /// Horizontal gap between a leader line and its label, in pixels.
 const LABEL_LINE_GAP: f64 = 7.0;
 /// Length of the horizontal run a leader takes before it turns to its label.
@@ -510,18 +508,75 @@ const REMAP_TARGETS: [(&str, u16); 8] = [
     ("Restore native", 0x0000),
 ];
 
-/// Creates the button assignment page.
-fn buttons_page(
+/// Builds the button list: activating a row selects that button and highlights
+/// it on the diagram; each row's subtitle shows its current assignment.
+fn buttons_list_section(
+    state: &Rc<RefCell<HudState>>,
+    drawing: &gtk4::DrawingArea,
+) -> (
+    PreferencesGroup,
+    Rc<RefCell<HashMap<MouseButton, ActionRow>>>,
+) {
+    let group = PreferencesGroup::new();
+    group.set_title("Buttons");
+    group.set_description(Some("Selecting a button highlights it on the diagram"));
+    let rows: Rc<RefCell<HashMap<MouseButton, ActionRow>>> = Rc::new(RefCell::new(HashMap::new()));
+    for button in MouseButton::ALL {
+        let row = ActionRow::builder()
+            .title(button.label())
+            .subtitle("Native")
+            .build();
+        let state_row = Rc::clone(state);
+        let drawing_row = drawing.clone();
+        row.connect_activate(move |_| {
+            state_row.borrow_mut().selected = Some(button);
+            drawing_row.queue_draw();
+        });
+        rows.borrow_mut().insert(button, row.clone());
+        group.add(&row);
+    }
+    (group, rows)
+}
+
+/// Stores an assignment for a button and reflects it in the row subtitle and
+/// the diagram leader label; `None` restores the native behaviour.
+fn set_assignment(
+    state: &Rc<RefCell<HudState>>,
+    rows: &Rc<RefCell<HashMap<MouseButton, ActionRow>>>,
+    drawing: &gtk4::DrawingArea,
+    button: MouseButton,
+    action: Option<String>,
+) {
+    let subtitle = action.map_or_else(
+        || {
+            state.borrow_mut().assignments.remove(&button);
+            "Native".to_string()
+        },
+        |action| {
+            state
+                .borrow_mut()
+                .assignments
+                .insert(button, action.clone());
+            action
+        },
+    );
+    if let Some(row) = rows.borrow().get(&button) {
+        row.set_subtitle(&subtitle);
+    }
+    drawing.queue_draw();
+}
+
+/// Builds the native remap section: pick a target control and write it into
+/// the mouse firmware through HID++ reprogrammable controls.
+fn remap_section(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     toast: &ToastOverlay,
-) -> ScrolledWindow {
-    let scroll = page_scroll();
+    rows: &Rc<RefCell<HashMap<MouseButton, ActionRow>>>,
+) -> PreferencesGroup {
     let group = PreferencesGroup::new();
-    group.set_title("Assignments");
-    group.set_description(Some(
-        "Select a button on the diagram, then pick what it should act as",
-    ));
+    group.set_title("Act as");
+    group.set_description(Some("Native remap written into the mouse firmware"));
 
     let target = DropDown::from_strings(
         &REMAP_TARGETS
@@ -539,16 +594,16 @@ fn buttons_page(
     let drawing_clone = drawing.clone();
     let toast_clone = toast.clone();
     let target_apply = target.clone();
+    let rows_apply = Rc::clone(rows);
     apply.connect_clicked(move |_| {
         let Some(selected) = state_clone.borrow().selected else {
-            toast_clone.add_toast(Toast::new("Select a button on the diagram first"));
+            toast_clone.add_toast(Toast::new("Select a button first"));
             return;
         };
         let index = (target_apply.selected() as usize).min(REMAP_TARGETS.len() - 1);
         let (label, target_cid) = REMAP_TARGETS[index];
-        let control_id = selected.cid();
         let response = ipc::try_request(&ipc::Request::SetButtonRemap {
-            control_id,
+            control_id: selected.cid(),
             target_cid,
         });
         let remapped = matches!(response, Some(Response::Ok));
@@ -558,13 +613,13 @@ fn buttons_page(
             &format!("{} now acts as {label}", selected.label()),
         );
         if remapped {
-            let mut st = state_clone.borrow_mut();
-            if target_cid == 0 {
-                st.assignments.remove(&selected);
-            } else {
-                st.assignments.insert(selected, label.to_string());
-            }
-            drawing_clone.queue_draw();
+            set_assignment(
+                &state_clone,
+                &rows_apply,
+                &drawing_clone,
+                selected,
+                (target_cid != 0).then(|| label.to_string()),
+            );
         }
     });
 
@@ -574,8 +629,76 @@ fn buttons_page(
     let picker_row = ActionRow::new();
     picker_row.set_child(Some(&picker));
     group.add(&picker_row);
+    group
+}
 
-    scroll.set_child(Some(&group));
+/// Builds the custom action section: a keypress sequence stored per button and
+/// executed by the daemon input engine.
+fn custom_section(
+    state: &Rc<RefCell<HudState>>,
+    drawing: &gtk4::DrawingArea,
+    toast: &ToastOverlay,
+    rows: &Rc<RefCell<HashMap<MouseButton, ActionRow>>>,
+) -> PreferencesGroup {
+    let group = PreferencesGroup::new();
+    group.set_title("Custom");
+    group.set_description(Some("Keypress actions run through the daemon input engine"));
+
+    let entry = Entry::new();
+    entry.set_placeholder_text(Some("e.g. ctrl+c"));
+    entry.set_hexpand(true);
+    let save = Button::with_label("Save");
+    save.add_css_class("pill");
+
+    let state_custom = Rc::clone(state);
+    let drawing_custom = drawing.clone();
+    let toast_custom = toast.clone();
+    let entry_save = entry.clone();
+    let rows_custom = Rc::clone(rows);
+    save.connect_clicked(move |_| {
+        let Some(selected) = state_custom.borrow().selected else {
+            toast_custom.add_toast(Toast::new("Select a button first"));
+            return;
+        };
+        let text = entry_save.text().trim().to_string();
+        if text.is_empty() {
+            toast_custom.add_toast(Toast::new("Type a keypress, e.g. ctrl+c"));
+            return;
+        }
+        let action = format!("Keypress: {text}");
+        set_assignment(
+            &state_custom,
+            &rows_custom,
+            &drawing_custom,
+            selected,
+            Some(action.clone()),
+        );
+        toast_custom.add_toast(Toast::new(&format!("{} → {action}", selected.label())));
+    });
+
+    let custom_box = GtkBox::new(Orientation::Horizontal, 12);
+    custom_box.append(&entry);
+    custom_box.append(&save);
+    let custom_row = ActionRow::new();
+    custom_row.set_child(Some(&custom_box));
+    group.add(&custom_row);
+    group
+}
+
+/// Creates the assignment page: a button list that highlights the diagram,
+/// grouped native remap targets and a custom keypress slot.
+fn buttons_page(
+    state: &Rc<RefCell<HudState>>,
+    drawing: &gtk4::DrawingArea,
+    toast: &ToastOverlay,
+) -> ScrolledWindow {
+    let scroll = page_scroll();
+    let box_ = GtkBox::new(Orientation::Vertical, 0);
+    let (buttons_group, rows) = buttons_list_section(state, drawing);
+    box_.append(&buttons_group);
+    box_.append(&remap_section(state, drawing, toast, &rows));
+    box_.append(&custom_section(state, drawing, toast, &rows));
+    scroll.set_child(Some(&box_));
     scroll
 }
 
@@ -1304,14 +1427,19 @@ fn draw_leaders(
             cr.arc(ax, ay, 2.2, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
 
-            draw_label(cr, &title, LABEL_FONT_PX, text_x, label_y + 4.0, to_left);
+            let title_y = if assignment.is_some() {
+                label_y - 7.0
+            } else {
+                label_y
+            };
+            draw_label(cr, &title, LABEL_FONT_PX, text_x, title_y, to_left);
             if let Some(action) = assignment {
                 draw_label(
                     cr,
                     action,
                     ASSIGNMENT_FONT_PX,
                     text_x,
-                    label_y + 4.0 + LABEL_ASSIGNMENT_PX,
+                    label_y + 8.0,
                     to_left,
                 );
             }
@@ -1343,14 +1471,14 @@ fn resolve_rows(
     rows
 }
 
-/// Renders one leader label: left-aligned at `anchor_x` for the left side,
-/// right-aligned at `anchor_x` for the right side.
+/// Renders one leader label centred vertically on `center_y`: left-aligned
+/// at `anchor_x` for the left side, right-aligned for the right side.
 fn draw_label(
     cr: &gtk4::cairo::Context,
     text: &str,
     size: f64,
     anchor_x: f64,
-    baseline_y: f64,
+    center_y: f64,
     to_left: bool,
 ) {
     select_label_font(cr, size);
@@ -1362,7 +1490,8 @@ fn draw_label(
         } else {
             anchor_x - extents.x_bearing() - extents.width()
         };
-        cr.move_to(x, baseline_y - extents.y_bearing());
+        let baseline = center_y - extents.y_bearing() - extents.height() / 2.0;
+        cr.move_to(x, baseline);
         let _ = cr.show_text(text);
     }
 }
