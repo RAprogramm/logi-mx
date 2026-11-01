@@ -65,21 +65,6 @@ const HUD_MARGIN: i32 = 80;
 const HIT_PADDING: f64 = 2.5;
 /// Minimum hotspot width before padding is applied, in layout units.
 const THIN_HOTSPOT: f64 = 6.0;
-/// Minimum vertical distance between neighbouring leader labels, in pixels.
-const LABEL_MIN_GAP: f64 = 26.0;
-/// Visible body bounds inside the layout space, measured from the rendered
-/// silhouette. Callout labels hug the device edges instead of the window
-/// edges.
-const BODY_MIN_X: f64 = 5.5;
-const BODY_MAX_X: f64 = 74.7;
-/// Font size of a leader title, in pixels.
-const LABEL_FONT_PX: f64 = 13.0;
-/// Font size of the assignment line under a leader title, in pixels.
-const ASSIGNMENT_FONT_PX: f64 = 11.0;
-/// Horizontal gap between a leader line and its label, in pixels.
-const LABEL_LINE_GAP: f64 = 7.0;
-/// Length of the horizontal run a leader takes before it turns to its label.
-const LABEL_KNEE_PX: f64 = 26.0;
 /// DPI slider bounds accepted by the device.
 const DPI_MIN: f64 = 400.0;
 const DPI_MAX: f64 = 8000.0;
@@ -98,14 +83,6 @@ const LIVE_DECAY_INTERVAL: Duration = Duration::from_millis(250);
 const LIVE_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// Read timeout of the live socket, bounding how long a stop request waits.
 const LIVE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
-/// Horizontal padding inside a callout chip, in pixels.
-const CHIP_PAD_X: f64 = 9.0;
-/// Vertical padding inside a callout chip, in pixels.
-const CHIP_PAD_Y: f64 = 5.0;
-/// Corner radius of a callout chip, in pixels.
-const CHIP_RADIUS: f64 = 7.0;
-/// Keep callouts at least this far inside the canvas edges, in pixels.
-const EDGE_MARGIN: f64 = 4.0;
 
 /// Backdrop treatment behind the HUD content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -296,17 +273,6 @@ impl MouseButton {
         (x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad)
     }
 
-    /// Reports whether the leader line runs to the left edge of the layout.
-    ///
-    /// Thumb buttons sit on the left flank of the device, so their callouts
-    /// go left; everything else is called out to the right.
-    const fn leader_to_left(self) -> bool {
-        matches!(
-            self,
-            Self::Left | Self::Back | Self::Forward | Self::Gesture
-        )
-    }
-
     /// Id of the anchor circle for this button inside the layout SVG.
     const fn anchor_id(self) -> &'static str {
         match self {
@@ -440,6 +406,19 @@ thread_local! {
     /// Button rows of the open window, so diagram hover and clicks can
     /// highlight the matching list row; cleared when the HUD closes.
     static ROWS_REGISTRY: RefCell<Option<RowMap>> = const { RefCell::new(None) };
+
+    /// Full-window drawing surface carrying the leader lines from the diagram
+    /// to the settings rows; cleared when the HUD closes.
+    static LEADERS_AREA: RefCell<Option<gtk4::DrawingArea>> = const { RefCell::new(None) };
+}
+
+/// Schedules a repaint of the leader-line overlay.
+fn queue_leaders() {
+    LEADERS_AREA.with(|area| {
+        if let Some(area) = area.borrow().as_ref() {
+            area.queue_draw();
+        }
+    });
 }
 
 /// Mirrors the focused button onto the list rows: hover wins over the
@@ -458,6 +437,7 @@ fn sync_row_focus(state: &HudState) {
             }
         }
     });
+    queue_leaders();
 }
 
 /// Opens the HUD, or closes it when it is already open.
@@ -465,11 +445,10 @@ fn sync_row_focus(state: &HudState) {
 /// This is the activation entry point: repeated launches (tray item or a
 /// Hyprland keybind) toggle the HUD instead of stacking windows.
 pub fn toggle_hud(app: &Application) {
-    let open_new = ACTIVE_WINDOW.with(|cell| {
-        cell.borrow().as_ref().is_none_or(|window| {
-            window.close();
-            false
-        })
+    let existing = ACTIVE_WINDOW.with(|cell| cell.borrow().clone());
+    let open_new = !existing.is_some_and(|window| {
+        window.close();
+        false
     });
 
     if open_new {
@@ -487,11 +466,14 @@ fn build_hud(app: &Application) {
     let image = Rc::new(OnceCell::new());
     let masks = Rc::new(build_button_masks());
     let drawing = create_drawing_area();
+    let leaders = create_leaders_area();
+    LEADERS_AREA.with(|cell| *cell.borrow_mut() = Some(leaders.clone()));
     let snapshot = collect_device_snapshot();
     let (panel, live_label) = create_panel(&state, &drawing, &window, snapshot.as_ref());
 
     attach_hit_testing(&state, &drawing, &live_label);
     attach_draw_callback(&state, &drawing, &image, &masks);
+    attach_leaders_draw(&state, &leaders, &drawing, &window);
     attach_escape_to_close(&window);
     start_live(&state, &drawing, &live_label);
 
@@ -503,7 +485,10 @@ fn build_hud(app: &Application) {
     root.append(&drawing);
     root.append(&panel);
 
-    window.set_content(Some(&root));
+    let overlay = gtk4::Overlay::new();
+    overlay.set_child(Some(&root));
+    overlay.add_overlay(&leaders);
+    window.set_content(Some(&overlay));
     apply_bg_classes(&window, state.borrow().bg);
 
     ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = Some(window.clone()));
@@ -515,6 +500,7 @@ fn build_hud(app: &Application) {
         });
         LIVE_HOOK.with(|hook| *hook.borrow_mut() = None);
         ROWS_REGISTRY.with(|rows| *rows.borrow_mut() = None);
+        LEADERS_AREA.with(|area| *area.borrow_mut() = None);
         ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = None);
         glib::Propagation::Proceed
     });
@@ -532,6 +518,7 @@ fn create_window(app: &Application) -> ApplicationWindow {
 
     window.init_layer_shell();
     window.set_namespace(Some("logi-mx-hud"));
+    window.set_exclusive_zone(-1);
     window.add_css_class("transparent-overlay");
     window.remove_css_class("background");
     window.set_layer(Layer::Overlay);
@@ -551,6 +538,16 @@ fn create_drawing_area() -> gtk4::DrawingArea {
         .content_width(600)
         .content_height(600)
         .build()
+}
+
+/// Builds the transparent full-window surface the leader lines are drawn on.
+fn create_leaders_area() -> gtk4::DrawingArea {
+    let area = gtk4::DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    area.set_can_target(false);
+    area
 }
 
 fn attach_escape_to_close(window: &ApplicationWindow) {
@@ -632,6 +629,7 @@ fn create_panel(
         .policy(ViewSwitcherPolicy::Narrow)
         .build();
     root.append(&switcher);
+    stack.connect_visible_child_notify(move |_| queue_leaders());
 
     let stack_box = GtkBox::new(Orientation::Vertical, 0);
     stack_box.set_vexpand(true);
@@ -711,6 +709,7 @@ fn buttons_list_section(
             }
         });
         row.add_controller(motion);
+        row.connect_map(|_| queue_leaders());
 
         rows.borrow_mut().insert(button, row.clone());
         group.add(&row);
@@ -745,6 +744,7 @@ fn set_assignment(
         row.set_subtitle(&subtitle);
     }
     drawing.queue_draw();
+    queue_leaders();
 }
 
 /// Builds the native remap section: pick a target control and write it into
@@ -874,6 +874,7 @@ fn buttons_page(
     toast: &ToastOverlay,
 ) -> ScrolledWindow {
     let scroll = page_scroll();
+    scroll.vadjustment().connect_value_changed(move |_| queue_leaders());
     let box_ = GtkBox::new(Orientation::Vertical, 0);
     let (buttons_group, rows) = buttons_list_section(state, drawing);
     box_.append(&buttons_group);
@@ -1463,15 +1464,6 @@ fn attach_draw_callback(
         }
         let _ = cr.restore();
 
-        draw_leaders(
-            &st,
-            cr,
-            scale,
-            offset_x,
-            offset_y,
-            f64::from(width),
-            f64::from(height),
-        );
         draw_wheel_indicator(&st, cr, scale, offset_x, offset_y);
     });
 }
@@ -1667,165 +1659,94 @@ fn draw_wheel_indicator(
     }
 }
 
-/// Draws one screen-space callout per button from its anchor to a chip
-/// labelled with what the button does and its current assignment.
+/// Draws one leader line per button from its diagram anchor to the matching
+/// row of the Buttons page, so the diagram and the settings list read as one
+/// surface.
 ///
-/// Chips are styled like the device body — dark fill with a rim light — so
-/// they stay readable over any desktop. Anchors are projected through the
-/// diagram transform into pixels, so text keeps a constant size; chips on
-/// each side are sorted by anchor height, pushed apart and clamped inside
-/// the canvas so nothing is ever cut off.
-fn draw_leaders(
-    st: &HudState,
-    cr: &gtk4::cairo::Context,
-    scale: f64,
-    offset_x: f64,
-    offset_y: f64,
-    width: f64,
-    height: f64,
+/// The overlay spans the whole window: anchors are projected through the
+/// diagram transform into window space, rows through their own allocations.
+/// Lines land on the left edge of each row, clamped to the scroll viewport so
+/// a row scrolled out of view still keeps its line pointing the right way.
+/// The focused button (hover or selection) draws bright and thick.
+fn attach_leaders_draw(
+    state: &Rc<RefCell<HudState>>,
+    leaders: &gtk4::DrawingArea,
+    drawing: &gtk4::DrawingArea,
+    window: &ApplicationWindow,
 ) {
-    let anchors = button_anchors();
-    let body_left = BODY_MIN_X.mul_add(scale, offset_x);
-    let body_right = BODY_MAX_X.mul_add(scale, offset_x);
+    let state_draw = Rc::clone(state);
+    let diagram = drawing.clone();
+    let window = window.clone();
+    leaders.set_draw_func(move |_, cr, _, _| {
+        let st = state_draw.borrow();
+        let Some(bounds) = diagram.compute_bounds(&window) else {
+            return;
+        };
+        let (scale, offset_x, offset_y) =
+            fit_transform(f64::from(diagram.width()), f64::from(diagram.height()));
+        let base_x = f64::from(bounds.x()) + offset_x;
+        let base_y = f64::from(bounds.y()) + offset_y;
+        let Some(rows) = ROWS_REGISTRY.with(|registry| registry.borrow().as_ref().map(Rc::clone))
+        else {
+            return;
+        };
+        let rows = rows.borrow();
+        let anchors = button_anchors();
 
-    for to_left in [true, false] {
-        let mut side: Vec<(MouseButton, f64, f64)> = MouseButton::ALL
-            .iter()
-            .filter(|button| button.leader_to_left() == to_left)
-            .filter_map(|button| {
-                anchors.get(button).map(|&(ax, ay)| {
-                    (
-                        *button,
-                        ax.mul_add(scale, offset_x),
-                        ay.mul_add(scale, offset_y),
-                    )
-                })
-            })
-            .collect();
-        side.sort_by(|(_, _, a), (_, _, b)| a.total_cmp(b));
-        let rows = resolve_rows(&side, LABEL_MIN_GAP);
-
-        for (button, ax, ay, label_y) in rows {
-            let selected = st.selected == Some(button) || st.hover == Some(button);
-            let title = button.label().to_uppercase();
-            let assignment = st.assignments.get(&button);
-            let block_w = measure_text(cr, &title, LABEL_FONT_PX).max(
-                assignment.map_or(0.0, |action| measure_text(cr, action, ASSIGNMENT_FONT_PX)),
-            );
-            let block_h = if assignment.is_some() { 30.0 } else { 16.0 };
-            let chip_w = CHIP_PAD_X.mul_add(2.0, block_w);
-            let chip_h = CHIP_PAD_Y.mul_add(2.0, block_h);
-
-            let chip_x = if to_left {
-                body_left - LABEL_LINE_GAP - chip_w
-            } else {
-                body_right + LABEL_LINE_GAP
-            }
-            .clamp(EDGE_MARGIN, (width - chip_w - EDGE_MARGIN).max(EDGE_MARGIN));
-            let chip_y = (label_y - chip_h / 2.0)
-                .clamp(EDGE_MARGIN, (height - chip_h - EDGE_MARGIN).max(EDGE_MARGIN));
-            let stub_x = if to_left {
-                chip_x + chip_w
-            } else {
-                chip_x
+        for button in MouseButton::ALL {
+            let Some(&(ax, ay)) = anchors.get(&button) else {
+                continue;
             };
-            let target_y = label_y.clamp(chip_y + 6.0, chip_y + chip_h - 6.0);
-            let knee_x = if to_left {
-                (ax - LABEL_KNEE_PX).max(stub_x)
-            } else {
-                (ax + LABEL_KNEE_PX).min(stub_x)
+            let Some(row) = rows.get(&button) else {
+                continue;
             };
-
-            if selected {
+            let ax = ax.mul_add(scale, base_x);
+            let ay = ay.mul_add(scale, base_y);
+            let Some((tx, ty)) = row_target(row, &window) else {
+                continue;
+            };
+            let focused = st.selected == Some(button) || st.hover == Some(button);
+            if focused {
                 cr.set_source_rgba(0.93, 0.66, 0.46, 0.95);
-                cr.set_line_width(1.2);
+                cr.set_line_width(2.0);
             } else {
-                cr.set_source_rgba(0.62, 0.65, 0.70, 0.55);
-                cr.set_line_width(0.8);
+                cr.set_source_rgba(0.62, 0.65, 0.70, 0.40);
+                cr.set_line_width(1.0);
             }
+            let mid_x = f64::midpoint(ax, tx);
             cr.move_to(ax, ay);
-            cr.line_to(knee_x, ay);
-            cr.line_to(stub_x, target_y);
+            cr.curve_to(mid_x, ay, mid_x, ty, tx, ty);
             let _ = cr.stroke();
 
             cr.new_path();
             cr.arc(ax, ay, 2.2, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
-
-            rounded_rect(cr, chip_x, chip_y, chip_w, chip_h, CHIP_RADIUS);
-            cr.set_source_rgba(0.118, 0.133, 0.145, 0.92);
-            let _ = cr.fill_preserve();
-            if selected {
-                cr.set_source_rgba(0.93, 0.66, 0.46, 0.95);
-                cr.set_line_width(1.2);
-            } else {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
-                cr.set_line_width(1.0);
-            }
-            let _ = cr.stroke();
-
-            let text_x = chip_x + CHIP_PAD_X;
-            let center = chip_y + chip_h / 2.0;
-            if let Some(action) = assignment {
-                draw_label(cr, &title, LABEL_FONT_PX, text_x, center - 7.0);
-                draw_label(cr, action, ASSIGNMENT_FONT_PX, text_x, center + 8.0);
-            } else {
-                draw_label(cr, &title, LABEL_FONT_PX, text_x, center);
-            }
+            cr.new_path();
+            let tip = if focused { 3.0 } else { 2.0 };
+            cr.arc(tx, ty, tip, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
         }
+    });
+}
+
+/// Window-space landing point of a button row's leader line: just left of the
+/// row, vertically centred and clamped to its scrolled viewport. `None` when
+/// the row is not on screen, for example while another page is open.
+fn row_target(row: &ActionRow, window: &ApplicationWindow) -> Option<(f64, f64)> {
+    if !row.is_mapped() {
+        return None;
     }
-}
-
-/// Measures text width at the given size in the current transform units.
-fn measure_text(cr: &gtk4::cairo::Context, text: &str, size: f64) -> f64 {
-    select_label_font(cr, size);
-    cr.text_extents(text).map_or(0.0, |extents| extents.width())
-}
-
-/// Assigns label rows on one side so neighbouring callouts never overlap.
-///
-/// Keeps each label at its anchor height when there is room and pushes it
-/// down otherwise; input must be sorted by anchor height.
-fn resolve_rows(
-    side: &[(MouseButton, f64, f64)],
-    min_gap: f64,
-) -> Vec<(MouseButton, f64, f64, f64)> {
-    let mut rows = Vec::with_capacity(side.len());
-    let mut previous_y = f64::MIN;
-    for &(button, ax, ay) in side {
-        let label_y = ay.max(previous_y + min_gap);
-        previous_y = label_y;
-        rows.push((button, ax, ay, label_y));
+    let bounds = row.compute_bounds(window)?;
+    let x = f64::from(bounds.x()) - 4.0;
+    let mut y = f64::from(bounds.y()) + f64::from(bounds.height()) / 2.0;
+    if let Some(scroll) = row.ancestor(gtk4::ScrolledWindow::static_type())
+        && let Some(area) = scroll.compute_bounds(window)
+    {
+        let top = f64::from(area.y()) + 8.0;
+        let bottom = (f64::from(area.y()) + f64::from(area.height()) - 8.0).max(top);
+        y = y.clamp(top, bottom);
     }
-    rows
-}
-
-/// Renders one label line, left-aligned at `left_x` and centred vertically
-/// on `center_y`.
-fn draw_label(
-    cr: &gtk4::cairo::Context,
-    text: &str,
-    size: f64,
-    left_x: f64,
-    center_y: f64,
-) {
-    select_label_font(cr, size);
-    cr.set_source_rgba(0.88, 0.90, 0.94, 0.92);
-
-    if let Ok(extents) = cr.text_extents(text) {
-        let baseline = center_y - extents.y_bearing() - extents.height() / 2.0;
-        cr.move_to(left_x - extents.x_bearing(), baseline);
-        let _ = cr.show_text(text);
-    }
-}
-
-fn select_label_font(cr: &gtk4::cairo::Context, size: f64) {
-    cr.select_font_face(
-        "Sans",
-        gtk4::cairo::FontSlant::Normal,
-        gtk4::cairo::FontWeight::Normal,
-    );
-    cr.set_font_size(size);
+    Some((x, y))
 }
 
 /// Anchor points of every button, parsed once from the layout SVG.
@@ -1901,28 +1822,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn thumb_buttons_are_called_out_to_the_left() {
-        assert!(MouseButton::Back.leader_to_left());
-        assert!(MouseButton::Forward.leader_to_left());
-        assert!(MouseButton::Gesture.leader_to_left());
-    }
-
-    #[test]
-    fn top_buttons_are_called_out_to_the_right() {
-        assert!(!MouseButton::Right.leader_to_left());
-        assert!(!MouseButton::Wheel.leader_to_left());
-        assert!(!MouseButton::DpiShift.leader_to_left());
-    }
-
-    #[test]
-    fn thumb_and_left_buttons_are_called_out_to_the_left() {
-        assert!(MouseButton::Left.leader_to_left());
-        assert!(MouseButton::Back.leader_to_left());
-        assert!(MouseButton::Forward.leader_to_left());
-        assert!(MouseButton::Gesture.leader_to_left());
-    }
-
-    #[test]
     fn every_button_has_an_svg_anchor() {
         assert_eq!(button_anchors().len(), MouseButton::ALL.len());
     }
@@ -1933,34 +1832,6 @@ mod tests {
             .get(&MouseButton::Gesture)
             .expect("gesture anchor present");
         assert!(x < 12.0 && (60.0..70.0).contains(&y));
-    }
-
-    #[test]
-    fn resolve_rows_pushes_overlapping_labels_down() {
-        let side = vec![
-            (MouseButton::Back, 20.8, 100.0),
-            (MouseButton::Forward, 20.8, 130.0),
-            (MouseButton::Gesture, 9.0, 135.0),
-        ];
-        let rows = resolve_rows(&side, LABEL_MIN_GAP);
-
-        assert!((rows[0].3 - 100.0).abs() < f64::EPSILON);
-        assert!((rows[1].3 - 130.0).abs() < f64::EPSILON);
-        assert!(rows[2].3 >= rows[1].3 + LABEL_MIN_GAP);
-    }
-
-    #[test]
-    fn resolve_rows_keeps_spaced_labels_at_anchor_height() {
-        let side = vec![
-            (MouseButton::Right, 61.1, 40.0),
-            (MouseButton::Wheel, 47.7, 80.0),
-            (MouseButton::DpiShift, 34.4, 120.0),
-        ];
-        let rows = resolve_rows(&side, LABEL_MIN_GAP);
-
-        assert!((rows[0].3 - 40.0).abs() < f64::EPSILON);
-        assert!((rows[1].3 - 80.0).abs() < f64::EPSILON);
-        assert!((rows[2].3 - 120.0).abs() < f64::EPSILON);
     }
 
     #[test]
