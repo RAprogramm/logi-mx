@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [features]
 default = ["tray", "notify"]
-tray = ["dep:ksni"]
+tray = ["dep:ksni", "dep:resvg", "dep:usvg"]
 notify = ["dep:notify-rust"]
 
 [dependencies]
@@ -25,6 +25,8 @@ udev.workspace = true
 fslock = "0.2"
 libc = "0.2"
 ksni = { version = "0.3", optional = true }
+resvg = { workspace = true, optional = true }
+usvg = { workspace = true, optional = true }
 notify-rust = { workspace = true, optional = true }
 
 [lib]

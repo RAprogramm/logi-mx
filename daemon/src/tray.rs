@@ -22,7 +22,8 @@ use crate::status::{DeviceStatus, SharedStatus};
 
 /// Tray icon driven by the shared [`DeviceStatus`].
 pub struct LogiTrayIcon {
-    status: SharedStatus
+    status: SharedStatus,
+    icons:  crate::tray_icon::TrayIconCache
 }
 
 impl LogiTrayIcon {
@@ -34,9 +35,10 @@ impl LogiTrayIcon {
 
     /// Creates a tray icon sharing an existing status handle.
     #[must_use]
-    pub const fn from_status(status: SharedStatus) -> Self {
+    pub fn from_status(status: SharedStatus) -> Self {
         Self {
-            status
+            status,
+            icons: crate::tray_icon::TrayIconCache::default()
         }
     }
 
@@ -89,6 +91,11 @@ impl Tray for LogiTrayIcon {
         } else {
             "input-mouse-symbolic".to_string()
         }
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        self.icons
+            .icons(crate::tray_icon::color_for(&self.lock_status()))
     }
 
     fn title(&self) -> String {

@@ -16,14 +16,10 @@ use std::time::Instant;
 use notify_rust::{Hint, Notification, Urgency};
 use tracing::warn;
 
-use crate::status::DeviceStatus;
+use crate::status::{
+    BATTERY_CRITICAL_PERCENT, BATTERY_DISCHARGING, BATTERY_LOW_PERCENT, DeviceStatus
+};
 
-/// Battery percentage at or below which a low-battery alert is raised.
-const BATTERY_LOW_PERCENT: u8 = 20;
-/// Battery percentage at or below which a critical-battery alert is raised.
-const BATTERY_CRITICAL_PERCENT: u8 = 10;
-/// Percentage above a threshold required to re-arm its alert (hysteresis).
-const BATTERY_REARM_MARGIN: u8 = 5;
 /// Application name reported to the notification server.
 const APP_NAME: &str = "Logi MX";
 /// Icon shown for device notices.
@@ -31,7 +27,9 @@ const DEVICE_ICON: &str = "input-mouse-symbolic";
 /// Notification category hint per the spec's predefined categories.
 const NOTICE_CATEGORY: &str = "device";
 /// Battery status string that makes charge alerts meaningful.
-const DISCHARGING: &str = "Discharging";
+const DISCHARGING: &str = BATTERY_DISCHARGING;
+/// Percentage above a threshold required to re-arm an alert (hysteresis).
+const BATTERY_REARM_MARGIN: u8 = 5;
 
 /// A user-facing event derived from device status transitions.
 #[derive(Debug, Clone, PartialEq, Eq)]

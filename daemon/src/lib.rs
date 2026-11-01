@@ -12,3 +12,5 @@ pub mod notify;
 
 #[cfg(feature = "tray")]
 pub mod tray;
+#[cfg(feature = "tray")]
+pub mod tray_icon;

@@ -3,6 +3,8 @@
 
 #[cfg(feature = "tray")]
 mod tray;
+#[cfg(feature = "tray")]
+mod tray_icon;
 
 #[cfg(feature = "notify")]
 mod notify;

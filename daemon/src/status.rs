@@ -11,6 +11,13 @@ use std::sync::{Arc, Mutex};
 use logi_mx_driver::prelude::*;
 use tracing::debug;
 
+/// Battery percentage at or below which the tray and notifications warn.
+pub const BATTERY_LOW_PERCENT: u8 = 20;
+/// Battery percentage at or below which the tray and notifications alert.
+pub const BATTERY_CRITICAL_PERCENT: u8 = 10;
+/// Battery status string that makes charge alerts meaningful.
+pub const BATTERY_DISCHARGING: &str = "Discharging";
+
 /// Snapshot of device state shared between the worker and UI surfaces.
 ///
 /// Readers live behind the `tray` feature; without it the snapshot is only
