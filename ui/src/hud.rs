@@ -40,10 +40,7 @@ use logi_mx_daemon::ipc::{
     self, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT, BTN_BIT_MIDDLE,
     BTN_BIT_RIGHT, LiveFrame, Response
 };
-use logi_mx_driver::{
-    devices::control_id,
-    prelude::{HiResScrollConfig, SmartShiftConfig}
-};
+use logi_mx_driver::devices::control_id;
 
 use crate::snapshot::{DeviceSnapshot, collect_device_snapshot};
 
@@ -69,6 +66,8 @@ const THIN_HOTSPOT: f64 = 6.0;
 const DPI_MIN: f64 = 400.0;
 const DPI_MAX: f64 = 8000.0;
 const DPI_STEP: f64 = 100.0;
+/// Neutral DPI shown before the snapshot arrives.
+const DEFAULT_DPI: u16 = 1000;
 /// `SmartShift` threshold slider bounds.
 const SMARTSHIFT_MIN: f64 = 1.0;
 const SMARTSHIFT_MAX: f64 = 255.0;
@@ -400,6 +399,10 @@ thread_local! {
     /// open window; cleared when the HUD closes.
     static LIVE_HOOK: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
 
+    /// Main-thread callback that applies the device snapshot delivered by
+    /// the background loader; cleared when the HUD closes.
+    static SNAPSHOT_HOOK: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+
     /// Stop flag of the live subscription thread of the open window.
     static LIVE_STOP: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
 
@@ -468,8 +471,8 @@ fn build_hud(app: &Application) {
     let drawing = create_drawing_area();
     let leaders = create_leaders_area();
     LEADERS_AREA.with(|cell| *cell.borrow_mut() = Some(leaders.clone()));
-    let snapshot = collect_device_snapshot();
-    let panel = create_panel(&state, &drawing, &window, snapshot.as_ref());
+    let widgets = Rc::new(RefCell::new(PanelWidgets::default()));
+    let panel = create_panel(&state, &drawing, &window, &widgets);
 
     attach_hit_testing(&state, &drawing);
     attach_draw_callback(&state, &drawing, &image, &masks);
@@ -502,6 +505,7 @@ fn build_hud(app: &Application) {
             }
         });
         LIVE_HOOK.with(|hook| *hook.borrow_mut() = None);
+        SNAPSHOT_HOOK.with(|hook| *hook.borrow_mut() = None);
         ROWS_REGISTRY.with(|rows| *rows.borrow_mut() = None);
         LEADERS_AREA.with(|area| *area.borrow_mut() = None);
         ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = None);
@@ -509,6 +513,7 @@ fn build_hud(app: &Application) {
     });
 
     window.present();
+    spawn_snapshot_loader(&widgets);
 }
 
 fn create_window(app: &Application) -> ApplicationWindow {
@@ -567,12 +572,139 @@ fn attach_escape_to_close(window: &ApplicationWindow) {
     window.add_controller(keys);
 }
 
+/// Panel widgets whose values come from the device snapshot.
+///
+/// The panel is built with placeholders before the window is presented; the
+/// background loader fills these widgets in as soon as the daemon answers,
+/// so the first frame never waits on device I/O.
+#[derive(Default)]
+struct PanelWidgets {
+    /// Model row on the device page.
+    model_row:         Option<ActionRow>,
+    /// Battery row on the device page.
+    battery_row:       Option<ActionRow>,
+    /// Current-DPI row on the pointer page.
+    dpi_row:           Option<ActionRow>,
+    /// DPI slider on the pointer page.
+    dpi_scale:         Option<Scale>,
+    /// `SmartShift` enable switch.
+    smartshift_switch: Option<Switch>,
+    /// `SmartShift` threshold slider.
+    smartshift_scale:  Option<Scale>,
+    /// `SmartShift` threshold subtitle row.
+    smartshift_row:    Option<ActionRow>,
+    /// Hi-res scroll switch.
+    hires_switch:      Option<Switch>,
+    /// Natural scrolling switch.
+    inverted_switch:   Option<Switch>,
+    /// Set once a snapshot (or its failure) has been applied; later
+    /// deliveries never overwrite values the user may have edited.
+    applied:           bool
+}
+
+/// Fills the registered panel widgets from a device snapshot.
+///
+/// `None` marks the device unreachable and leaves the controls at their
+/// defaults with explicit "unavailable" subtitles.
+fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceSnapshot>) {
+    {
+        let mut w = widgets.borrow_mut();
+        if w.applied {
+            return;
+        }
+        w.applied = true;
+    }
+    let w = widgets.borrow();
+    let Some(snapshot) = snapshot else {
+        if let Some(row) = &w.model_row {
+            row.set_subtitle("daemon unavailable");
+        }
+        if let Some(row) = &w.battery_row {
+            row.set_subtitle("unknown");
+        }
+        if let Some(row) = &w.dpi_row {
+            row.set_subtitle("unknown");
+        }
+        return;
+    };
+    if let Some(row) = &w.model_row {
+        row.set_subtitle(snapshot.name.as_str());
+    }
+    if let Some(row) = &w.battery_row {
+        row.set_subtitle(&snapshot.battery.map_or_else(
+            || "unknown".to_string(),
+            |b| format!("{}% · {:?}", b.level, b.status)
+        ));
+    }
+    if let Some(row) = &w.dpi_row {
+        row.set_subtitle(&format!("{} DPI", snapshot.dpi));
+    }
+    if let Some(scale) = &w.dpi_scale {
+        scale.set_value(f64::from(snapshot.dpi));
+    }
+    if let Some(switch) = &w.smartshift_switch {
+        switch.set_active(snapshot.smartshift.enabled);
+    }
+    if let Some(scale) = &w.smartshift_scale {
+        scale.set_value(f64::from(snapshot.smartshift.threshold));
+    }
+    if let Some(row) = &w.smartshift_row {
+        row.set_subtitle(&format!("Current: {}", snapshot.smartshift.threshold));
+    }
+    if let Some(switch) = &w.hires_switch {
+        switch.set_active(snapshot.hiresscroll.enabled);
+    }
+    if let Some(switch) = &w.inverted_switch {
+        switch.set_active(snapshot.hiresscroll.inverted);
+    }
+}
+
+/// Loads the device snapshot off the main thread and applies it to the panel.
+///
+/// Device I/O can take seconds (daemon round-trips, direct fallback scans),
+/// so it must never block the first frame. The worker parks the result in a
+/// shared slot and wakes the main context, where the registered hook applies
+/// it; a failed load still applies and marks the device unavailable.
+fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
+    let slot = Arc::new(Mutex::new(None::<Option<DeviceSnapshot>>));
+    let slot_thread = Arc::clone(&slot);
+    let slot_hook = Arc::clone(&slot);
+    let widgets_hook = Rc::clone(widgets);
+    let hook: Rc<dyn Fn()> = Rc::new(move || {
+        let snapshot = slot_hook.lock().ok().and_then(|mut guard| guard.take());
+        if let Some(snapshot) = snapshot {
+            apply_snapshot(&widgets_hook, snapshot.as_ref());
+        }
+    });
+    SNAPSHOT_HOOK.with(|cell| *cell.borrow_mut() = Some(hook));
+    let context = glib::MainContext::default();
+    if let Err(e) = thread::Builder::new()
+        .name("snapshot-loader".to_string())
+        .spawn(move || {
+            let snapshot = collect_device_snapshot();
+            if let Ok(mut guard) = slot_thread.lock() {
+                *guard = Some(snapshot);
+            }
+            context.invoke(|| {
+                SNAPSHOT_HOOK.with(|cell| {
+                    if let Some(hook) = cell.borrow().as_ref() {
+                        hook();
+                    }
+                });
+            });
+        })
+    {
+        tracing::warn!("Failed to spawn the snapshot loader thread: {e}");
+        apply_snapshot(widgets, None);
+    }
+}
+
 /// Builds the settings panel with the Device, Pointer, Wheel and Buttons pages.
 fn create_panel(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     window: &ApplicationWindow,
-    snapshot: Option<&DeviceSnapshot>
+    widgets: &Rc<RefCell<PanelWidgets>>
 ) -> ToastOverlay {
     let toast = ToastOverlay::new();
     toast.set_size_request(PANEL_WIDTH, -1);
@@ -597,19 +729,19 @@ fn create_panel(
             "input-mouse-symbolic"
         ),
         (
-            wheel_page(snapshot, &toast),
+            wheel_page(&toast, widgets),
             "wheel",
             "Wheel",
             "view-continuous-symbolic"
         ),
         (
-            pointer_page(snapshot, &toast),
+            pointer_page(&toast, widgets),
             "pointer",
             "Pointer",
             "preferences-desktop-input-symbolic"
         ),
         (
-            device_page(state, window, snapshot, &toast),
+            device_page(state, window, &toast, widgets),
             "device",
             "Device",
             "battery-symbolic"
@@ -882,11 +1014,12 @@ fn buttons_page(
 }
 
 /// Creates the wheel page: `SmartShift`, hi-res and direction settings.
-fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> ScrolledWindow {
+///
+/// Controls start at neutral placeholders; the snapshot loader fills them in
+/// once the daemon answers.
+fn wheel_page(toast: &ToastOverlay, widgets: &Rc<RefCell<PanelWidgets>>) -> ScrolledWindow {
     let scroll = page_scroll();
     let box_ = GtkBox::new(Orientation::Vertical, 0);
-    let smartshift = snapshot.map_or_else(SmartShiftConfig::default, |s| s.smartshift);
-    let hires = snapshot.map_or_else(HiResScrollConfig::default, |s| s.hiresscroll);
 
     let shift_group = PreferencesGroup::new();
     shift_group.set_title("SmartShift");
@@ -896,20 +1029,18 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     switch_row.set_title("Enable SmartShift");
     let shift_switch = Switch::new();
     shift_switch.set_valign(gtk4::Align::Center);
-    shift_switch.set_active(smartshift.enabled);
     switch_row.add_suffix(&shift_switch);
     switch_row.set_activatable_widget(Some(&shift_switch));
 
     let threshold_row = ActionRow::new();
     threshold_row.set_title("Disengage Sensitivity");
-    threshold_row.set_subtitle(&format!("Current: {}", smartshift.threshold));
+    threshold_row.set_subtitle("Detecting…");
     let threshold_scale = Scale::with_range(
         Orientation::Horizontal,
         SMARTSHIFT_MIN,
         SMARTSHIFT_MAX,
         SMARTSHIFT_STEP
     );
-    threshold_scale.set_value(f64::from(smartshift.threshold));
     threshold_scale.set_draw_value(true);
     threshold_scale.set_hexpand(true);
     let tr = threshold_row.clone();
@@ -920,7 +1051,7 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     let shift_apply = Button::with_label("Apply");
     shift_apply.add_css_class("suggested-action");
     shift_apply.add_css_class("pill");
-    let sw = shift_switch;
+    let sw = shift_switch.clone();
     let ts = threshold_scale.clone();
     let to = toast.clone();
     shift_apply.connect_clicked(move |_| {
@@ -946,7 +1077,6 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     hires_row.set_title("Hi-Res Scrolling");
     let hires_switch = Switch::new();
     hires_switch.set_valign(gtk4::Align::Center);
-    hires_switch.set_active(hires.enabled);
     hires_row.add_suffix(&hires_switch);
     hires_row.set_activatable_widget(Some(&hires_switch));
 
@@ -954,15 +1084,14 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     inverted_row.set_title("Natural Scrolling");
     let inverted_switch = Switch::new();
     inverted_switch.set_valign(gtk4::Align::Center);
-    inverted_switch.set_active(hires.inverted);
     inverted_row.add_suffix(&inverted_switch);
     inverted_row.set_activatable_widget(Some(&inverted_switch));
 
     let scroll_apply = Button::with_label("Apply");
     scroll_apply.add_css_class("suggested-action");
     scroll_apply.add_css_class("pill");
-    let hs = hires_switch;
-    let inv = inverted_switch;
+    let hs = hires_switch.clone();
+    let inv = inverted_switch.clone();
     let to = toast.clone();
     scroll_apply.connect_clicked(move |_| {
         let request = ipc::Request::SetHires {
@@ -981,25 +1110,35 @@ fn wheel_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scroll
     box_.append(&shift_group);
     box_.append(&scroll_group);
     scroll.set_child(Some(&box_));
+
+    let mut w = widgets.borrow_mut();
+    w.smartshift_switch = Some(shift_switch);
+    w.smartshift_scale = Some(threshold_scale);
+    w.smartshift_row = Some(threshold_row);
+    w.hires_switch = Some(hires_switch);
+    w.inverted_switch = Some(inverted_switch);
+    drop(w);
     scroll
 }
 
 /// Creates the pointer page with the DPI slider.
-fn pointer_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> ScrolledWindow {
+///
+/// The slider starts at the neutral default; the snapshot loader fills in
+/// the real value once the daemon answers.
+fn pointer_page(toast: &ToastOverlay, widgets: &Rc<RefCell<PanelWidgets>>) -> ScrolledWindow {
     let scroll = page_scroll();
     let group = PreferencesGroup::new();
     group.set_title("Pointer Sensitivity");
     group.set_description(Some("Cursor speed from 400 to 8000 DPI"));
 
-    let current_dpi = snapshot.map_or(1000, |s| s.dpi);
     let dpi_row = ActionRow::new();
     dpi_row.set_title("Current DPI");
-    dpi_row.set_subtitle(&format!("{current_dpi} DPI"));
+    dpi_row.set_subtitle("Detecting…");
 
     let scale_row = ActionRow::new();
     scale_row.set_title("Sensitivity");
     let scale = Scale::with_range(Orientation::Horizontal, DPI_MIN, DPI_MAX, DPI_STEP);
-    scale.set_value(f64::from(current_dpi));
+    scale.set_value(f64::from(DEFAULT_DPI));
     scale.set_draw_value(true);
     scale.set_hexpand(true);
     let dr = dpi_row.clone();
@@ -1031,6 +1170,11 @@ fn pointer_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scro
     group.add(&scale_row);
 
     scroll.set_child(Some(&group));
+
+    let mut w = widgets.borrow_mut();
+    w.dpi_row = Some(dpi_row);
+    w.dpi_scale = Some(scale);
+    drop(w);
     scroll
 }
 
@@ -1094,11 +1238,14 @@ fn background_section(
 
 /// Creates the device page: battery, backdrop, desktop integration and
 /// version.
+///
+/// Model and battery start as "Detecting…"; the snapshot loader fills them
+/// in once the daemon answers.
 fn device_page(
     state: &Rc<RefCell<HudState>>,
     window: &ApplicationWindow,
-    snapshot: Option<&DeviceSnapshot>,
-    toast: &ToastOverlay
+    toast: &ToastOverlay,
+    widgets: &Rc<RefCell<PanelWidgets>>
 ) -> ScrolledWindow {
     let scroll = page_scroll();
     let box_ = GtkBox::new(Orientation::Vertical, 0);
@@ -1107,18 +1254,10 @@ fn device_page(
     info_group.set_title("Device");
     let name_row = ActionRow::new();
     name_row.set_title("Model");
-    name_row.set_subtitle(snapshot.map_or("daemon unavailable", |s| s.name.as_str()));
+    name_row.set_subtitle("Detecting…");
     let battery_row = ActionRow::new();
     battery_row.set_title("Battery");
-    battery_row.set_subtitle(&snapshot.map_or_else(
-        || "unknown".to_string(),
-        |s| {
-            s.battery.map_or_else(
-                || "unknown".to_string(),
-                |b| format!("{}% · {:?}", b.level, b.status)
-            )
-        }
-    ));
+    battery_row.set_subtitle("Detecting…");
     let refresh = Button::with_label("Refresh");
     refresh.add_css_class("pill");
     let br = battery_row.clone();
@@ -1180,6 +1319,11 @@ fn device_page(
     box_.append(&integration_group);
     box_.append(&version_group);
     scroll.set_child(Some(&box_));
+
+    let mut w = widgets.borrow_mut();
+    w.model_row = Some(name_row);
+    w.battery_row = Some(battery_row);
+    drop(w);
     scroll
 }
 
