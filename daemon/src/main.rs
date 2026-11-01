@@ -10,6 +10,7 @@ mod tray_icon;
 mod notify;
 
 mod ipc;
+mod live;
 mod status;
 mod systemd;
 mod worker;
@@ -165,6 +166,21 @@ fn main() -> Result<()> {
     runtime.block_on(run())
 }
 
+/// Creates the live telemetry fan-out and attaches the evdev tap thread.
+fn spawn_live_tap() -> ipc::LiveHub {
+    let (hub, _sink) = tokio::sync::broadcast::channel::<ipc::LiveFrame>(64);
+    if let Err(e) = std::thread::Builder::new()
+        .name("logi-mx-live".to_string())
+        .spawn({
+            let hub = hub.clone();
+            move || live::run(&hub)
+        })
+    {
+        warn!("Failed to spawn live telemetry thread: {e}. Live HUD disabled.");
+    }
+    hub
+}
+
 async fn run() -> Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer())
@@ -197,9 +213,11 @@ async fn run() -> Result<()> {
     let (device_tx, rpc_tx, worker_handle) =
         spawn_device_worker(config, Arc::clone(&status), tray_handle.clone())?;
 
+    let live_hub = spawn_live_tap();
+
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {
-        if let Err(e) = crate::ipc::run_server(ipc_rpc_tx).await {
+        if let Err(e) = crate::ipc::run_server(ipc_rpc_tx, live_hub).await {
             error!("IPC server error: {e}");
         }
     });

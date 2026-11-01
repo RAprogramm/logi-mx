@@ -189,6 +189,10 @@ fn handle_rpc(request: RpcRequest, manager: &mut DevicePool) {
     let _ = request.responder.send(response);
 }
 
+/// Executes one RPC request against the pooled device.
+///
+/// `WatchLive` connections are answered by the IPC server itself and never
+/// reach this function; the arm exists to keep the protocol exhaustive.
 fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Response {
     match manager.with_device(
         |device| -> std::result::Result<ipc::Response, masterror::AppError> {
@@ -270,6 +274,9 @@ fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Resp
                     #[cfg(feature = "notify")]
                     crate::notify::host_switched(*host);
                     ipc::Response::Ok
+                }
+                ipc::Request::WatchLive => ipc::Response::Error {
+                    message: "live streaming is handled by the IPC server".to_string()
                 }
             })
         }
