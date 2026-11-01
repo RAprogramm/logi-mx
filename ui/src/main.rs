@@ -15,6 +15,10 @@ use gtk4::{CssProvider, glib, prelude::*};
 use libadwaita::Application;
 
 const APP_ID: &str = "com.logitech.mx.configurator";
+/// Distinct application id for the overlay mode. Sharing one id with the
+/// settings window would make the second launch delegate activation to the
+/// first instance, so the overlay would never appear while the UI is open.
+const OVERLAY_APP_ID: &str = "com.logitech.mx.button-mapper";
 
 /// Runs the GTK application, or exits with an error when no graphical session
 /// is available.
@@ -28,9 +32,12 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::FAILURE;
     }
 
-    let app = Application::builder().application_id(APP_ID).build();
+    let overlay = std::env::var("LOGI_MX_OVERLAY").is_ok();
+    let app = Application::builder()
+        .application_id(if overlay { OVERLAY_APP_ID } else { APP_ID })
+        .build();
     app.connect_startup(|_| load_css());
-    if std::env::var("LOGI_MX_OVERLAY").is_ok() {
+    if overlay {
         app.connect_activate(overlay::build_overlay);
     } else {
         app.connect_activate(settings::build_ui);
