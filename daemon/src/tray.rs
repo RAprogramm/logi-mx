@@ -170,10 +170,8 @@ impl Tray for LogiTrayIcon {
                 ..Default::default()
             }
             .into(),
-            MenuItem::Separator,
             StandardItem {
-                label: format!("logi-mx v{}", env!("CARGO_PKG_VERSION")),
-                icon_name: "help-about".into(),
+                label: env!("CARGO_PKG_VERSION").to_string(),
                 activate: Box::new(|_| {}),
                 enabled: false,
                 ..Default::default()
@@ -455,7 +453,8 @@ mod tests {
 
         match menu.last() {
             Some(MenuItem::Standard(item)) => {
-                assert!(item.label.contains(env!("CARGO_PKG_VERSION")));
+                assert_eq!(item.label, env!("CARGO_PKG_VERSION"));
+                assert!(item.icon_name.is_empty());
                 assert!(!item.enabled);
             }
             _ => panic!("Expected a trailing version item")
