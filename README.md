@@ -378,6 +378,11 @@ The easiest way: open the settings window → **Desktop Integration → Configur
 The app detects Hyprland, appends the window rules and the overlay keybind to
 `~/.config/hypr/hyprland.lua` (or legacy `hyprland.conf`) if missing, and
 reloads Hyprland. Running it again is safe: it reports "Already configured".
+The same action is available headless for scripts and installers:
+
+```bash
+logi-mx-ui --integrate-hyprland
+```
 
 Manual setup — Hyprland 0.55+ uses Lua configuration
 (`~/.config/hypr/hyprland.lua`). Add these window rules for optimal UI

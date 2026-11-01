@@ -80,5 +80,19 @@ if command -v systemctl >/dev/null 2>&1; then
   echo "  systemd user service and socket installed and enabled"
 fi
 
+# Hyprland integration (window rules + overlay keybind), offered once
+if command -v hyprctl >/dev/null 2>&1 || [ -d "${HOME}/.config/hypr" ]; then
+  if [ -t 0 ]; then
+    printf "Hyprland detected. Configure integration (window rules + overlay keybind)? [Y/n] "
+    read -r answer
+    case "${answer:-Y}" in
+      [nN]*) echo "  skipped: run 'logi-mx-ui' and press Configure in Desktop Integration later" ;;
+      *) "${BIN_DIR}/logi-mx-ui" --integrate-hyprland || true ;;
+    esac
+  else
+    echo "Hyprland detected: run 'logi-mx-ui --integrate-hyprland' to configure it."
+  fi
+fi
+
 echo "=== Installation complete ==="
 echo "Run: ${BIN_DIR}/logi-mx info"
