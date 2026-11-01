@@ -5,6 +5,7 @@
 
 pub mod ipc;
 pub mod status;
+pub mod systemd;
 pub mod worker;
 
 #[cfg(feature = "notify")]

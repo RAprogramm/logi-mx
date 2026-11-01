@@ -155,6 +155,22 @@ pub enum Response {
 /// Timeout for a single IPC round-trip.
 pub const IPC_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// First file descriptor passed by systemd socket activation.
+const SD_LISTEN_FDS_START: i32 = 3;
+
+/// Reports whether systemd passed an inherited listening socket to this
+/// process (`LISTEN_PID` matches and `LISTEN_FDS` is at least one).
+#[must_use]
+pub fn is_socket_activated() -> bool {
+    inherited_listener_fd().is_some()
+}
+
+fn inherited_listener_fd() -> Option<i32> {
+    let listen_pid: u32 = std::env::var("LISTEN_PID").ok()?.parse().ok()?;
+    let listen_fds: i32 = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
+    (listen_pid == std::process::id() && listen_fds >= 1).then_some(SD_LISTEN_FDS_START)
+}
+
 /// Attempts a single IPC request against the daemon.
 ///
 /// Returns `None` when the daemon is not running or the socket is
@@ -188,36 +204,55 @@ pub fn try_request(request: &Request) -> Option<Response> {
 
 /// Runs the async IPC server, forwarding requests to the worker.
 ///
-/// Creates the socket with `0o600`, removes stale files, and spawns a
-/// task per client. Each request is forwarded via `rpc_tx` and the
-/// worker's reply is written back as a single JSON line.
+/// With systemd socket activation the listening socket is inherited from
+/// `LISTEN_FDS`; otherwise the socket file is created with `0o600` and stale
+/// files are removed. A task is spawned per client. Each request is
+/// forwarded via `rpc_tx` and the worker's reply is written back as a
+/// single JSON line.
 ///
 /// # Errors
 ///
 /// Returns an internal error if the socket cannot be created or an
 /// accept fails.
 pub async fn run_server(rpc_tx: RpcSender) -> Result<(), masterror::AppError> {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::{fs::PermissionsExt as _, io::FromRawFd as _};
 
     use tokio::net::UnixListener;
     use tracing::{error, info};
 
-    let path = socket_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            masterror::AppError::internal("Failed to create IPC directory").with_source(e)
+    let listener = if let Some(fd) = inherited_listener_fd() {
+        // SAFETY: the sd_listen_fds protocol guarantees file descriptor 3
+        // is an inherited, bound and listening Unix socket owned by this
+        // process once `LISTEN_PID` and `LISTEN_FDS` have been validated.
+        let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+        std_listener.set_nonblocking(true).map_err(|e| {
+            masterror::AppError::internal("Failed to configure socket").with_source(e)
         })?;
-    }
-    let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::from_std(std_listener).map_err(|e| {
+            masterror::AppError::internal("Failed to adopt IPC socket").with_source(e)
+        })?;
+        info!("IPC server using systemd socket activation");
+        listener
+    } else {
+        let path = socket_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                masterror::AppError::internal("Failed to create IPC directory").with_source(e)
+            })?;
+        }
+        let _ = std::fs::remove_file(&path);
 
-    let listener = UnixListener::bind(&path)
-        .map_err(|e| masterror::AppError::internal("Failed to bind IPC socket").with_source(e))?;
+        let listener = UnixListener::bind(&path).map_err(|e| {
+            masterror::AppError::internal("Failed to bind IPC socket").with_source(e)
+        })?;
 
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
-        masterror::AppError::internal("Failed to set IPC socket permissions").with_source(e)
-    })?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            masterror::AppError::internal("Failed to set IPC socket permissions").with_source(e)
+        })?;
 
-    info!("IPC server listening on {}", path.display());
+        info!("IPC server listening on {}", path.display());
+        listener
+    };
 
     loop {
         let (stream, _) = listener.accept().await.map_err(|e| {

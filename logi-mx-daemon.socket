@@ -1,0 +1,10 @@
+[Unit]
+Description=Logitech MX Master 3S daemon IPC socket
+Documentation=https://github.com/RAprogramm/logi-mx
+
+[Socket]
+ListenStream=%t/logi-mx.sock
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target

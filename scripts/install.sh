@@ -68,15 +68,16 @@ else
   echo "No desktop detected: installing daemon service only."
 fi
 
-# systemd user service
+# systemd user units
 if command -v systemctl >/dev/null 2>&1; then
   install -d "${SYSTEMD_USER_DIR}"
   install -m 0644 "${ROOT_DIR}/logi-mx-daemon.service" "${SYSTEMD_USER_DIR}/logi-mx-daemon.service"
+  install -m 0644 "${ROOT_DIR}/logi-mx-daemon.socket" "${SYSTEMD_USER_DIR}/logi-mx-daemon.socket"
   # fix ExecStart path
   sed -i "s#^ExecStart=.*#ExecStart=${BIN_DIR}/logi-mx-daemon#" "${SYSTEMD_USER_DIR}/logi-mx-daemon.service"
   systemctl --user daemon-reload 2>/dev/null || true
-  systemctl --user enable --now logi-mx-daemon.service 2>/dev/null || true
-  echo "  systemd user service installed and enabled"
+  systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service 2>/dev/null || true
+  echo "  systemd user service and socket installed and enabled"
 fi
 
 echo "=== Installation complete ==="

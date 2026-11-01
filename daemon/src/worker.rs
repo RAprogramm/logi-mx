@@ -107,6 +107,8 @@ fn run_device_worker(
     let mut last_refresh = std::time::Instant::now();
 
     loop {
+        crate::systemd::mark_worker_beat();
+
         while let Ok(req) = rpc_rx.try_recv() {
             handle_rpc(req, &mut manager);
         }
@@ -143,14 +145,27 @@ fn refresh_and_notify(
 ) {
     crate::status::refresh_from_device(status);
 
-    #[cfg(feature = "notify")]
     {
         let guard = status
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        #[cfg(feature = "notify")]
         for notice in policy.on_status(&guard, std::time::Instant::now()) {
             crate::notify::publish(&notice);
         }
+
+        let summary = if guard.connected {
+            format!(
+                "device connected | battery {}% {} | dpi {}",
+                guard.battery_level, guard.battery_status, guard.dpi
+            )
+        } else {
+            "device disconnected".to_string()
+        };
+        drop(guard);
+
+        crate::systemd::notify_status(&summary);
     }
 
     #[cfg(feature = "tray")]

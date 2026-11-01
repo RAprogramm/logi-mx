@@ -20,7 +20,7 @@ when appropriate.
 makepkg --skipdepcheck -si
 
 # Enable and start daemon
-systemctl --user enable --now logi-mx-daemon
+systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service
 
 # Check status
 systemctl --user status logi-mx-daemon
@@ -53,5 +53,5 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 # Install systemd service
 mkdir -p ~/.config/systemd/user
 cp logi-mx-daemon.service ~/.config/systemd/user/
-systemctl --user enable --now logi-mx-daemon
+systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service
 ```

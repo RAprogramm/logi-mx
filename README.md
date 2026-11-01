@@ -266,7 +266,7 @@ yay -S logi-mx
 sudo usermod -aG input $USER
 
 # Enable and start daemon
-systemctl --user enable --now logi-mx-daemon
+systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service
 
 # Logout and login for group changes to take effect
 ```
@@ -292,7 +292,7 @@ sudo usermod -aG input $USER
 mkdir -p ~/.config/systemd/user
 curl -o ~/.config/systemd/user/logi-mx-daemon.service \
   https://raw.githubusercontent.com/RAprogramm/logi-mx/main/logi-mx-daemon.service
-systemctl --user enable --now logi-mx-daemon
+systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service
 
 # Logout and login for group changes to take effect
 ```
@@ -321,7 +321,7 @@ sudo usermod -aG input $USER
 # Install systemd service
 mkdir -p ~/.config/systemd/user
 cp logi-mx-daemon.service ~/.config/systemd/user/
-systemctl --user enable --now logi-mx-daemon
+systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service
 
 # Logout and login for group changes to take effect
 ```

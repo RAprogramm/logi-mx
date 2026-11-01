@@ -11,6 +11,7 @@ mod notify;
 
 mod ipc;
 mod status;
+mod systemd;
 mod worker;
 
 use std::{
@@ -237,6 +238,8 @@ async fn run() -> Result<()> {
         .map_err(|e| AppError::internal("Failed to setup SIGINT handler").with_source(e))?;
 
     info!("Daemon started successfully");
+    systemd::notify_ready();
+    tokio::spawn(systemd::run_watchdog());
 
     loop {
         select! {
@@ -267,7 +270,9 @@ async fn run() -> Result<()> {
     drop(rpc_tx);
 
     let _ = worker_handle.join();
-    let _ = std::fs::remove_file(crate::ipc::socket_path());
+    if !ipc::is_socket_activated() {
+        let _ = std::fs::remove_file(crate::ipc::socket_path());
+    }
 
     info!("Daemon stopped");
     Ok(())

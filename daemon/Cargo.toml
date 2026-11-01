@@ -28,6 +28,7 @@ ksni = { version = "0.3", optional = true }
 resvg = { workspace = true, optional = true }
 usvg = { workspace = true, optional = true }
 notify-rust = { workspace = true, optional = true }
+sd-notify = "0.5"
 
 [lib]
 name = "logi_mx_daemon"

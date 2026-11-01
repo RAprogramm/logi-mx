@@ -35,8 +35,9 @@ package() {
     # Install udev rules
     install -Dm644 90-logi-mx.rules "$pkgdir/usr/lib/udev/rules.d/90-logi-mx.rules"
 
-    # Install systemd user service
+    # Install systemd user units
     install -Dm644 logi-mx-daemon.service "$pkgdir/usr/lib/systemd/user/logi-mx-daemon.service"
+    install -Dm644 logi-mx-daemon.socket "$pkgdir/usr/lib/systemd/user/logi-mx-daemon.socket"
 
     # Install desktop files
     install -Dm644 logi-mx-daemon.desktop "$pkgdir/usr/share/applications/logi-mx-daemon.desktop"
