@@ -344,10 +344,10 @@ impl LogiTrayIcon {
         ]
     }
 
-    /// Builds the menu entry that launches the configuration UI.
+    /// Builds the menu entry that toggles the HUD.
     fn open_configuration_item() -> MenuItem<Self> {
         StandardItem {
-            label: "Open Configuration".into(),
+            label: "Show / Hide HUD".into(),
             icon_name: "preferences-system".into(),
             activate: Box::new(|_this: &mut Self| {
                 spawn_tray_task("tray-open-ui", launch_configuration_ui);

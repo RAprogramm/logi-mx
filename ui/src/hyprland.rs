@@ -27,7 +27,7 @@ hl.window_rule({
     center = true,
 })
 
-hl.bind(\"SUPER + M\", hl.dsp.exec_cmd(\"LOGI_MX_OVERLAY=1 logi-mx-ui\"))
+hl.bind(\"SUPER + M\", hl.dsp.exec_cmd(\"logi-mx-ui\"))
 ";
 
 /// Legacy hyprlang snippet for pre-Lua configurations.
@@ -35,7 +35,7 @@ const CONF_BLOCK: &str = "
 # logi-mx integration
 windowrulev2 = float, title:^(Logitech MX Master 3S)$
 windowrulev2 = center, title:^(Logitech MX Master 3S)$
-bind = SUPER, M, exec, LOGI_MX_OVERLAY=1 logi-mx-ui
+bind = SUPER, M, exec, logi-mx-ui
 ";
 
 /// Outcome of an integration run.
@@ -165,8 +165,7 @@ mod tests {
         assert!(LUA_BLOCK.contains("float = true"));
         assert!(LUA_BLOCK.contains("center = true"));
         assert!(LUA_BLOCK.contains("hl.bind"));
-        assert!(LUA_BLOCK.contains("hl.bind(\"SUPER + M\""));
-        assert!(LUA_BLOCK.contains("LOGI_MX_OVERLAY=1 logi-mx-ui"));
+        assert!(LUA_BLOCK.contains("hl.bind(\"SUPER + M\", hl.dsp.exec_cmd(\"logi-mx-ui\"))"));
     }
 
     #[test]

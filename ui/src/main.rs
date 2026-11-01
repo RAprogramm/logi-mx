@@ -3,23 +3,19 @@
 
 //! Logitech MX Master 3S configuration UI.
 //!
-//! Entry point only: checks the graphical session, loads CSS, and dispatches to
-//! either the settings window ([`settings`]) or the full-screen button-mapping
-//! overlay ([`overlay`], enabled with `LOGI_MX_OVERLAY=1`).
+//! Entry point only: checks the graphical session, loads CSS and opens the
+//! full-screen HUD ([`hud`]), the only window of this application. A second
+//! activation toggles the HUD closed, so the tray item and the configured
+//! keybind share one code path.
 
+pub mod hud;
 pub mod hyprland;
-pub mod overlay;
-pub mod settings;
 pub mod snapshot;
 
 use gtk4::{CssProvider, glib, prelude::*};
 use libadwaita::Application;
 
 const APP_ID: &str = "com.logitech.mx.configurator";
-/// Distinct application id for the overlay mode. Sharing one id with the
-/// settings window would make the second launch delegate activation to the
-/// first instance, so the overlay would never appear while the UI is open.
-const OVERLAY_APP_ID: &str = "com.logitech.mx.button-mapper";
 
 /// Runs the GTK application, or exits with an error when no graphical session
 /// is available.
@@ -40,16 +36,9 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::FAILURE;
     }
 
-    let overlay = std::env::var("LOGI_MX_OVERLAY").is_ok();
-    let app = Application::builder()
-        .application_id(if overlay { OVERLAY_APP_ID } else { APP_ID })
-        .build();
+    let app = Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| load_css());
-    if overlay {
-        app.connect_activate(overlay::toggle_overlay);
-    } else {
-        app.connect_activate(settings::build_ui);
-    }
+    app.connect_activate(hud::toggle_hud);
     app.run()
 }
 
@@ -85,21 +74,10 @@ fn run_hyprland_integration() -> glib::ExitCode {
     }
 }
 
-/// Loads the application stylesheet into the default display, when one exists.
 fn load_css() {
     let provider = CssProvider::new();
     provider.load_from_string(
         "
-        .status-banner {
-            padding: 6px 12px;
-        }
-        .settings-page {
-            margin-top: 12px;
-            margin-bottom: 24px;
-        }
-        .level-bar {
-            min-height: 8px;
-        }
         window.transparent-overlay {
             background: none;
             background-color: transparent;

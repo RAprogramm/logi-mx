@@ -16,4 +16,5 @@ libadwaita.workspace = true
 gtk4-layer-shell = "0.8"
 resvg.workspace = true
 usvg.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
