@@ -83,6 +83,14 @@ impl Default for LogiTrayIcon {
 
 impl Tray for LogiTrayIcon {
     fn icon_name(&self) -> String {
+        if !self
+            .icons
+            .icons(crate::tray_icon::color_for(&self.lock_status()))
+            .is_empty()
+        {
+            return String::new();
+        }
+
         let status = self.lock_status();
         if status.error.is_some() {
             "dialog-error".to_string()
@@ -302,30 +310,55 @@ pub async fn spawn_tray(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_tray_icon_name_disconnected() {
-        let tray = LogiTrayIcon::new();
-        assert_eq!(tray.icon_name(), "input-mouse-symbolic");
+    fn first_pixmap(tray: &LogiTrayIcon) -> Vec<u8> {
+        tray.icon_pixmap()
+            .first()
+            .map_or_else(Vec::new, |icon| icon.data.clone())
     }
 
     #[test]
-    fn test_tray_icon_name_connected() {
+    fn test_tray_prefers_pixmap_over_theme_name() {
+        let tray = LogiTrayIcon::new();
+        assert!(!tray.icon_pixmap().is_empty());
+        assert_eq!(tray.icon_name(), "");
+    }
+
+    #[test]
+    fn test_tray_pixmap_color_follows_state() {
+        let tray = LogiTrayIcon::new();
+        let offline = first_pixmap(&tray);
+
+        {
+            let mut status = tray.status.lock().unwrap();
+            status.connected = true;
+            status.battery_status = "Discharging".to_string();
+            status.battery_level = 50;
+        }
+        let online = first_pixmap(&tray);
+
+        assert_ne!(offline, Vec::<u8>::new());
+        assert_ne!(online, Vec::<u8>::new());
+        assert_ne!(offline, online);
+    }
+
+    #[test]
+    fn test_tray_pixmap_error_state_differs_from_connected() {
         let tray = LogiTrayIcon::new();
         {
             let mut status = tray.status.lock().unwrap();
             status.connected = true;
+            status.battery_status = "Discharging".to_string();
+            status.battery_level = 50;
         }
-        assert_eq!(tray.icon_name(), "input-mouse");
-    }
+        let connected = first_pixmap(&tray);
 
-    #[test]
-    fn test_tray_icon_name_error() {
-        let tray = LogiTrayIcon::new();
         {
             let mut status = tray.status.lock().unwrap();
             status.error = Some("Test error".to_string());
         }
-        assert_eq!(tray.icon_name(), "dialog-error");
+        let error = first_pixmap(&tray);
+
+        assert_ne!(connected, error);
     }
 
     #[test]
@@ -404,17 +437,6 @@ mod tests {
         }
 
         assert!(tray.lock_status().connected);
-    }
-
-    #[test]
-    fn test_icon_name_priority_error_over_connected() {
-        let tray = LogiTrayIcon::new();
-        {
-            let mut status = tray.status.lock().unwrap();
-            status.connected = true;
-            status.error = Some("Test error".to_string());
-        }
-        assert_eq!(tray.icon_name(), "dialog-error");
     }
 
     #[test]
