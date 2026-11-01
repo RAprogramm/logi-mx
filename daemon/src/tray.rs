@@ -11,11 +11,10 @@ use std::{
     env::current_exe,
     path::PathBuf,
     process::{Command, exit},
-    sync::{Arc, Mutex}
+    sync::{Arc, Mutex},
+    thread
 };
 
-#[cfg(feature = "tray")]
-use gtk4::{AlertDialog, Window, glib};
 use ksni::{Category, MenuItem, Tray, TrayMethods, menu::StandardItem};
 use tracing::{error, info};
 
@@ -41,39 +40,6 @@ impl LogiTrayIcon {
         }
     }
 
-    #[cfg(feature = "tray")]
-    fn show_exit_confirmation() -> bool {
-        gtk4::init().ok();
-
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        glib::MainContext::default().spawn_local(async move {
-            let dialog = AlertDialog::builder()
-                .message("Stop Logitech MX Daemon?")
-                .detail(
-                    "The daemon will be stopped and the following features will become unavailable:\n\n\
-                     - Custom scroll wheel speed\n\
-                     - DPI adjustment\n\
-                     - SmartShift configuration\n\
-                     - Hi-res scrolling\n\
-                     - Battery monitoring\n\n\
-                     Your mouse will use default Linux drivers."
-                )
-                .buttons(vec!["Cancel", "Stop Daemon"])
-                .default_button(0)
-                .cancel_button(0)
-                .build();
-
-            let response = dialog.choose_future(None::<&Window>).await;
-            let confirmed = response.is_ok_and(|r| r == 1);
-            tx.send(confirmed).ok();
-        });
-
-        let result = rx.recv().unwrap_or(false);
-        info!("Exit confirmation dialog result: {result}");
-        result
-    }
-
     fn shutdown_daemon() {
         info!("Initiating daemon shutdown");
 
@@ -87,14 +53,6 @@ impl LogiTrayIcon {
 
         info!("Daemon shutdown complete");
         exit(0);
-    }
-
-    /// Queries the device and refreshes the shared status.
-    ///
-    /// Runs on the `ksni` worker thread from the tray menu, so the blocking
-    /// device I/O never stalls the daemon event loop.
-    pub fn update_status(&self) {
-        crate::status::refresh_from_device(&self.status);
     }
 
     fn lock_status(&self) -> std::sync::MutexGuard<'_, DeviceStatus> {
@@ -180,16 +138,7 @@ impl Tray for LogiTrayIcon {
                 label: "Exit".into(),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|_this: &mut Self| {
-                    #[cfg(feature = "tray")]
-                    {
-                        if Self::show_exit_confirmation() {
-                            Self::shutdown_daemon();
-                        } else {
-                            info!("User cancelled daemon shutdown");
-                        }
-                    }
-                    #[cfg(not(feature = "tray"))]
-                    Self::shutdown_daemon();
+                    thread::spawn(Self::shutdown_daemon);
                 }),
                 enabled: true,
                 ..Default::default()
@@ -242,7 +191,8 @@ impl LogiTrayIcon {
                 label: "Refresh Status".into(),
                 icon_name: "view-refresh".into(),
                 activate: Box::new(|this: &mut Self| {
-                    this.update_status();
+                    let status = Arc::clone(&this.status);
+                    thread::spawn(move || crate::status::refresh_from_device(&status));
                 }),
                 enabled: true,
                 ..Default::default()
@@ -258,36 +208,52 @@ impl LogiTrayIcon {
             label: "Open Configuration".into(),
             icon_name: "preferences-system".into(),
             activate: Box::new(|_this: &mut Self| {
-                let ui_path = current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|p| p.join("logi-mx-ui")))
-                    .unwrap_or_else(|| PathBuf::from("logi-mx-ui"));
-
-                let mut cmd = Command::new(&ui_path);
-                cmd.env_clear();
-                for var in [
-                    "DISPLAY",
-                    "WAYLAND_DISPLAY",
-                    "XDG_RUNTIME_DIR",
-                    "XDG_SESSION_TYPE",
-                    "DBUS_SESSION_BUS_ADDRESS",
-                    "PATH"
-                ] {
-                    if let Ok(val) = std::env::var(var) {
-                        cmd.env(var, val);
-                    }
-                }
-
-                if let Err(e) = cmd.spawn() {
-                    error!("Failed to launch UI at {ui_path:?}: {e}");
-                } else {
-                    info!("Launched configuration UI");
-                }
+                thread::spawn(launch_configuration_ui);
             }),
             enabled: true,
             ..Default::default()
         }
         .into()
+    }
+}
+
+/// Launches `logi-mx-ui` next to the daemon binary and waits for it.
+///
+/// Runs on a dedicated thread: the `ksni` service task must never block on
+/// child processes, otherwise every further tray menu activation freezes.
+/// Waiting on the child also prevents zombie accumulation.
+fn launch_configuration_ui() {
+    let ui_path = current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.join("logi-mx-ui")))
+        .unwrap_or_else(|| PathBuf::from("logi-mx-ui"));
+
+    let mut cmd = Command::new(&ui_path);
+    cmd.env_clear();
+    for var in [
+        "HOME",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_TYPE",
+        "XDG_CURRENT_DESKTOP",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "PATH"
+    ] {
+        if let Ok(val) = std::env::var(var) {
+            cmd.env(var, val);
+        }
+    }
+
+    match cmd.spawn() {
+        Ok(mut child) => {
+            info!("Launched configuration UI");
+            match child.wait() {
+                Ok(status) => info!("Configuration UI exited with {status}"),
+                Err(e) => error!("Failed to wait for configuration UI: {e}")
+            }
+        }
+        Err(e) => error!("Failed to launch UI at {ui_path:?}: {e}")
     }
 }
 
