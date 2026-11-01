@@ -374,8 +374,14 @@ sudo apt install cargo libhidapi-dev libudev-dev libgtk-4-dev libadwaita-1-dev l
 
 ### Hyprland Configuration
 
-Hyprland 0.55+ uses Lua configuration (`~/.config/hypr/hyprland.lua`).
-Add these window rules for optimal UI experience:
+The easiest way: open the settings window → **Desktop Integration → Configure**.
+The app detects Hyprland, appends the window rules and the overlay keybind to
+`~/.config/hypr/hyprland.lua` (or legacy `hyprland.conf`) if missing, and
+reloads Hyprland. Running it again is safe: it reports "Already configured".
+
+Manual setup — Hyprland 0.55+ uses Lua configuration
+(`~/.config/hypr/hyprland.lua`). Add these window rules for optimal UI
+experience:
 
 ```lua
 -- Logitech MX Master 3S Configuration Window
