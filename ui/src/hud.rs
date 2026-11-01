@@ -448,7 +448,7 @@ pub fn toggle_hud(app: &Application) {
     let existing = ACTIVE_WINDOW.with(|cell| cell.borrow().clone());
     let open_new = !existing.is_some_and(|window| {
         window.close();
-        false
+        true
     });
 
     if open_new {
