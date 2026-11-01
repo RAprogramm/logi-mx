@@ -469,13 +469,13 @@ fn build_hud(app: &Application) {
     let leaders = create_leaders_area();
     LEADERS_AREA.with(|cell| *cell.borrow_mut() = Some(leaders.clone()));
     let snapshot = collect_device_snapshot();
-    let (panel, live_label) = create_panel(&state, &drawing, &window, snapshot.as_ref());
+    let panel = create_panel(&state, &drawing, &window, snapshot.as_ref());
 
-    attach_hit_testing(&state, &drawing, &live_label);
+    attach_hit_testing(&state, &drawing);
     attach_draw_callback(&state, &drawing, &image, &masks);
     attach_leaders_draw(&state, &leaders, &drawing, &window);
     attach_escape_to_close(&window);
-    start_live(&state, &drawing, &live_label);
+    start_live(&state, &drawing);
 
     let root = GtkBox::new(Orientation::Horizontal, 0);
     root.set_margin_top(HUD_MARGIN);
@@ -564,14 +564,13 @@ fn attach_escape_to_close(window: &ApplicationWindow) {
     window.add_controller(keys);
 }
 
-/// Builds the settings panel: live status plus the Device, Pointer, Wheel
-/// and Buttons pages.
+/// Builds the settings panel with the Device, Pointer, Wheel and Buttons pages.
 fn create_panel(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     window: &ApplicationWindow,
     snapshot: Option<&DeviceSnapshot>,
-) -> (ToastOverlay, Label) {
+) -> ToastOverlay {
     let toast = ToastOverlay::new();
     toast.set_size_request(PANEL_WIDTH, -1);
     toast.add_css_class("card");
@@ -585,12 +584,6 @@ fn create_panel(
     let title = Label::new(Some("MX Master 3S"));
     title.add_css_class("title-2");
     root.append(&title);
-
-    let live_label = Label::new(Some("Live telemetry: connecting..."));
-    live_label.add_css_class("dim-label");
-    live_label.set_wrap(true);
-    live_label.set_xalign(0.0);
-    root.append(&live_label);
 
     let stack = ViewStack::new();
     let pages = [
@@ -643,7 +636,7 @@ fn create_panel(
     root.append(&close_btn);
 
     toast.set_child(Some(&root));
-    (toast, live_label)
+    toast
 }
 
 /// Native remap targets offered on the assignments page: label and CID.
@@ -1224,7 +1217,7 @@ const fn scale_threshold(value: f64) -> u8 {
 /// A background thread owns the socket and survives daemon restarts; each
 /// frame wakes the main context through an invoke, where the window hook
 /// applies it. Closing the HUD clears the hook and stops the thread.
-fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label: &Label) {
+fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea) {
     let stop = Arc::new(AtomicBool::new(false));
     let slot = Arc::new(Mutex::new(None::<LiveFrame>));
     let burst = Arc::new(AtomicU32::new(0));
@@ -1235,7 +1228,6 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label:
     let connected_hook = Arc::clone(&connected);
     let state_hook = Rc::clone(state);
     let drawing_hook = drawing.clone();
-    let label_hook = label.clone();
     let hook: Rc<dyn Fn()> = Rc::new(move || {
         let frame = slot_hook.lock().ok().and_then(|mut guard| guard.take());
         let flashed = burst_hook.swap(0, Ordering::Relaxed);
@@ -1247,8 +1239,6 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label:
             }
             st.live.flash |= flashed;
         }
-        let summary = live_summary(&state_hook.borrow().live);
-        label_hook.set_text(&summary);
         drawing_hook.queue_draw();
     });
     LIVE_HOOK.with(|cell| *cell.borrow_mut() = Some(Rc::clone(&hook)));
@@ -1355,41 +1345,18 @@ fn pump_live_socket(
     wake();
 }
 
-/// Formats the live status line shown in the panel.
-fn live_summary(live: &LiveVisual) -> String {
-    if !live.connected {
-        return "Live telemetry: waiting for the daemon".to_string();
-    }
-    if live.buttons | live.flash == 0 && live.wheel_speed < 0.5 && live.extra_keys.is_empty() {
-        return "Live: connected · waiting for input".to_string();
-    }
-    let mut text = format!("Live: wheel {:.0}/s", live.wheel_speed);
-    if !live.extra_keys.is_empty() {
-        let codes: Vec<String> = live.extra_keys.iter().map(ToString::to_string).collect();
-        text.push_str(" · raw keys ");
-        text.push_str(&codes.join(","));
-    }
-    text
-}
-
 /// Wires diagram interaction: a release selects the button under the cursor
 /// and motion hovers it, both mirrored onto the button list rows.
-fn attach_hit_testing(
-    state: &Rc<RefCell<HudState>>,
-    drawing: &gtk4::DrawingArea,
-    status_label: &Label,
-) {
+fn attach_hit_testing(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea) {
     let gesture = GestureClick::new();
     let state_gesture = Rc::clone(state);
     let drawing_gesture = drawing.clone();
-    let status_gesture = status_label.clone();
     gesture.connect_released(move |_gesture, _n_press, px, py| {
         let (x, y) = to_layout(px, py, drawing_gesture.width(), drawing_gesture.height());
         let mut st = state_gesture.borrow_mut();
         for button in MouseButton::HIT_ORDER {
             if button.contains(x, y) {
                 st.selected = Some(button);
-                status_gesture.set_text(&format!("Selected: {}", button.label()));
                 drawing_gesture.queue_draw();
                 sync_row_focus(&st);
                 return;
@@ -1886,16 +1853,6 @@ mod tests {
             live.decay();
         }
         assert_eq!(live.wheel_speed, 0.0);
-    }
-
-    #[test]
-    fn live_summary_mentions_raw_keys() {
-        let live = LiveVisual {
-            connected: true,
-            extra_keys: vec![279],
-            ..LiveVisual::default()
-        };
-        assert!(live_summary(&live).contains("raw keys 279"));
     }
 
     #[test]
