@@ -28,8 +28,8 @@ use std::{
 };
 
 use gtk4::{
-    glib, Box as GtkBox, Button, CheckButton, DropDown, Entry, EventControllerKey, GestureClick,
-    Label, Orientation, Scale, ScrolledWindow, Switch,
+    glib, Box as GtkBox, Button, CheckButton, DropDown, Entry, EventControllerKey,
+    EventControllerMotion, GestureClick, Label, Orientation, Scale, ScrolledWindow, Switch,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
@@ -416,10 +416,14 @@ fn blend(previous: f64, sample: f64) -> f64 {
 #[derive(Default)]
 struct HudState {
     selected: Option<MouseButton>,
+    hover: Option<MouseButton>,
     assignments: HashMap<MouseButton, String>,
     live: LiveVisual,
     bg: BgMode,
 }
+
+/// Shared handle to the button rows of the open window, keyed by button.
+type RowMap = Rc<RefCell<HashMap<MouseButton, ActionRow>>>;
 
 thread_local! {
     /// The HUD window while it is open, so a second activation closes it
@@ -432,6 +436,28 @@ thread_local! {
 
     /// Stop flag of the live subscription thread of the open window.
     static LIVE_STOP: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+
+    /// Button rows of the open window, so diagram hover and clicks can
+    /// highlight the matching list row; cleared when the HUD closes.
+    static ROWS_REGISTRY: RefCell<Option<RowMap>> = const { RefCell::new(None) };
+}
+
+/// Mirrors the focused button onto the list rows: hover wins over the
+/// persistent selection, so both halves of the HUD always agree.
+fn sync_row_focus(state: &HudState) {
+    let focus = state.hover.or(state.selected);
+    ROWS_REGISTRY.with(|registry| {
+        let Some(rows) = registry.borrow().as_ref().map(Rc::clone) else {
+            return;
+        };
+        for (button, row) in rows.borrow().iter() {
+            if Some(*button) == focus {
+                row.add_css_class("hud-focus");
+            } else {
+                row.remove_css_class("hud-focus");
+            }
+        }
+    });
 }
 
 /// Opens the HUD, or closes it when it is already open.
@@ -488,6 +514,7 @@ fn build_hud(app: &Application) {
             }
         });
         LIVE_HOOK.with(|hook| *hook.borrow_mut() = None);
+        ROWS_REGISTRY.with(|rows| *rows.borrow_mut() = None);
         ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = None);
         glib::Propagation::Proceed
     });
@@ -635,18 +662,19 @@ const REMAP_TARGETS: [(&str, u16); 8] = [
 ];
 
 /// Builds the button list: activating a row selects that button and highlights
-/// it on the diagram; each row's subtitle shows its current assignment.
+/// it on the diagram; hovering a row previews the same highlight. Each row's
+/// subtitle shows its current assignment.
 fn buttons_list_section(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
 ) -> (
     PreferencesGroup,
-    Rc<RefCell<HashMap<MouseButton, ActionRow>>>,
+    RowMap,
 ) {
     let group = PreferencesGroup::new();
     group.set_title("Buttons");
-    group.set_description(Some("Selecting a button highlights it on the diagram"));
-    let rows: Rc<RefCell<HashMap<MouseButton, ActionRow>>> = Rc::new(RefCell::new(HashMap::new()));
+    group.set_description(Some("Hover or select a button to highlight it on the diagram"));
+    let rows: RowMap = Rc::new(RefCell::new(HashMap::new()));
     for button in MouseButton::ALL {
         let row = ActionRow::builder()
             .title(button.label())
@@ -655,12 +683,39 @@ fn buttons_list_section(
         let state_row = Rc::clone(state);
         let drawing_row = drawing.clone();
         row.connect_activate(move |_| {
-            state_row.borrow_mut().selected = Some(button);
+            let mut st = state_row.borrow_mut();
+            st.selected = Some(button);
             drawing_row.queue_draw();
+            sync_row_focus(&st);
         });
+
+        let state_enter = Rc::clone(state);
+        let drawing_enter = drawing.clone();
+        let motion = EventControllerMotion::new();
+        motion.connect_motion(move |_, _, _| {
+            let mut st = state_enter.borrow_mut();
+            if st.hover != Some(button) {
+                st.hover = Some(button);
+                drawing_enter.queue_draw();
+                sync_row_focus(&st);
+            }
+        });
+        let state_leave = Rc::clone(state);
+        let drawing_leave = drawing.clone();
+        motion.connect_leave(move |_| {
+            let mut st = state_leave.borrow_mut();
+            if st.hover == Some(button) {
+                st.hover = None;
+                drawing_leave.queue_draw();
+                sync_row_focus(&st);
+            }
+        });
+        row.add_controller(motion);
+
         rows.borrow_mut().insert(button, row.clone());
         group.add(&row);
     }
+    ROWS_REGISTRY.with(|cell| *cell.borrow_mut() = Some(Rc::clone(&rows)));
     (group, rows)
 }
 
@@ -668,7 +723,7 @@ fn buttons_list_section(
 /// the diagram leader label; `None` restores the native behaviour.
 fn set_assignment(
     state: &Rc<RefCell<HudState>>,
-    rows: &Rc<RefCell<HashMap<MouseButton, ActionRow>>>,
+    rows: &RowMap,
     drawing: &gtk4::DrawingArea,
     button: MouseButton,
     action: Option<String>,
@@ -698,7 +753,7 @@ fn remap_section(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     toast: &ToastOverlay,
-    rows: &Rc<RefCell<HashMap<MouseButton, ActionRow>>>,
+    rows: &RowMap,
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Act as");
@@ -764,7 +819,7 @@ fn custom_section(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     toast: &ToastOverlay,
-    rows: &Rc<RefCell<HashMap<MouseButton, ActionRow>>>,
+    rows: &RowMap,
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Custom");
@@ -1316,6 +1371,8 @@ fn live_summary(live: &LiveVisual) -> String {
     text
 }
 
+/// Wires diagram interaction: a release selects the button under the cursor
+/// and motion hovers it, both mirrored onto the button list rows.
 fn attach_hit_testing(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
@@ -1333,11 +1390,40 @@ fn attach_hit_testing(
                 st.selected = Some(button);
                 status_gesture.set_text(&format!("Selected: {}", button.label()));
                 drawing_gesture.queue_draw();
+                sync_row_focus(&st);
                 return;
             }
         }
     });
     drawing.add_controller(gesture);
+
+    let motion = EventControllerMotion::new();
+    let state_motion = Rc::clone(state);
+    let drawing_motion = drawing.clone();
+    motion.connect_motion(move |_, px, py| {
+        let (x, y) = to_layout(px, py, drawing_motion.width(), drawing_motion.height());
+        let hit = MouseButton::HIT_ORDER
+            .iter()
+            .copied()
+            .find(|button| button.contains(x, y));
+        let mut st = state_motion.borrow_mut();
+        if st.hover != hit {
+            st.hover = hit;
+            drawing_motion.queue_draw();
+            sync_row_focus(&st);
+        }
+    });
+    let state_leave = Rc::clone(state);
+    let drawing_leave = drawing.clone();
+    motion.connect_leave(move |_| {
+        let mut st = state_leave.borrow_mut();
+        if st.hover.is_some() {
+            st.hover = None;
+            drawing_leave.queue_draw();
+            sync_row_focus(&st);
+        }
+    });
+    drawing.add_controller(motion);
 }
 
 fn attach_draw_callback(
@@ -1476,13 +1562,14 @@ fn to_layout(px: f64, py: f64, width: i32, height: i32) -> (f64, f64) {
 fn draw_selection(st: &HudState, cr: &gtk4::cairo::Context) {
     for button in MouseButton::ALL {
         let selected = st.selected == Some(button);
+        let hovered = st.hover == Some(button);
         let assigned = st.assignments.contains_key(&button);
-        if !selected && !assigned {
+        if !selected && !hovered && !assigned {
             continue;
         }
 
         let (x, y, w, h) = button.region();
-        if selected {
+        if selected || hovered {
             cr.set_source_rgba(0.93, 0.66, 0.46, 0.55);
         } else {
             cr.set_source_rgba(0.42, 0.60, 0.80, 0.50);
@@ -1619,7 +1706,7 @@ fn draw_leaders(
         let rows = resolve_rows(&side, LABEL_MIN_GAP);
 
         for (button, ax, ay, label_y) in rows {
-            let selected = st.selected == Some(button);
+            let selected = st.selected == Some(button) || st.hover == Some(button);
             let title = button.label().to_uppercase();
             let assignment = st.assignments.get(&button);
             let block_w = measure_text(cr, &title, LABEL_FONT_PX).max(

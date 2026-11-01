@@ -88,6 +88,9 @@ fn load_css() {
         window.hud-tint {
             background: rgba(0, 0, 0, 0.02);
         }
+        row.hud-focus {
+            background: alpha(#edaa75, 0.22);
+        }
         "
     );
     if let Some(display) = gtk4::gdk::Display::default() {
