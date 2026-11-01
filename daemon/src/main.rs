@@ -152,8 +152,17 @@ fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
     Ok(lockfile)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|e| AppError::internal("Failed to build tokio runtime").with_source(e))?;
+
+    runtime.block_on(run())
+}
+
+async fn run() -> Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
@@ -196,7 +205,9 @@ async fn main() -> Result<()> {
     if has_desktop_session() {
         match spawn_tray(Arc::clone(&status)).await {
             Ok(handle) => {
-                *tray_handle.lock().unwrap() = Some(handle);
+                *tray_handle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
                 info!("System tray initialized");
             }
             Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
@@ -207,11 +218,16 @@ async fn main() -> Result<()> {
 
     let (tx, mut rx) = mpsc::channel::<UdevEvent>(32);
 
-    std::thread::spawn(move || {
-        if let Err(e) = monitor_udev_events_sync(&tx) {
-            error!("Udev monitor error: {e}");
-        }
-    });
+    if let Err(e) = std::thread::Builder::new()
+        .name("logi-mx-udev-monitor".to_string())
+        .spawn(move || {
+            if let Err(e) = monitor_udev_events_sync(&tx) {
+                error!("Udev monitor error: {e}");
+            }
+        })
+    {
+        error!("Failed to spawn udev monitor thread: {e}. Hotplug disabled.");
+    }
 
     let mut sigterm = signal(SignalKind::terminate())
         .map_err(|e| AppError::internal("Failed to setup SIGTERM handler").with_source(e))?;

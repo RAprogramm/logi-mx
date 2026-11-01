@@ -62,6 +62,17 @@ impl LogiTrayIcon {
     }
 }
 
+/// Spawns a detached tray task, logging instead of panicking when the OS
+/// refuses the thread.
+fn spawn_tray_task<F>(name: &str, f: F)
+where
+    F: FnOnce() + Send + 'static
+{
+    if let Err(e) = thread::Builder::new().name(name.to_string()).spawn(f) {
+        error!("Failed to spawn {name} thread: {e}");
+    }
+}
+
 impl Default for LogiTrayIcon {
     fn default() -> Self {
         Self::new()
@@ -138,7 +149,7 @@ impl Tray for LogiTrayIcon {
                 label: "Exit".into(),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|_this: &mut Self| {
-                    thread::spawn(Self::shutdown_daemon);
+                    spawn_tray_task("tray-shutdown", Self::shutdown_daemon);
                 }),
                 enabled: true,
                 ..Default::default()
@@ -192,7 +203,9 @@ impl LogiTrayIcon {
                 icon_name: "view-refresh".into(),
                 activate: Box::new(|this: &mut Self| {
                     let status = Arc::clone(&this.status);
-                    thread::spawn(move || crate::status::refresh_from_device(&status));
+                    spawn_tray_task("tray-refresh", move || {
+                        crate::status::refresh_from_device(&status);
+                    });
                 }),
                 enabled: true,
                 ..Default::default()
@@ -208,7 +221,7 @@ impl LogiTrayIcon {
             label: "Open Configuration".into(),
             icon_name: "preferences-system".into(),
             activate: Box::new(|_this: &mut Self| {
-                thread::spawn(launch_configuration_ui);
+                spawn_tray_task("tray-open-ui", launch_configuration_ui);
             }),
             enabled: true,
             ..Default::default()

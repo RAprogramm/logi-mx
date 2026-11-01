@@ -12,7 +12,7 @@ Restart=on-failure
 RestartSec=5
 MemoryMax=256M
 MemoryHigh=192M
-TasksMax=64
+TasksMax=256
 
 [Install]
 WantedBy=graphical-session.target
