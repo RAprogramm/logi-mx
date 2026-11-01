@@ -15,7 +15,9 @@
 use std::{
     cell::{OnceCell, RefCell},
     collections::HashMap,
+    fs,
     io::BufReader,
+    path::PathBuf,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -96,6 +98,104 @@ const LIVE_DECAY_INTERVAL: Duration = Duration::from_millis(250);
 const LIVE_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// Read timeout of the live socket, bounding how long a stop request waits.
 const LIVE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
+/// Horizontal padding inside a callout chip, in pixels.
+const CHIP_PAD_X: f64 = 9.0;
+/// Vertical padding inside a callout chip, in pixels.
+const CHIP_PAD_Y: f64 = 5.0;
+/// Corner radius of a callout chip, in pixels.
+const CHIP_RADIUS: f64 = 7.0;
+/// Keep callouts at least this far inside the canvas edges, in pixels.
+const EDGE_MARGIN: f64 = 4.0;
+
+/// Backdrop treatment behind the HUD content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum BgMode {
+    /// Fully transparent backdrop.
+    None,
+    /// Semi-transparent dark fill.
+    #[default]
+    Dim,
+    /// Compositor blur behind a barely tinted fill.
+    Blur,
+    /// Compositor blur behind a dark fill.
+    BlurDim,
+}
+
+impl BgMode {
+    /// All modes in dropdown order.
+    const ALL: [Self; 4] = [Self::None, Self::Dim, Self::Blur, Self::BlurDim];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Dim => "Dim",
+            Self::Blur => "Blur",
+            Self::BlurDim => "Blur + Dim",
+        }
+    }
+
+    /// Alpha of the backdrop fill; the fill is also the medium the compositor
+    /// blur shows through, so blur modes always tint at least faintly.
+    const fn dim_alpha(self) -> f64 {
+        match self {
+            Self::None => 0.0,
+            Self::Blur => 0.02,
+            Self::Dim | Self::BlurDim => 0.45,
+        }
+    }
+
+    const fn wants_blur(self) -> bool {
+        matches!(self, Self::Blur | Self::BlurDim)
+    }
+
+    const fn token(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Dim => "dim",
+            Self::Blur => "blur",
+            Self::BlurDim => "blur-dim",
+        }
+    }
+
+    fn from_token(token: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.token() == token)
+            .unwrap_or_default()
+    }
+}
+
+/// Path of the persisted backdrop mode, when a config home is available.
+fn background_path() -> Option<PathBuf> {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .ok()?;
+    Some(base.join("logi-mx").join("hud-background"))
+}
+
+/// Reads the persisted backdrop mode, defaulting to [`BgMode::Dim`].
+fn load_background() -> BgMode {
+    background_path()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .map_or_else(BgMode::default, |token| BgMode::from_token(token.trim()))
+}
+
+/// Persists the backdrop mode; failures are logged, never fatal.
+fn save_background(mode: BgMode) {
+    let Some(path) = background_path() else {
+        return;
+    };
+    if let Some(dir) = path.parent()
+        && let Err(e) = fs::create_dir_all(dir)
+    {
+        tracing::warn!("Failed to create the config directory: {e}");
+        return;
+    }
+    if let Err(e) = fs::write(&path, mode.token()) {
+        tracing::warn!("Failed to save the background mode: {e}");
+    }
+}
 
 /// Reprogrammable buttons of the device diagram.
 ///
@@ -298,6 +398,7 @@ struct HudState {
     selected: Option<MouseButton>,
     assignments: HashMap<MouseButton, String>,
     live: LiveVisual,
+    bg: BgMode,
 }
 
 thread_local! {
@@ -333,7 +434,10 @@ pub fn toggle_hud(app: &Application) {
 /// Builds and presents the full-screen HUD.
 fn build_hud(app: &Application) {
     let window = create_window(app);
-    let state = Rc::new(RefCell::new(HudState::default()));
+    let state = Rc::new(RefCell::new(HudState {
+        bg: load_background(),
+        ..HudState::default()
+    }));
     let image = Rc::new(OnceCell::new());
     let masks = Rc::new(build_button_masks());
     let drawing = create_drawing_area();
@@ -375,6 +479,7 @@ fn create_window(app: &Application) -> ApplicationWindow {
         .build();
 
     window.init_layer_shell();
+    window.set_namespace(Some("logi-mx-hud"));
     window.add_css_class("transparent-overlay");
     window.remove_css_class("background");
     window.set_layer(Layer::Overlay);
@@ -463,7 +568,7 @@ fn create_panel(
             "preferences-desktop-input-symbolic",
         ),
         (
-            device_page(snapshot, &toast),
+            device_page(state, drawing, snapshot, &toast),
             "device",
             "Device",
             "battery-symbolic",
@@ -853,8 +958,65 @@ fn pointer_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scro
     scroll
 }
 
-/// Creates the device page: battery, desktop integration and version.
-fn device_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> ScrolledWindow {
+/// Builds the backdrop section: pick the treatment behind the diagram.
+/// Changing it persists the choice and syncs the Hyprland blur rule.
+fn background_section(
+    state: &Rc<RefCell<HudState>>,
+    drawing: &gtk4::DrawingArea,
+    toast: &ToastOverlay,
+) -> PreferencesGroup {
+    let group = PreferencesGroup::new();
+    group.set_title("Background");
+    group.set_description(Some("Backdrop behind the diagram"));
+    let row = ActionRow::new();
+    row.set_title("Backdrop");
+    let drop = DropDown::from_strings(
+        &BgMode::ALL
+            .iter()
+            .map(|mode| mode.label())
+            .collect::<Vec<&str>>(),
+    );
+    drop.set_selected(
+        u32::try_from(
+            BgMode::ALL
+                .iter()
+                .position(|mode| *mode == state.borrow().bg)
+                .unwrap_or_default(),
+        )
+        .unwrap_or_default(),
+    );
+    drop.set_valign(gtk4::Align::Center);
+    let state_bg = Rc::clone(state);
+    let drawing_bg = drawing.clone();
+    let toast_bg = toast.clone();
+    drop.connect_selected_notify(move |picker| {
+        let Some(&mode) = BgMode::ALL.get(usize::try_from(picker.selected()).unwrap_or(usize::MAX))
+        else {
+            return;
+        };
+        if state_bg.borrow().bg == mode {
+            return;
+        }
+        state_bg.borrow_mut().bg = mode;
+        save_background(mode);
+        drawing_bg.queue_draw();
+        if let Err(e) = crate::hyprland::set_hud_blur(mode.wants_blur()) {
+            toast_bg.add_toast(Toast::new(&format!("Blur unavailable: {e}")));
+        }
+    });
+    row.add_suffix(&drop);
+    group.add(&row);
+    group
+}
+
+/// Creates the device page: battery, backdrop, desktop integration and
+/// version.
+fn device_page(
+    state: &Rc<RefCell<HudState>>,
+    drawing: &gtk4::DrawingArea,
+    snapshot: Option<&DeviceSnapshot>,
+    toast: &ToastOverlay,
+) -> ScrolledWindow {
     let scroll = page_scroll();
     let box_ = GtkBox::new(Orientation::Vertical, 0);
 
@@ -924,6 +1086,7 @@ fn device_page(snapshot: Option<&DeviceSnapshot>, toast: &ToastOverlay) -> Scrol
     version_group.add(&version_row);
 
     box_.append(&info_group);
+    box_.append(&background_section(state, drawing, toast));
     box_.append(&integration_group);
     box_.append(&version_group);
     scroll.set_child(Some(&box_));
@@ -1007,9 +1170,15 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea, label:
     let stop_thread = Arc::clone(&stop);
     let slot_thread = Arc::clone(&slot);
     let connected_thread = Arc::clone(&connected);
+    let pending = Arc::new(AtomicBool::new(false));
     let wake = move || {
         let context = context.clone();
+        let pending = Arc::clone(&pending);
+        if pending.swap(true, Ordering::Relaxed) {
+            return;
+        }
         context.invoke(move || {
+            pending.store(false, Ordering::Relaxed);
             LIVE_HOOK.with(|cell| {
                 if let Some(hook) = cell.borrow().as_ref() {
                     hook();
@@ -1136,6 +1305,10 @@ fn attach_draw_callback(
     let masks_draw = Rc::clone(masks);
     drawing.set_draw_func(move |_, cr, width, height| {
         let st = state_draw.borrow();
+        if st.bg.dim_alpha() > 0.0 {
+            cr.set_source_rgba(0.0, 0.0, 0.0, st.bg.dim_alpha());
+            let _ = cr.paint();
+        }
         let (scale, offset_x, offset_y) = fit_transform(f64::from(width), f64::from(height));
 
         let _ = cr.save();
@@ -1162,7 +1335,15 @@ fn attach_draw_callback(
         }
         let _ = cr.restore();
 
-        draw_leaders(&st, cr, scale, offset_x, offset_y);
+        draw_leaders(
+            &st,
+            cr,
+            scale,
+            offset_x,
+            offset_y,
+            f64::from(width),
+            f64::from(height),
+        );
         draw_wheel_indicator(&st, cr, scale, offset_x, offset_y);
     });
 }
@@ -1357,19 +1538,22 @@ fn draw_wheel_indicator(
     }
 }
 
-/// Draws one screen-space callout per button from its anchor to a label
-/// gutter, labelled with what the button does and its current assignment.
+/// Draws one screen-space callout per button from its anchor to a chip
+/// labelled with what the button does and its current assignment.
 ///
-/// Anchors are projected through the diagram transform into pixels, so text
-/// keeps a constant size regardless of diagram scale. Labels on each side
-/// are sorted by anchor height and pushed apart so they never overlap; the
-/// leader leaves the anchor horizontally, then runs straight to its label.
+/// Chips are styled like the device body — dark fill with a rim light — so
+/// they stay readable over any desktop. Anchors are projected through the
+/// diagram transform into pixels, so text keeps a constant size; chips on
+/// each side are sorted by anchor height, pushed apart and clamped inside
+/// the canvas so nothing is ever cut off.
 fn draw_leaders(
     st: &HudState,
     cr: &gtk4::cairo::Context,
     scale: f64,
     offset_x: f64,
     offset_y: f64,
+    width: f64,
+    height: f64,
 ) {
     let anchors = button_anchors();
     let body_left = BODY_MIN_X.mul_add(scale, offset_x);
@@ -1394,6 +1578,35 @@ fn draw_leaders(
 
         for (button, ax, ay, label_y) in rows {
             let selected = st.selected == Some(button);
+            let title = button.label().to_uppercase();
+            let assignment = st.assignments.get(&button);
+            let block_w = measure_text(cr, &title, LABEL_FONT_PX).max(
+                assignment.map_or(0.0, |action| measure_text(cr, action, ASSIGNMENT_FONT_PX)),
+            );
+            let block_h = if assignment.is_some() { 30.0 } else { 16.0 };
+            let chip_w = CHIP_PAD_X.mul_add(2.0, block_w);
+            let chip_h = CHIP_PAD_Y.mul_add(2.0, block_h);
+
+            let chip_x = if to_left {
+                body_left - LABEL_LINE_GAP - chip_w
+            } else {
+                body_right + LABEL_LINE_GAP
+            }
+            .clamp(EDGE_MARGIN, (width - chip_w - EDGE_MARGIN).max(EDGE_MARGIN));
+            let chip_y = (label_y - chip_h / 2.0)
+                .clamp(EDGE_MARGIN, (height - chip_h - EDGE_MARGIN).max(EDGE_MARGIN));
+            let stub_x = if to_left {
+                chip_x + chip_w
+            } else {
+                chip_x
+            };
+            let target_y = label_y.clamp(chip_y + 6.0, chip_y + chip_h - 6.0);
+            let knee_x = if to_left {
+                (ax - LABEL_KNEE_PX).max(stub_x)
+            } else {
+                (ax + LABEL_KNEE_PX).min(stub_x)
+            };
+
             if selected {
                 cr.set_source_rgba(0.93, 0.66, 0.46, 0.95);
                 cr.set_line_width(1.2);
@@ -1401,47 +1614,34 @@ fn draw_leaders(
                 cr.set_source_rgba(0.62, 0.65, 0.70, 0.55);
                 cr.set_line_width(0.8);
             }
-
-            let title = button.label().to_uppercase();
-            let assignment = st.assignments.get(&button);
-            let block_w = measure_text(cr, &title, LABEL_FONT_PX).max(
-                assignment.map_or(0.0, |action| measure_text(cr, action, ASSIGNMENT_FONT_PX)),
-            );
-            let (text_x, stub_x) = if to_left {
-                (body_left - LABEL_LINE_GAP - block_w, body_left)
-            } else {
-                (body_right + LABEL_LINE_GAP + block_w, body_right)
-            };
-            let knee_x = if to_left {
-                (ax - LABEL_KNEE_PX).max(stub_x)
-            } else {
-                (ax + LABEL_KNEE_PX).min(stub_x)
-            };
-
             cr.move_to(ax, ay);
             cr.line_to(knee_x, ay);
-            cr.line_to(stub_x, label_y);
+            cr.line_to(stub_x, target_y);
             let _ = cr.stroke();
 
             cr.new_path();
             cr.arc(ax, ay, 2.2, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
 
-            let title_y = if assignment.is_some() {
-                label_y - 7.0
+            rounded_rect(cr, chip_x, chip_y, chip_w, chip_h, CHIP_RADIUS);
+            cr.set_source_rgba(0.118, 0.133, 0.145, 0.92);
+            let _ = cr.fill_preserve();
+            if selected {
+                cr.set_source_rgba(0.93, 0.66, 0.46, 0.95);
+                cr.set_line_width(1.2);
             } else {
-                label_y
-            };
-            draw_label(cr, &title, LABEL_FONT_PX, text_x, title_y, to_left);
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+                cr.set_line_width(1.0);
+            }
+            let _ = cr.stroke();
+
+            let text_x = chip_x + CHIP_PAD_X;
+            let center = chip_y + chip_h / 2.0;
             if let Some(action) = assignment {
-                draw_label(
-                    cr,
-                    action,
-                    ASSIGNMENT_FONT_PX,
-                    text_x,
-                    label_y + 8.0,
-                    to_left,
-                );
+                draw_label(cr, &title, LABEL_FONT_PX, text_x, center - 7.0);
+                draw_label(cr, action, ASSIGNMENT_FONT_PX, text_x, center + 8.0);
+            } else {
+                draw_label(cr, &title, LABEL_FONT_PX, text_x, center);
             }
         }
     }
@@ -1471,27 +1671,21 @@ fn resolve_rows(
     rows
 }
 
-/// Renders one leader label centred vertically on `center_y`: left-aligned
-/// at `anchor_x` for the left side, right-aligned for the right side.
+/// Renders one label line, left-aligned at `left_x` and centred vertically
+/// on `center_y`.
 fn draw_label(
     cr: &gtk4::cairo::Context,
     text: &str,
     size: f64,
-    anchor_x: f64,
+    left_x: f64,
     center_y: f64,
-    to_left: bool,
 ) {
     select_label_font(cr, size);
     cr.set_source_rgba(0.88, 0.90, 0.94, 0.92);
 
     if let Ok(extents) = cr.text_extents(text) {
-        let x = if to_left {
-            anchor_x - extents.x_bearing()
-        } else {
-            anchor_x - extents.x_bearing() - extents.width()
-        };
         let baseline = center_y - extents.y_bearing() - extents.height() / 2.0;
-        cr.move_to(x, baseline);
+        cr.move_to(left_x - extents.x_bearing(), baseline);
         let _ = cr.show_text(text);
     }
 }
