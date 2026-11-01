@@ -158,13 +158,6 @@ impl Tray for LogiTrayIcon {
             );
         }
 
-        let version = env!("CARGO_PKG_VERSION");
-        let widest = menu.iter().fold(0usize, |acc, item| match item {
-            MenuItem::Standard(standard) => acc.max(standard.label.chars().count()),
-            _ => acc
-        });
-        let pad = widest.saturating_sub(version.chars().count()) / 2;
-
         menu.extend(vec![
             MenuItem::Separator,
             StandardItem {
@@ -178,7 +171,7 @@ impl Tray for LogiTrayIcon {
             }
             .into(),
             StandardItem {
-                label: format!("{}{}", " ".repeat(pad), version),
+                label: env!("CARGO_PKG_VERSION").to_string(),
                 activate: Box::new(|_| {}),
                 enabled: false,
                 ..Default::default()
@@ -460,8 +453,7 @@ mod tests {
 
         match menu.last() {
             Some(MenuItem::Standard(item)) => {
-                assert_eq!(item.label.trim(), env!("CARGO_PKG_VERSION"));
-                assert!(item.label.starts_with(' '));
+                assert_eq!(item.label, env!("CARGO_PKG_VERSION"));
                 assert_eq!(item.icon_name, "");
                 assert!(!item.enabled);
             }
