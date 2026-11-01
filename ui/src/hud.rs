@@ -26,8 +26,8 @@ use std::{
 };
 
 use gtk4::{
-    glib, Box as GtkBox, Button, EventControllerKey, GestureClick, Label, Orientation, Scale,
-    ScrolledWindow, Switch,
+    glib, Box as GtkBox, Button, DropDown, EventControllerKey, GestureClick, Label, Orientation,
+    Scale, ScrolledWindow, Switch,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
@@ -63,10 +63,23 @@ const HUD_MARGIN: i32 = 80;
 const HIT_PADDING: f64 = 2.5;
 /// Minimum hotspot width before padding is applied, in layout units.
 const THIN_HOTSPOT: f64 = 6.0;
-/// Minimum distance between a leader line end and its label block, in px.
-const LABEL_EDGE_PX: f64 = 8.0;
-/// Minimum vertical distance between neighbouring leader labels.
-const LABEL_MIN_GAP: f64 = 6.0;
+/// Minimum vertical distance between neighbouring leader labels, in pixels.
+const LABEL_MIN_GAP: f64 = 26.0;
+/// Visible body bounds inside the layout space, measured from the rendered
+/// silhouette. Callout labels hug the device edges instead of the window
+/// edges.
+const BODY_MIN_X: f64 = 5.5;
+const BODY_MAX_X: f64 = 74.7;
+/// Font size of a leader title, in pixels.
+const LABEL_FONT_PX: f64 = 13.0;
+/// Font size of the assignment line under a leader title, in pixels.
+const ASSIGNMENT_FONT_PX: f64 = 11.0;
+/// Extra height a leader row reserves for its assignment line, in pixels.
+const LABEL_ASSIGNMENT_PX: f64 = 15.0;
+/// Horizontal gap between a leader line and its label, in pixels.
+const LABEL_LINE_GAP: f64 = 7.0;
+/// Length of the horizontal run a leader takes before it turns to its label.
+const LABEL_KNEE_PX: f64 = 26.0;
 /// DPI slider bounds accepted by the device.
 const DPI_MIN: f64 = 400.0;
 const DPI_MAX: f64 = 8000.0;
@@ -175,7 +188,10 @@ impl MouseButton {
     /// Thumb buttons sit on the left flank of the device, so their callouts
     /// go left; everything else is called out to the right.
     const fn leader_to_left(self) -> bool {
-        matches!(self, Self::Back | Self::Forward | Self::Gesture)
+        matches!(
+            self,
+            Self::Left | Self::Back | Self::Forward | Self::Gesture
+        )
     }
 
     /// Id of the anchor circle for this button inside the layout SVG.
@@ -507,40 +523,57 @@ fn buttons_page(
         "Select a button on the diagram, then pick what it should act as",
     ));
 
-    for (label, target_cid) in REMAP_TARGETS {
-        let button = Button::with_label(label);
-        button.add_css_class("pill");
-        let state_clone = Rc::clone(state);
-        let drawing_clone = drawing.clone();
-        let toast_clone = toast.clone();
-        button.connect_clicked(move |_| {
-            let Some(selected) = state_clone.borrow().selected else {
-                toast_clone.add_toast(Toast::new("Select a button on the diagram first"));
-                return;
-            };
-            let control_id = selected.cid();
-            let response = ipc::try_request(&ipc::Request::SetButtonRemap {
-                control_id,
-                target_cid,
-            });
-            let remapped = matches!(response, Some(Response::Ok));
-            report(
-                response,
-                &toast_clone,
-                &format!("{} now acts as {label}", selected.label()),
-            );
-            if remapped {
-                let mut st = state_clone.borrow_mut();
-                if target_cid == 0 {
-                    st.assignments.remove(&selected);
-                } else {
-                    st.assignments.insert(selected, label.to_string());
-                }
-                drawing_clone.queue_draw();
-            }
+    let target = DropDown::from_strings(
+        &REMAP_TARGETS
+            .iter()
+            .map(|(label, _)| *label)
+            .collect::<Vec<&str>>(),
+    );
+    target.set_hexpand(true);
+
+    let apply = Button::with_label("Apply");
+    apply.add_css_class("suggested-action");
+    apply.add_css_class("pill");
+
+    let state_clone = Rc::clone(state);
+    let drawing_clone = drawing.clone();
+    let toast_clone = toast.clone();
+    let target_apply = target.clone();
+    apply.connect_clicked(move |_| {
+        let Some(selected) = state_clone.borrow().selected else {
+            toast_clone.add_toast(Toast::new("Select a button on the diagram first"));
+            return;
+        };
+        let index = (target_apply.selected() as usize).min(REMAP_TARGETS.len() - 1);
+        let (label, target_cid) = REMAP_TARGETS[index];
+        let control_id = selected.cid();
+        let response = ipc::try_request(&ipc::Request::SetButtonRemap {
+            control_id,
+            target_cid,
         });
-        group.add(&button);
-    }
+        let remapped = matches!(response, Some(Response::Ok));
+        report(
+            response,
+            &toast_clone,
+            &format!("{} now acts as {label}", selected.label()),
+        );
+        if remapped {
+            let mut st = state_clone.borrow_mut();
+            if target_cid == 0 {
+                st.assignments.remove(&selected);
+            } else {
+                st.assignments.insert(selected, label.to_string());
+            }
+            drawing_clone.queue_draw();
+        }
+    });
+
+    let picker = GtkBox::new(Orientation::Horizontal, 12);
+    picker.append(&target);
+    picker.append(&apply);
+    let picker_row = ActionRow::new();
+    picker_row.set_child(Some(&picker));
+    group.add(&picker_row);
 
     scroll.set_child(Some(&group));
     scroll
@@ -1000,14 +1033,14 @@ fn attach_draw_callback(
                 (sx, sy)
             });
 
-        draw_leaders(&st, cr, width, height);
         draw_selection(&st, cr);
         if let Some((sx, sy)) = surface_scale {
             draw_pressed_shapes(&st, cr, sx, sy, &masks_draw);
         }
         let _ = cr.restore();
 
-        draw_wheel_indicator(&st, cr, width);
+        draw_leaders(&st, cr, scale, offset_x, offset_y);
+        draw_wheel_indicator(&st, cr, scale, offset_x, offset_y);
     });
 }
 
@@ -1080,6 +1113,7 @@ fn build_button_masks() -> HashMap<MouseButton, gtk4::cairo::ImageSurface> {
 }
 
 /// Computes uniform scale and centering offsets for the layout space.
+/// The mouse is fitted and centered exactly as in the original design.
 fn fit_transform(width: f64, height: f64) -> (f64, f64, f64) {
     let scale = (width / LAYOUT_W).min(height / LAYOUT_H);
     let content_w = LAYOUT_W * scale;
@@ -1151,7 +1185,13 @@ fn draw_pressed_shapes(
     clippy::suboptimal_flops,
     reason = "plain arithmetic keeps gauge geometry readable"
 )]
-fn draw_wheel_indicator(st: &HudState, cr: &gtk4::cairo::Context, _width: i32) {
+fn draw_wheel_indicator(
+    st: &HudState,
+    cr: &gtk4::cairo::Context,
+    scale: f64,
+    offset_x: f64,
+    offset_y: f64,
+) {
     let intensity = (st.live.wheel_speed / WHEEL_FULL_SCALE).min(1.0);
     if intensity <= 0.01 {
         return;
@@ -1160,6 +1200,7 @@ fn draw_wheel_indicator(st: &HudState, cr: &gtk4::cairo::Context, _width: i32) {
     let Some(&(ax, ay)) = button_anchors().get(&MouseButton::Wheel) else {
         return;
     };
+    let (ax, ay) = (offset_x + ax * scale, offset_y + ay * scale);
     let dir = st.live.wheel_dir;
     let vertical = dir != 0;
     let (ux, uy) = if vertical {
@@ -1169,16 +1210,16 @@ fn draw_wheel_indicator(st: &HudState, cr: &gtk4::cairo::Context, _width: i32) {
     };
 
     cr.set_source_rgba(0.93, 0.66, 0.46, 0.4 + 0.6 * intensity);
-    cr.set_line_width(0.6);
+    cr.set_line_width(1.2);
     for step in 1..=3 {
-        let dist = 3.0 + f64::from(step) * 2.2;
-        let cx = ax + ux * dist + if vertical { 6.5 } else { 0.0 };
-        let cy = ay + uy * dist + if vertical { 0.0 } else { -5.0 };
-        let half = 1.6;
+        let dist = (3.0 + f64::from(step) * 2.2) * scale;
+        let cx = ax + ux * dist + if vertical { 6.5 * scale } else { 0.0 };
+        let cy = ay + uy * dist + if vertical { 0.0 } else { -5.0 * scale };
+        let half = 1.6 * scale;
         let (px, py) = if vertical {
-            (half, half * 0.6 * uy)
+            (half, half * 0.6 * f64::from(dir))
         } else {
-            (half * 0.6 * ux, half)
+            (half * 0.6 * f64::from(st.live.hwheel_dir), half)
         };
         cr.move_to(
             cx - (if vertical { half } else { 0.0 }),
@@ -1193,65 +1234,86 @@ fn draw_wheel_indicator(st: &HudState, cr: &gtk4::cairo::Context, _width: i32) {
     }
 }
 
-/// Draws one callout per button from its SVG anchor point to the layout
-/// edge, labelled with what the button does and its current assignment.
+/// Draws one screen-space callout per button from its anchor to a label
+/// gutter, labelled with what the button does and its current assignment.
 ///
-/// Labels on each side are sorted by anchor height and pushed apart so they
-/// never overlap; the leader bends at a knee near the edge to reach its
-/// label row.
-fn draw_leaders(st: &HudState, cr: &gtk4::cairo::Context, width: i32, height: i32) {
+/// Anchors are projected through the diagram transform into pixels, so text
+/// keeps a constant size regardless of diagram scale. Labels on each side
+/// are sorted by anchor height and pushed apart so they never overlap; the
+/// leader leaves the anchor horizontally, then runs straight to its label.
+fn draw_leaders(
+    st: &HudState,
+    cr: &gtk4::cairo::Context,
+    scale: f64,
+    offset_x: f64,
+    offset_y: f64,
+) {
     let anchors = button_anchors();
-    let (scale, offset_x, _) = fit_transform(f64::from(width), f64::from(height));
+    let body_left = BODY_MIN_X.mul_add(scale, offset_x);
+    let body_right = BODY_MAX_X.mul_add(scale, offset_x);
 
     for to_left in [true, false] {
         let mut side: Vec<(MouseButton, f64, f64)> = MouseButton::ALL
             .iter()
             .filter(|button| button.leader_to_left() == to_left)
-            .filter_map(|button| anchors.get(button).map(|&(ax, ay)| (*button, ax, ay)))
+            .filter_map(|button| {
+                anchors.get(button).map(|&(ax, ay)| {
+                    (
+                        *button,
+                        ax.mul_add(scale, offset_x),
+                        ay.mul_add(scale, offset_y),
+                    )
+                })
+            })
             .collect();
         side.sort_by(|(_, _, a), (_, _, b)| a.total_cmp(b));
         let rows = resolve_rows(&side, LABEL_MIN_GAP);
-
-        let knee_x = if to_left { -0.5 } else { LAYOUT_W + 0.5 };
-        let label_x = if to_left {
-            (LABEL_EDGE_PX - offset_x) / scale
-        } else {
-            (f64::from(width) - LABEL_EDGE_PX - offset_x) / scale
-        };
 
         for (button, ax, ay, label_y) in rows {
             let selected = st.selected == Some(button);
             if selected {
                 cr.set_source_rgba(0.93, 0.66, 0.46, 0.95);
-                cr.set_line_width(0.4);
+                cr.set_line_width(1.2);
             } else {
                 cr.set_source_rgba(0.62, 0.65, 0.70, 0.55);
-                cr.set_line_width(0.25);
+                cr.set_line_width(0.8);
             }
 
             let title = button.label().to_uppercase();
             let assignment = st.assignments.get(&button);
-            let block_w = measure_text(cr, &title, 2.7)
-                .max(assignment.map_or(0.0, |action| measure_text(cr, action, 2.0)));
-            let line_end = if to_left {
-                label_x + block_w + 1.5
+            let block_w = measure_text(cr, &title, LABEL_FONT_PX).max(
+                assignment.map_or(0.0, |action| measure_text(cr, action, ASSIGNMENT_FONT_PX)),
+            );
+            let (text_x, stub_x) = if to_left {
+                (body_left - LABEL_LINE_GAP - block_w, body_left)
             } else {
-                label_x - block_w - 1.5
+                (body_right + LABEL_LINE_GAP + block_w, body_right)
+            };
+            let knee_x = if to_left {
+                (ax - LABEL_KNEE_PX).max(stub_x)
+            } else {
+                (ax + LABEL_KNEE_PX).min(stub_x)
             };
 
             cr.move_to(ax, ay);
             cr.line_to(knee_x, ay);
-            cr.line_to(knee_x, label_y);
-            cr.line_to(line_end, label_y);
+            cr.line_to(stub_x, label_y);
             let _ = cr.stroke();
 
             cr.new_path();
-            cr.arc(ax, ay, 0.75, 0.0, std::f64::consts::TAU);
+            cr.arc(ax, ay, 2.2, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
 
-            draw_label(cr, &title, 2.7, label_x, label_y - 0.5, to_left);
+            draw_label(cr, &title, LABEL_FONT_PX, text_x, label_y + 4.0, to_left);
             if let Some(action) = assignment {
-                draw_label(cr, action, 2.0, label_x, label_y + 2.6, to_left);
+                draw_label(
+                    cr,
+                    action,
+                    ASSIGNMENT_FONT_PX,
+                    text_x,
+                    label_y + 4.0 + LABEL_ASSIGNMENT_PX,
+                    to_left,
+                );
             }
         }
     }
@@ -1395,10 +1457,17 @@ mod tests {
 
     #[test]
     fn top_buttons_are_called_out_to_the_right() {
-        assert!(!MouseButton::Left.leader_to_left());
         assert!(!MouseButton::Right.leader_to_left());
         assert!(!MouseButton::Wheel.leader_to_left());
         assert!(!MouseButton::DpiShift.leader_to_left());
+    }
+
+    #[test]
+    fn thumb_and_left_buttons_are_called_out_to_the_left() {
+        assert!(MouseButton::Left.leader_to_left());
+        assert!(MouseButton::Back.leader_to_left());
+        assert!(MouseButton::Forward.leader_to_left());
+        assert!(MouseButton::Gesture.leader_to_left());
     }
 
     #[test]
@@ -1417,29 +1486,29 @@ mod tests {
     #[test]
     fn resolve_rows_pushes_overlapping_labels_down() {
         let side = vec![
-            (MouseButton::Back, 20.8, 52.0),
-            (MouseButton::Forward, 20.8, 62.5),
-            (MouseButton::Gesture, 9.0, 64.8),
+            (MouseButton::Back, 20.8, 100.0),
+            (MouseButton::Forward, 20.8, 130.0),
+            (MouseButton::Gesture, 9.0, 135.0),
         ];
         let rows = resolve_rows(&side, LABEL_MIN_GAP);
 
-        assert!((rows[0].3 - 52.0).abs() < f64::EPSILON);
-        assert!((rows[1].3 - 62.5).abs() < f64::EPSILON);
+        assert!((rows[0].3 - 100.0).abs() < f64::EPSILON);
+        assert!((rows[1].3 - 130.0).abs() < f64::EPSILON);
         assert!(rows[2].3 >= rows[1].3 + LABEL_MIN_GAP);
     }
 
     #[test]
     fn resolve_rows_keeps_spaced_labels_at_anchor_height() {
         let side = vec![
-            (MouseButton::Right, 61.1, 17.1),
-            (MouseButton::Wheel, 47.7, 27.7),
-            (MouseButton::Left, 34.4, 38.2),
+            (MouseButton::Right, 61.1, 40.0),
+            (MouseButton::Wheel, 47.7, 80.0),
+            (MouseButton::DpiShift, 34.4, 120.0),
         ];
         let rows = resolve_rows(&side, LABEL_MIN_GAP);
 
-        assert!((rows[0].3 - 17.1).abs() < f64::EPSILON);
-        assert!((rows[1].3 - 27.7).abs() < f64::EPSILON);
-        assert!((rows[2].3 - 38.2).abs() < f64::EPSILON);
+        assert!((rows[0].3 - 40.0).abs() < f64::EPSILON);
+        assert!((rows[1].3 - 80.0).abs() < f64::EPSILON);
+        assert!((rows[2].3 - 120.0).abs() < f64::EPSILON);
     }
 
     #[test]
