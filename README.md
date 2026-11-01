@@ -396,7 +396,7 @@ hl.window_rule({
 Optional: bind the full-screen button-mapping overlay to a key:
 
 ```lua
-hl.bind("SUPER", "M", hl.dsp.exec_cmd("LOGI_MX_OVERLAY=1 logi-mx-ui"))
+hl.bind("SUPER + M", hl.dsp.exec_cmd("LOGI_MX_OVERLAY=1 logi-mx-ui"))
 ```
 
 `exec_cmd` runs the command outside the compositor event loop, which is the

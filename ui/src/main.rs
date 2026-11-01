@@ -39,7 +39,7 @@ fn main() -> glib::ExitCode {
         .build();
     app.connect_startup(|_| load_css());
     if overlay {
-        app.connect_activate(overlay::build_overlay);
+        app.connect_activate(overlay::toggle_overlay);
     } else {
         app.connect_activate(settings::build_ui);
     }

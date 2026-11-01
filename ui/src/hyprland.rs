@@ -27,7 +27,7 @@ hl.window_rule({
     center = true,
 })
 
-hl.bind(\"SUPER\", \"M\", hl.dsp.exec_cmd(\"LOGI_MX_OVERLAY=1 logi-mx-ui\"))
+hl.bind(\"SUPER + M\", hl.dsp.exec_cmd(\"LOGI_MX_OVERLAY=1 logi-mx-ui\"))
 ";
 
 /// Legacy hyprlang snippet for pre-Lua configurations.
@@ -165,6 +165,7 @@ mod tests {
         assert!(LUA_BLOCK.contains("float = true"));
         assert!(LUA_BLOCK.contains("center = true"));
         assert!(LUA_BLOCK.contains("hl.bind"));
+        assert!(LUA_BLOCK.contains("hl.bind(\"SUPER + M\""));
         assert!(LUA_BLOCK.contains("LOGI_MX_OVERLAY=1 logi-mx-ui"));
     }
 

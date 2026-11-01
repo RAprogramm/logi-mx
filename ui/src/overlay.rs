@@ -14,7 +14,7 @@ use std::{
     rc::Rc
 };
 
-use gtk4::{Box, Button, GestureClick, Label, Orientation, prelude::*};
+use gtk4::{Box, Button, EventControllerKey, GestureClick, Label, Orientation, glib, prelude::*};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{Application, ApplicationWindow, prelude::*};
 
@@ -119,8 +119,31 @@ struct OverlayState {
     assignments: HashMap<MouseButton, String>
 }
 
+thread_local! {
+    /// The overlay window while it is open, so a second activation closes it
+    /// instead of stacking another instance.
+    static ACTIVE_WINDOW: RefCell<Option<ApplicationWindow>> = const { RefCell::new(None) };
+}
+
+/// Opens the overlay, or closes it when it is already open.
+///
+/// This is the activation entry point: repeated launches (e.g. a Hyprland
+/// keybind pressed twice) toggle the overlay instead of stacking windows.
+pub fn toggle_overlay(app: &Application) {
+    let open_new = ACTIVE_WINDOW.with(|cell| {
+        cell.borrow().as_ref().is_none_or(|window| {
+            window.close();
+            false
+        })
+    });
+
+    if open_new {
+        build_overlay(app);
+    }
+}
+
 /// Builds and presents the full-screen button-mapping overlay.
-pub fn build_overlay(app: &Application) {
+fn build_overlay(app: &Application) {
     let window = create_window(app);
     let state = Rc::new(RefCell::new(OverlayState::default()));
     let image = Rc::new(OnceCell::new());
@@ -129,6 +152,7 @@ pub fn build_overlay(app: &Application) {
 
     attach_hit_testing(&state, &drawing, &status_label);
     attach_draw_callback(&state, &drawing, &image);
+    attach_escape_to_close(&window);
 
     let root = Box::new(Orientation::Horizontal, 0);
     root.add_css_class("background");
@@ -136,7 +160,28 @@ pub fn build_overlay(app: &Application) {
     root.append(&panel);
 
     window.set_content(Some(&root));
+
+    ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = Some(window.clone()));
+    window.connect_close_request(|_| {
+        ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = None);
+        glib::Propagation::Proceed
+    });
+
     window.present();
+}
+
+fn attach_escape_to_close(window: &ApplicationWindow) {
+    let keys = EventControllerKey::new();
+    let win_key = window.clone();
+    keys.connect_key_pressed(move |_controller, key, _code, _state| {
+        if key == gtk4::gdk::Key::Escape {
+            win_key.close();
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    window.add_controller(keys);
 }
 
 fn create_window(app: &Application) -> ApplicationWindow {
