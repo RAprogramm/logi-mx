@@ -61,6 +61,10 @@ fn load_css() {
         .level-bar {
             min-height: 8px;
         }
+        window.transparent-overlay {
+            background: none;
+            background-color: transparent;
+        }
         "
     );
     if let Some(display) = gtk4::gdk::Display::default() {

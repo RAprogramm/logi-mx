@@ -1,12 +1,14 @@
-// SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
 //! Full-screen button-mapping overlay drawn over the desktop.
 //!
 //! The device diagram is the reference MX Master 3S layout SVG rendered with
-//! `resvg`; clickable hotspots are aligned with the SVG button geometry and
-//! highlighted on top of the image. An assignment panel sits on the right.
-//! Activated with `LOGI_MX_OVERLAY=1`.
+//! `resvg` on a transparent surface; clickable hotspots are aligned with the
+//! SVG button geometry and highlighted on top of the image. Leader lines run
+//! from thumb buttons to the left edge and from the remaining buttons to the
+//! right. An assignment panel sits on the right. Activated with
+//! `LOGI_MX_OVERLAY=1`.
 
 use std::{
     cell::{OnceCell, RefCell},
@@ -106,6 +108,14 @@ impl MouseButton {
         (x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad)
     }
 
+    /// Reports whether the leader line runs to the left edge of the layout.
+    ///
+    /// Thumb buttons sit on the left flank of the device, so their callouts
+    /// go left; everything else is called out to the right.
+    const fn leader_to_left(self) -> bool {
+        matches!(self, Self::Back | Self::Forward | Self::Gesture)
+    }
+
     /// Reports whether a layout-space point falls inside the hit rectangle.
     const fn contains(self, x: f64, y: f64) -> bool {
         let (rx, ry, rw, rh) = self.hit_region();
@@ -155,7 +165,6 @@ fn build_overlay(app: &Application) {
     attach_escape_to_close(&window);
 
     let root = Box::new(Orientation::Horizontal, 0);
-    root.add_css_class("background");
     root.append(&drawing);
     root.append(&panel);
 
@@ -193,6 +202,8 @@ fn create_window(app: &Application) -> ApplicationWindow {
         .build();
 
     window.init_layer_shell();
+    window.add_css_class("transparent-overlay");
+    window.remove_css_class("background");
     window.set_layer(Layer::Overlay);
     window.set_keyboard_mode(KeyboardMode::OnDemand);
     window.set_anchor(Edge::Top, true);
@@ -208,14 +219,12 @@ fn create_window(app: &Application) -> ApplicationWindow {
 }
 
 fn create_drawing_area() -> gtk4::DrawingArea {
-    let drawing = gtk4::DrawingArea::builder()
+    gtk4::DrawingArea::builder()
         .hexpand(true)
         .vexpand(true)
         .content_width(600)
         .content_height(600)
-        .build();
-    drawing.add_css_class("card");
-    drawing
+        .build()
 }
 
 fn create_panel(
@@ -379,6 +388,10 @@ fn to_layout(px: f64, py: f64, width: i32, height: i32) -> (f64, f64) {
 
 fn draw_highlights(st: &OverlayState, cr: &gtk4::cairo::Context) {
     for button in MouseButton::ALL {
+        draw_leader(cr, button, st.selected == Some(button));
+    }
+
+    for button in MouseButton::ALL {
         let selected = st.selected == Some(button);
         let assigned = st.assignments.contains_key(&button);
         if !selected && !assigned {
@@ -400,19 +413,28 @@ fn draw_highlights(st: &OverlayState, cr: &gtk4::cairo::Context) {
             let _ = cr.stroke();
         }
     }
-
-    if let Some(button) = st.selected {
-        draw_leader(cr, button);
-    }
 }
 
-fn draw_leader(cr: &gtk4::cairo::Context, button: MouseButton) {
+/// Draws one callout line, to the left edge for thumb buttons and to the
+/// right edge for everything else.
+fn draw_leader(cr: &gtk4::cairo::Context, button: MouseButton, selected: bool) {
     let (x, y, w, h) = button.region();
     let start_y = y + h / 2.0;
-    cr.set_source_rgb(0.93, 0.66, 0.46);
-    cr.set_line_width(0.4);
-    cr.move_to(x + w, start_y);
-    cr.line_to(LAYOUT_W, start_y);
+    let (start_x, end_x) = if button.leader_to_left() {
+        (x, 0.0)
+    } else {
+        (x + w, LAYOUT_W)
+    };
+
+    if selected {
+        cr.set_source_rgb(0.93, 0.66, 0.46);
+        cr.set_line_width(0.4);
+    } else {
+        cr.set_source_rgba(0.6, 0.6, 0.6, 0.55);
+        cr.set_line_width(0.25);
+    }
+    cr.move_to(start_x, start_y);
+    cr.line_to(end_x, start_y);
     let _ = cr.stroke();
 }
 
@@ -454,4 +476,30 @@ fn rounded_rect(
         3.0 * std::f64::consts::FRAC_PI_2
     );
     cr.close_path();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thumb_buttons_are_called_out_to_the_left() {
+        assert!(MouseButton::Back.leader_to_left());
+        assert!(MouseButton::Forward.leader_to_left());
+        assert!(MouseButton::Gesture.leader_to_left());
+    }
+
+    #[test]
+    fn top_buttons_are_called_out_to_the_right() {
+        assert!(!MouseButton::Left.leader_to_left());
+        assert!(!MouseButton::Right.leader_to_left());
+        assert!(!MouseButton::Wheel.leader_to_left());
+        assert!(!MouseButton::DpiShift.leader_to_left());
+    }
+
+    #[test]
+    fn left_leaders_start_inside_the_layout() {
+        let (x, _, _, _) = MouseButton::Back.region();
+        assert!(x > 0.0 && x < 25.0);
+    }
 }
