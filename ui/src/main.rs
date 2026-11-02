@@ -91,6 +91,9 @@ fn load_css() {
         window.hud-blur {
             backdrop-filter: blur(30px);
         }
+        row.hud-tile {
+            padding: 10px 14px;
+        }
         row.hud-focus {
             background: alpha(#edaa75, 0.22);
         }

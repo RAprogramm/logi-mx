@@ -29,7 +29,7 @@ use std::{
 
 use gtk4::{
     Box as GtkBox, Button, CheckButton, DropDown, EventControllerKey, EventControllerMotion,
-    GestureClick, Label, Orientation, Scale, ScrolledWindow, Switch, glib
+    GestureClick, Grid, Label, Orientation, Scale, ScrolledWindow, Switch, glib
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
@@ -800,24 +800,40 @@ const REMAP_TARGETS: [(&str, u16); 8] = [
     ("Restore native", 0x0000)
 ];
 
-/// Builds the button list: activating a row selects that button and highlights
-/// it on the diagram; hovering a row previews the same highlight. Each row's
-/// subtitle shows its current assignment.
+/// Builds the button tiles: two columns of cards, each naming the button and
+/// its current assignment, with the seventh alone at the bottom. Activating a
+/// tile selects that button and highlights it on the diagram; hovering a tile
+/// previews the same highlight.
 fn buttons_list_section(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea
-) -> (PreferencesGroup, RowMap) {
-    let group = PreferencesGroup::new();
-    group.set_title("Buttons");
-    group.set_description(Some(
+) -> (GtkBox, RowMap) {
+    let section = GtkBox::new(Orientation::Vertical, 6);
+    let title = Label::new(Some("Buttons"));
+    title.add_css_class("title-4");
+    title.set_xalign(0.0);
+    let description = Label::new(Some(
         "Hover or select a button to highlight it on the diagram"
     ));
+    description.add_css_class("dim-label");
+    description.add_css_class("caption");
+    description.set_xalign(0.0);
+
+    let grid = Grid::new();
+    grid.set_column_homogeneous(true);
+    grid.set_row_spacing(6);
+    grid.set_column_spacing(6);
+
     let rows: RowMap = Rc::new(RefCell::new(HashMap::new()));
+    let mut col = 0;
+    let mut row_pos = 0;
     for button in MouseButton::ALL {
         let row = ActionRow::builder()
             .title(button.label())
             .subtitle("Native")
             .build();
+        row.add_css_class("card");
+        row.add_css_class("hud-tile");
         let state_row = Rc::clone(state);
         let drawing_row = drawing.clone();
         row.connect_activate(move |_| {
@@ -852,10 +868,20 @@ fn buttons_list_section(
         row.connect_map(|_| queue_leaders());
 
         rows.borrow_mut().insert(button, row.clone());
-        group.add(&row);
+        let width = if button == MouseButton::Gesture { 2 } else { 1 };
+        grid.attach(&row, col, row_pos, width, 1);
+        col += width;
+        if col >= 2 {
+            col = 0;
+            row_pos += 1;
+        }
     }
     ROWS_REGISTRY.with(|cell| *cell.borrow_mut() = Some(Rc::clone(&rows)));
-    (group, rows)
+
+    section.append(&title);
+    section.append(&description);
+    section.append(&grid);
+    (section, rows)
 }
 
 /// Stores an assignment for a button and reflects it in the row subtitle and
