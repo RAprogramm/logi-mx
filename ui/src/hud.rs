@@ -29,13 +29,13 @@ use std::{
 
 use gtk4::{
     Box as GtkBox, Button, CheckButton, DropDown, EventControllerKey, EventControllerMotion,
-    FlowBox, FlowBoxChild, GestureClick, Label, Orientation, Scale, ScrolledWindow, SelectionMode,
-    Switch, glib
+    FlowBox, FlowBoxChild, GestureClick, Image, Label, Orientation, Scale, ScrolledWindow,
+    SelectionMode, Switch, ToggleButton, glib
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
     ActionRow, Application, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay, ViewStack,
-    ViewSwitcher, ViewSwitcherPolicy, prelude::*
+    prelude::*
 };
 use logi_mx_daemon::ipc::{
     self, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT, BTN_BIT_MIDDLE,
@@ -599,6 +599,8 @@ struct PanelWidgets {
     model_row:         Option<ActionRow>,
     /// Battery row on the device page.
     battery_row:       Option<ActionRow>,
+    /// Header chip carrying the live connection, battery and DPI summary.
+    status_chip:       Option<Label>,
     /// Current-DPI row on the pointer page.
     dpi_row:           Option<ActionRow>,
     /// DPI slider on the pointer page.
@@ -641,8 +643,22 @@ fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceS
         if let Some(row) = &w.dpi_row {
             row.set_subtitle("unknown");
         }
+        if let Some(chip) = &w.status_chip {
+            chip.set_text("Daemon unavailable");
+            chip.remove_css_class("hud-status-ok");
+            chip.add_css_class("hud-status-bad");
+        }
         return;
     };
+    if let Some(chip) = &w.status_chip {
+        let battery = snapshot.battery.map_or_else(
+            || "battery unknown".to_string(),
+            |battery| format!("{}%", battery.level)
+        );
+        chip.set_text(&format!("Connected · {battery} · {} DPI", snapshot.dpi));
+        chip.remove_css_class("hud-status-bad");
+        chip.add_css_class("hud-status-ok");
+    }
     if let Some(row) = &w.model_row {
         row.set_subtitle(snapshot.name.as_str());
     }
@@ -715,6 +731,16 @@ fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
     }
 }
 
+/// Page specs shared by the stack and the segmented switcher: stack name,
+/// human label and symbolic icon.
+const PAGE_SPECS: [(&str, &str, &str); 5] = [
+    ("buttons", "Buttons", "input-mouse-symbolic"),
+    ("gestures", "Gestures", "input-touchpad-symbolic"),
+    ("wheel", "Wheel", "view-continuous-symbolic"),
+    ("pointer", "Pointer", "preferences-desktop-input-symbolic"),
+    ("device", "Device", "battery-symbolic")
+];
+
 /// Builds the settings panel with the Device, Pointer, Wheel and Buttons pages.
 fn create_panel(
     state: &Rc<RefCell<HudState>>,
@@ -725,16 +751,15 @@ fn create_panel(
     let toast = ToastOverlay::new();
     toast.set_size_request(PANEL_WIDTH, -1);
     toast.add_css_class("card");
+    toast.add_css_class("hud-panel");
 
-    let root = GtkBox::new(Orientation::Vertical, 12);
-    root.set_margin_top(16);
-    root.set_margin_bottom(16);
-    root.set_margin_start(16);
-    root.set_margin_end(16);
+    let root = GtkBox::new(Orientation::Vertical, 14);
+    root.set_margin_top(18);
+    root.set_margin_bottom(18);
+    root.set_margin_start(18);
+    root.set_margin_end(18);
 
-    let title = Label::new(Some("MX Master 3S"));
-    title.add_css_class("title-2");
-    root.append(&title);
+    root.append(&panel_header(window, widgets));
 
     let stack = ViewStack::new();
     let pages = [
@@ -769,16 +794,11 @@ fn create_panel(
             "battery-symbolic"
         )
     ];
-    for (page, name, title, icon) in pages {
+    for (page, name, title, _) in pages {
         stack.add_titled(&page, Some(name), title);
-        stack.page(&page).set_icon_name(Some(icon));
     }
 
-    let switcher = ViewSwitcher::builder()
-        .stack(&stack)
-        .policy(ViewSwitcherPolicy::Narrow)
-        .build();
-    root.append(&switcher);
+    root.append(&panel_tabs(&stack));
     stack.connect_visible_child_notify(move |_| queue_leaders());
 
     let stack_box = GtkBox::new(Orientation::Vertical, 0);
@@ -786,14 +806,89 @@ fn create_panel(
     stack_box.append(&stack);
     root.append(&stack_box);
 
-    let close_btn = Button::with_label("Close");
-    close_btn.add_css_class("flat");
-    let win_close = window.clone();
-    close_btn.connect_clicked(move |_| win_close.close());
-    root.append(&close_btn);
-
     toast.set_child(Some(&root));
     toast
+}
+
+/// Builds the panel header: device title, live status chip and close button.
+///
+/// The status chip starts neutral; the snapshot loader repaints it once the
+/// daemon answers, so the header never blocks on device I/O.
+fn panel_header(window: &ApplicationWindow, widgets: &Rc<RefCell<PanelWidgets>>) -> GtkBox {
+    let header = GtkBox::new(Orientation::Horizontal, 8);
+
+    let titles = GtkBox::new(Orientation::Vertical, 0);
+    let title = Label::new(Some("MX Master 3S"));
+    title.add_css_class("title-3");
+    title.set_xalign(0.0);
+    let status = Label::new(Some("Connecting…"));
+    status.add_css_class("caption");
+    status.add_css_class("dim-label");
+    status.set_xalign(0.0);
+    titles.append(&title);
+    titles.append(&status);
+    widgets.borrow_mut().status_chip = Some(status);
+
+    let close = Button::from_icon_name("window-close-symbolic");
+    close.add_css_class("flat");
+    close.add_css_class("hud-close");
+    close.set_valign(gtk4::Align::Start);
+    close.set_tooltip_text(Some("Close (Esc)"));
+    let win_close = window.clone();
+    close.connect_clicked(move |_| win_close.close());
+
+    let spring = Label::new(None);
+    spring.set_hexpand(true);
+
+    header.append(&titles);
+    header.append(&spring);
+    header.append(&close);
+    header
+}
+
+/// Builds the segmented page switcher: one pill per page, kept in sync with
+/// the stack in both directions.
+fn panel_tabs(stack: &ViewStack) -> GtkBox {
+    let tabs = GtkBox::new(Orientation::Horizontal, 0);
+    tabs.add_css_class("hud-tabs");
+    tabs.set_hexpand(true);
+
+    let mut buttons = Vec::with_capacity(PAGE_SPECS.len());
+    for (index, (name, label, icon)) in PAGE_SPECS.iter().enumerate() {
+        let tab = ToggleButton::new();
+        tab.add_css_class("hud-tab");
+        tab.set_tooltip_text(Some(label));
+        tab.set_hexpand(true);
+
+        let content = GtkBox::new(Orientation::Vertical, 2);
+        content.append(&Image::from_icon_name(icon));
+        let caption = Label::new(Some(label));
+        caption.add_css_class("caption");
+        content.append(&caption);
+        tab.set_child(Some(&content));
+
+        let stack_pick = stack.clone();
+        let page_name = (*name).to_string();
+        tab.connect_clicked(move |_| stack_pick.set_visible_child_name(&page_name));
+
+        tabs.append(&tab);
+        buttons.push((index, tab));
+    }
+    if let Some((_, first)) = buttons.first() {
+        first.set_active(true);
+    }
+
+    let sync: Rc<Vec<(usize, ToggleButton)>> = Rc::new(buttons);
+    stack.connect_visible_child_name_notify(move |stack| {
+        let current = stack.visible_child_name().unwrap_or_default();
+        for (index, tab) in sync.iter() {
+            let active = PAGE_SPECS
+                .get(*index)
+                .is_some_and(|(name, _, _)| *name == current);
+            tab.set_active(active);
+        }
+    });
+    tabs
 }
 
 /// Native remap targets offered on the assignment dropdowns: label and CID.
@@ -823,7 +918,7 @@ const ASSIGNMENT_CHOICES: [&str; 8] = [
 /// Smallest height (in pixels) one tile row needs to stay comfortable; the
 /// flow drops to two columns only when the panel cannot fit every row at this
 /// height in a single column.
-const TILE_ROW_MIN_HEIGHT: i32 = 64;
+const TILE_ROW_MIN_HEIGHT: i32 = 48;
 
 /// Builds one button tile: a card with the button name and its assignment
 /// dropdown; picking an entry writes the remap into the mouse firmware
@@ -838,7 +933,6 @@ fn button_tile(
     let child = FlowBoxChild::new();
     child.add_css_class("hud-tile");
     child.set_hexpand(true);
-    child.set_vexpand(true);
     let inner = GtkBox::new(Orientation::Horizontal, 12);
     let name = Label::new(Some(button.label()));
     name.add_css_class("title");
@@ -960,9 +1054,8 @@ fn buttons_list_section(
     flow.set_min_children_per_line(1);
     flow.set_max_children_per_line(1);
     flow.set_hexpand(true);
-    flow.set_vexpand(true);
     flow.set_column_spacing(12);
-    flow.set_row_spacing(12);
+    flow.set_row_spacing(8);
 
     flow.connect_notify_local(Some("height"), move |flow, _| {
         let rows = i32::try_from(MouseButton::ALL.len()).unwrap_or(7);
@@ -1060,41 +1153,61 @@ type GestureCapture = Rc<RefCell<Option<(GestureDirection, Vec<u16>)>>>;
 struct GestureTile {
     child:   FlowBoxChild,
     keys:    Rc<RefCell<Vec<String>>>,
-    binding: Label,
+    binding: GtkBox,
     mode:    DropDown,
     capture: Button
 }
 
 impl GestureTile {
-    /// Reflects a bound key sequence on the tile.
+    /// Reflects a bound key sequence on the tile as monospace chips.
     fn set_keys(&self, keys: Vec<String>) {
-        self.binding.set_text(&binding_text(&keys));
+        while let Some(child) = self.binding.first_child() {
+            self.binding.remove(&child);
+        }
+        if keys.is_empty() {
+            let placeholder = Label::new(Some("Not bound"));
+            placeholder.add_css_class("dim-label");
+            placeholder.add_css_class("caption");
+            self.binding.append(&placeholder);
+        } else {
+            for (index, key) in keys.iter().enumerate() {
+                if index > 0 {
+                    let plus = Label::new(Some("+"));
+                    plus.add_css_class("hud-chip-sep");
+                    self.binding.append(&plus);
+                }
+                let chip = Label::new(Some(&pretty_key(key)));
+                chip.add_css_class("hud-chip");
+                self.binding.append(&chip);
+            }
+        }
+        self.binding.set_tooltip_text(Some(&binding_text(&keys)));
         *self.keys.borrow_mut() = keys;
     }
 }
 
-/// Renders a key sequence for the tile label, e.g. `Left Ctrl + Right`.
+/// Renders a key sequence as one line, e.g. `Left Ctrl + Right`.
 fn binding_text(keys: &[String]) -> String {
-    if keys.is_empty() {
-        return "Not bound".to_string();
-    }
     keys.iter()
-        .map(|name| {
-            name.trim_start_matches("KEY_")
-                .split('_')
-                .map(|word| {
-                    let lower = word.to_lowercase();
-                    let mut chars = lower.chars();
-                    let head: String = chars
-                        .next()
-                        .map_or(String::new(), |c| c.to_uppercase().collect());
-                    head + chars.as_str()
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|name| pretty_key(name))
         .collect::<Vec<_>>()
         .join(" + ")
+}
+
+/// Human form of one evdev key name, e.g. `KEY_LEFTCTRL` → `Left Ctrl`.
+fn pretty_key(name: &str) -> String {
+    name.trim_start_matches("KEY_")
+        .split('_')
+        .map(|word| {
+            let lower = word.to_lowercase();
+            let mut chars = lower.chars();
+            let head: String = chars
+                .next()
+                .map_or(String::new(), |c| c.to_uppercase().collect());
+            head + chars.as_str()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Disarms a pending capture and restores the tile button.
@@ -1125,12 +1238,9 @@ fn gesture_tile(
     let title = Label::new(Some(label));
     title.add_css_class("title-4");
     title.set_xalign(0.0);
-    let binding = Label::new(Some("Not bound"));
-    binding.add_css_class("dim-label");
-    binding.add_css_class("caption");
+    let binding = GtkBox::new(Orientation::Horizontal, 4);
+    binding.set_halign(gtk4::Align::End);
     binding.set_hexpand(true);
-    binding.set_xalign(1.0);
-    binding.set_ellipsize(gtk4::pango::EllipsizeMode::End);
     head.append(&title);
     head.append(&binding);
 
@@ -1199,13 +1309,15 @@ fn gesture_tile(
         }
     });
 
-    GestureTile {
+    let gesture = GestureTile {
         child,
         keys,
         binding,
         mode,
         capture: capture_btn
-    }
+    };
+    gesture.set_keys(Vec::new());
+    gesture
 }
 
 /// Builds the Gestures page: a master switch plus one tile per direction.

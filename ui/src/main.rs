@@ -17,6 +17,9 @@ use libadwaita::Application;
 
 const APP_ID: &str = "com.logitech.mx.configurator";
 
+/// Panel design system, embedded at build time from `data/hud.css`.
+const HUD_CSS: &str = include_str!("../data/hud.css");
+
 /// Runs the GTK application, or exits with an error when no graphical session
 /// is available.
 ///
@@ -74,71 +77,19 @@ fn run_hyprland_integration() -> glib::ExitCode {
     }
 }
 
+/// Installs the panel stylesheet on the default display.
+///
+/// The HUD is a bespoke glass surface, so its sheet intentionally overrides
+/// the desktop theme (including libadwaita's checked-button rendering) and
+/// loads at user priority.
 fn load_css() {
     let provider = CssProvider::new();
-    provider.load_from_string(
-        "
-        window.transparent-overlay {
-            background: none;
-            background-color: transparent;
-        }
-        window.hud-dim {
-            background: rgba(0, 0, 0, 0.45);
-        }
-        window.hud-tint {
-            background: rgba(0, 0, 0, 0.02);
-        }
-        window.hud-blur {
-            backdrop-filter: blur(30px);
-        }
-        flowbox.hud-tiles {
-            padding: 0;
-        }
-        flowbox.hud-tiles flowboxchild {
-            padding: 12px 16px;
-            border-radius: 14px;
-            background-color: alpha(#ffffff, 0.04);
-            border: 1px solid alpha(#ffffff, 0.07);
-        }
-        flowbox.hud-tiles flowboxchild:hover {
-            background-color: alpha(#ffffff, 0.08);
-        }
-        flowbox.hud-tiles flowboxchild.hud-focus {
-            background-color: alpha(#edaa75, 0.16);
-            border-color: alpha(#edaa75, 0.45);
-        }
-        dropdown.hud-assign button {
-            min-width: 120px;
-        }
-        scrolledwindow.hud-page scrollbar {
-            background-color: transparent;
-            border: none;
-            padding: 0;
-        }
-        scrolledwindow.hud-page scrollbar slider {
-            min-width: 6px;
-            min-height: 6px;
-            margin: 2px 4px;
-            border: none;
-            border-radius: 99px;
-            background-color: alpha(#ffffff, 0.16);
-        }
-        scrolledwindow.hud-page scrollbar slider:hover {
-            background-color: alpha(#ffffff, 0.32);
-        }
-        scrolledwindow.hud-page undershoot,
-        scrolledwindow.hud-page overshoot {
-            background-color: transparent;
-            background-image: none;
-            box-shadow: none;
-        }
-        "
-    );
+    provider.load_from_string(HUD_CSS);
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
             &display,
             &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION
+            gtk4::STYLE_PROVIDER_PRIORITY_USER
         );
     }
 }
