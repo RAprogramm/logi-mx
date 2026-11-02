@@ -180,11 +180,19 @@ fn save_background(mode: BgMode) {
 }
 
 /// Paints the window backdrop for the mode through CSS classes.
+///
+/// The blur class carries `backdrop-filter`, which GTK 4.24 translates into an
+/// `ext-background-effect-v1` blur region for the compositor; no compositor
+/// rules are involved.
 fn apply_bg_classes(window: &ApplicationWindow, mode: BgMode) {
     window.remove_css_class("hud-dim");
     window.remove_css_class("hud-tint");
+    window.remove_css_class("hud-blur");
     if let Some(class) = mode.window_class() {
         window.add_css_class(class);
+    }
+    if mode.wants_blur() {
+        window.add_css_class("hud-blur");
     }
 }
 
@@ -493,9 +501,6 @@ fn build_hud(app: &Application) {
     overlay.add_overlay(&leaders);
     window.set_content(Some(&overlay));
     apply_bg_classes(&window, state.borrow().bg);
-    if let Err(e) = crate::hyprland::set_hud_blur(state.borrow().bg.wants_blur()) {
-        tracing::warn!("Failed to sync the compositor blur rule: {e}");
-    }
 
     ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = Some(window.clone()));
     window.connect_close_request(|_| {
@@ -1180,12 +1185,10 @@ fn pointer_page(toast: &ToastOverlay, widgets: &Rc<RefCell<PanelWidgets>>) -> Sc
 
 /// Builds the backdrop section: two independent checkboxes for dimming and
 /// compositor blur, so any of the four combinations is reachable. Changing
-/// either persists the mode, repaints the window backdrop and syncs the
-/// Hyprland blur rule.
+/// either persists the mode and repaints the window backdrop.
 fn background_section(
     state: &Rc<RefCell<HudState>>,
-    window: &ApplicationWindow,
-    toast: &ToastOverlay
+    window: &ApplicationWindow
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
     group.set_title("Background");
@@ -1211,7 +1214,6 @@ fn background_section(
 
     let state_sync = Rc::clone(state);
     let window_sync = window.clone();
-    let toast_sync = toast.clone();
     let dim_sync = dim_check.clone();
     let blur_sync = blur_check.clone();
     let sync = Rc::new(move || {
@@ -1222,9 +1224,6 @@ fn background_section(
         state_sync.borrow_mut().bg = next;
         save_background(next);
         apply_bg_classes(&window_sync, next);
-        if let Err(e) = crate::hyprland::set_hud_blur(next.wants_blur()) {
-            toast_sync.add_toast(Toast::new(&format!("Blur unavailable: {e}")));
-        }
     });
     let sync_dim = Rc::clone(&sync);
     let sync_blur = Rc::clone(&sync);
@@ -1315,7 +1314,7 @@ fn device_page(
     version_group.add(&version_row);
 
     box_.append(&info_group);
-    box_.append(&background_section(state, window, toast));
+    box_.append(&background_section(state, window));
     box_.append(&integration_group);
     box_.append(&version_group);
     scroll.set_child(Some(&box_));

@@ -17,29 +17,6 @@ use masterror::prelude::*;
 /// Marker identifying the block appended by this module.
 const INTEGRATION_MARKER: &str = "logi-mx integration";
 
-/// Marker wrapping the HUD blur rule so it can be added and removed again.
-const BLUR_MARKER_BEGIN: &str = "begin logi-mx hud blur";
-/// End marker of the HUD blur rule block.
-const BLUR_MARKER_END: &str = "end logi-mx hud blur";
-
-/// Lua rule blurring the desktop behind the HUD layer (Hyprland 0.55+).
-const LUA_BLUR_BLOCK: &str = "-- begin logi-mx hud blur
-hl.layer_rule({
-    name = \"logi-mx-hud-blur\",
-    match = { namespace = \"^logi-mx-hud$\" },
-    blur = true,
-    ignore_alpha = 0.0,
-})
--- end logi-mx hud blur
-";
-
-/// Legacy hyprlang blur rule for pre-Lua configurations.
-const CONF_BLUR_BLOCK: &str = "# begin logi-mx hud blur
-layerrule = blur, logi-mx-hud
-layerrule = ignorealpha 0.0, logi-mx-hud
-# end logi-mx hud blur
-";
-
 /// Lua snippet for Hyprland 0.55 and newer.
 const LUA_BLOCK: &str = "
 -- logi-mx integration
@@ -67,17 +44,17 @@ pub enum Outcome {
     /// The block was missing; the config was appended and Hyprland reloaded.
     Configured {
         /// Display path of the updated config file.
-        path: String,
+        path: String
     },
     /// The config already contains the integration block.
     AlreadyConfigured {
         /// Display path of the config file.
-        path: String,
+        path: String
     },
     /// The session is not running under Hyprland.
     NotHyprland,
     /// Hyprland is running but no config file was found.
-    NoConfig,
+    NoConfig
 }
 
 /// Reports whether the session runs under Hyprland.
@@ -125,7 +102,9 @@ pub fn ensure_integration() -> Result<Outcome, AppError> {
 
     let display = path.display().to_string();
     if contains_integration(&content) {
-        return Ok(Outcome::AlreadyConfigured { path: display });
+        return Ok(Outcome::AlreadyConfigured {
+            path: display
+        });
     }
 
     let mut updated = content;
@@ -138,86 +117,18 @@ pub fn ensure_integration() -> Result<Outcome, AppError> {
         .map_err(|e| AppError::internal("Failed to write Hyprland config").with_source(e))?;
 
     reload_hyprland()?;
-    Ok(Outcome::Configured { path: display })
+    Ok(Outcome::Configured {
+        path: display
+    })
 }
 
 fn config_dir() -> Option<PathBuf> {
     let base = match std::env::var("XDG_CONFIG_HOME") {
         Ok(value) => PathBuf::from(value),
-        Err(_) => PathBuf::from(std::env::var("HOME").ok()?).join(".config"),
+        Err(_) => PathBuf::from(std::env::var("HOME").ok()?).join(".config")
     };
     let dir = base.join("hypr");
     dir.is_dir().then_some(dir)
-}
-
-/// Resolves the active config file and whether it uses the Lua dialect.
-fn config_file() -> Option<(PathBuf, bool)> {
-    let dir = config_dir()?;
-    let lua_path = dir.join("hyprland.lua");
-    if lua_path.is_file() {
-        return Some((lua_path, true));
-    }
-    let conf_path = dir.join("hyprland.conf");
-    conf_path.is_file().then_some((conf_path, false))
-}
-
-/// Enables or disables compositor blur behind the HUD layer.
-///
-/// Adds the named layer rule to the active Hyprland config when enabling and
-/// strips it again when disabling, reloading Hyprland on any change. The
-/// operation is idempotent: a matching state leaves the config untouched.
-///
-/// # Errors
-///
-/// Returns an internal error when no Hyprland config file exists, or when
-/// reading, writing or reloading fails.
-pub fn set_hud_blur(enable: bool) -> Result<(), AppError> {
-    let (path, lua) =
-        config_file().ok_or_else(|| AppError::internal("Blur needs a Hyprland config file"))?;
-
-    let content = fs::read_to_string(&path)
-        .map_err(|e| AppError::internal("Failed to read Hyprland config").with_source(e))?;
-    let present = content.contains(BLUR_MARKER_BEGIN);
-    if present == enable {
-        return Ok(());
-    }
-
-    let updated = if enable {
-        let block = if lua { LUA_BLUR_BLOCK } else { CONF_BLUR_BLOCK };
-        let mut updated = content;
-        if !updated.ends_with('\n') {
-            updated.push('\n');
-        }
-        updated.push_str(block);
-        updated
-    } else {
-        strip_blur_block(&content)
-    };
-
-    fs::write(&path, &updated)
-        .map_err(|e| AppError::internal("Failed to write Hyprland config").with_source(e))?;
-    reload_hyprland()
-}
-
-/// Removes the marked blur block, including its marker lines.
-fn strip_blur_block(content: &str) -> String {
-    let mut kept = String::with_capacity(content.len());
-    let mut skipping = false;
-    for line in content.lines() {
-        if line.contains(BLUR_MARKER_BEGIN) {
-            skipping = true;
-            continue;
-        }
-        if line.contains(BLUR_MARKER_END) {
-            skipping = false;
-            continue;
-        }
-        if !skipping {
-            kept.push_str(line);
-            kept.push('\n');
-        }
-    }
-    kept
 }
 
 fn reload_hyprland() -> Result<(), AppError> {
@@ -275,33 +186,5 @@ mod tests {
 
         assert!(updated.starts_with("hl.config("));
         assert!(contains_integration(&updated));
-    }
-
-    #[test]
-    fn blur_blocks_carry_both_markers() {
-        assert!(LUA_BLUR_BLOCK.contains(BLUR_MARKER_BEGIN));
-        assert!(LUA_BLUR_BLOCK.contains(BLUR_MARKER_END));
-        assert!(CONF_BLUR_BLOCK.contains(BLUR_MARKER_BEGIN));
-        assert!(CONF_BLUR_BLOCK.contains(BLUR_MARKER_END));
-        assert!(LUA_BLUR_BLOCK.contains("blur = true"));
-        assert!(CONF_BLUR_BLOCK.contains("layerrule = blur"));
-    }
-
-    #[test]
-    fn strip_blur_block_removes_only_the_rule() {
-        let original = "general {\n  gaps_in = 5\n}\n";
-        let with_rule = format!("{original}{LUA_BLUR_BLOCK}");
-        assert!(with_rule.contains("blur"));
-
-        let stripped = strip_blur_block(&with_rule);
-        assert!(!stripped.contains("blur"));
-        assert!(!stripped.contains(BLUR_MARKER_BEGIN));
-        assert!(stripped.contains("gaps_in = 5"));
-    }
-
-    #[test]
-    fn strip_blur_block_on_clean_config_is_identity() {
-        let original = "general {\n  gaps_in = 5\n}\n";
-        assert_eq!(strip_blur_block(original), original);
     }
 }

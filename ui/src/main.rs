@@ -88,6 +88,9 @@ fn load_css() {
         window.hud-tint {
             background: rgba(0, 0, 0, 0.02);
         }
+        window.hud-blur {
+            backdrop-filter: blur(30px);
+        }
         row.hud-focus {
             background: alpha(#edaa75, 0.22);
         }
