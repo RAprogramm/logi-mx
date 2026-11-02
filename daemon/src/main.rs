@@ -168,26 +168,36 @@ fn main() -> Result<()> {
     runtime.block_on(run())
 }
 
-/// Creates the live telemetry fan-out and attaches the evdev tap thread.
-fn spawn_live_tap() -> ipc::LiveHub {
+/// Creates the live telemetry fan-out and shared daemon-side button state.
+fn new_live_state() -> (ipc::LiveHub, ipc::SharedLiveState) {
     let (hub, _sink) = tokio::sync::broadcast::channel::<ipc::LiveFrame>(64);
+    (hub, Arc::new(ipc::LiveState::default()))
+}
+
+/// Attaches the evdev tap thread to an existing fan-out.
+fn spawn_live_tap(hub: &ipc::LiveHub, state: &ipc::SharedLiveState) {
     if let Err(e) = std::thread::Builder::new()
         .name("logi-mx-live".to_string())
         .spawn({
             let hub = hub.clone();
-            move || live::run(&hub)
+            let state = Arc::clone(state);
+            move || live::run(&hub, &state)
         })
     {
         warn!("Failed to spawn live telemetry thread: {e}. Live HUD disabled.");
     }
-    hub
 }
 
-async fn run() -> Result<()> {
+/// Installs the process-wide tracing subscriber.
+fn init_tracing() {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
+}
+
+async fn run() -> Result<()> {
+    init_tracing();
 
     let _lock = acquire_instance_lock(None)?;
     info!("Acquired instance lock");
@@ -212,10 +222,17 @@ async fn run() -> Result<()> {
     #[cfg(not(feature = "tray"))]
     let tray_handle: worker::TraySlot = ();
 
-    let (device_tx, rpc_tx, worker_handle) =
-        spawn_device_worker(config, Arc::clone(&status), tray_handle.clone())?;
+    let (live_hub, live_state) = new_live_state();
 
-    let live_hub = spawn_live_tap();
+    let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(
+        config,
+        Arc::clone(&status),
+        tray_handle.clone(),
+        Arc::clone(&live_state),
+        live_hub.clone()
+    )?;
+
+    spawn_live_tap(&live_hub, &live_state);
 
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {

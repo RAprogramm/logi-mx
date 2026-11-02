@@ -76,6 +76,8 @@ pub fn set_runtime_handle(handle: TokioHandle) {
 /// * `config` - Configuration applied to every discovered device.
 /// * `status` - Shared status handle the worker refreshes periodically.
 /// * `tray` - Tray slot refreshed alongside the shared status.
+/// * `live` - Shared daemon-side button state merged into live telemetry.
+/// * `hub` - Live frame fan-out the worker publishes immediate frames on.
 ///
 /// # Returns
 ///
@@ -87,7 +89,9 @@ pub fn set_runtime_handle(handle: TokioHandle) {
 pub fn spawn_device_worker(
     config: Config,
     status: SharedStatus,
-    tray: TraySlot
+    tray: TraySlot,
+    live: ipc::SharedLiveState,
+    hub: ipc::LiveHub
 ) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
 {
     let (tx, rx) = mpsc::channel();
@@ -95,7 +99,7 @@ pub fn spawn_device_worker(
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
-        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status, &tray))
+        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status, &tray, live, hub))
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
@@ -108,9 +112,12 @@ fn run_device_worker(
     rx: &mpsc::Receiver<DeviceEvent>,
     rpc_rx: &mpsc::Receiver<RpcRequest>,
     status: &SharedStatus,
-    tray: &TraySlot
+    tray: &TraySlot,
+    live: ipc::SharedLiveState,
+    hub: ipc::LiveHub
 ) {
     let mut gestures = GestureRuntime::from_config(&config);
+    gestures.attach_live(live, hub);
     let mut manager = DevicePool::new(config);
     #[cfg(feature = "notify")]
     let mut policy = crate::notify::NoticePolicy::new();
@@ -717,6 +724,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<DeviceEvent>();
         let (_rpc_tx, rpc_rx) = mpsc::channel::<RpcRequest>();
         drop(tx);
+        let (live_hub, _live_sink) = tokio::sync::broadcast::channel(1);
 
         std::thread::Builder::new()
             .name("test-worker".to_string())
@@ -730,7 +738,9 @@ mod tests {
                     &rx,
                     &rpc_rx,
                     &Arc::new(Mutex::new(DeviceStatus::default())),
-                    &tray
+                    &tray,
+                    ipc::SharedLiveState::default(),
+                    live_hub
                 );
             })
             .unwrap_or_else(|e| panic!("Failed to spawn test worker: {e}"))

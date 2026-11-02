@@ -45,17 +45,19 @@ const BTN_FORWARD: u16 = 277;
 /// Maps an evdev key code onto a [`LiveFrame`] button bit.
 ///
 /// `BTN_SIDE` is the rear thumb button and `BTN_EXTRA` the front one, which
-/// is how the kernel orders them on Logitech mice. Codes without a named
-/// mapping (gesture and DPI buttons vary by firmware) are reported through
-/// [`LiveFrame::extra_keys`] instead.
+/// is how the kernel orders them on Logitech mice. The physical labels run
+/// the other way: the front button is Back and the rear one is Forward, so
+/// the codes cross over here. Codes without a named mapping (gesture and DPI
+/// buttons never reach the kernel at all) are handled through
+/// [`LiveFrame::extra_keys`] or the daemon's [`crate::ipc::LiveState`].
 #[must_use]
 pub const fn key_bit(code: u16) -> Option<u32> {
     match code {
         BTN_LEFT => Some(BTN_BIT_LEFT),
         BTN_RIGHT => Some(BTN_BIT_RIGHT),
         BTN_MIDDLE => Some(BTN_BIT_MIDDLE),
-        BTN_SIDE => Some(BTN_BIT_BACK),
-        BTN_EXTRA => Some(BTN_BIT_FORWARD),
+        BTN_SIDE => Some(BTN_BIT_FORWARD),
+        BTN_EXTRA => Some(BTN_BIT_BACK),
         BTN_FORWARD => Some(BTN_BIT_GESTURE),
         _ => None
     }
@@ -203,15 +205,21 @@ fn find_mouse() -> Option<(std::path::PathBuf, String)> {
 /// iterator ends as soon as that batch is drained, so the stream is only
 /// alive while this loop keeps re-arming reads. A read error — typically
 /// `ENODEV` after an unplug — ends the attachment and lets the caller
-/// rescan for a fresh node.
+/// rescan for a fresh node. Diverted buttons never appear in the kernel
+/// stream, so the daemon-side bits from `state` are merged into every frame.
 fn stream(
     device: &mut Device,
     accumulator: &mut TelemetryAccumulator,
-    hub: &LiveHub
+    hub: &LiveHub,
+    state: &crate::ipc::SharedLiveState
 ) -> std::io::Result<()> {
+    use std::sync::atomic::Ordering;
+
     loop {
         for event in device.fetch_events()? {
-            if let Some(frame) = accumulator.apply(&event) {
+            if let Some(mut frame) = accumulator.apply(&event) {
+                state.last_buttons.store(frame.buttons, Ordering::Relaxed);
+                frame.buttons |= state.virtual_bits.load(Ordering::Relaxed);
                 let _ = hub.send(frame);
             }
         }
@@ -219,7 +227,7 @@ fn stream(
 }
 
 /// Attaches to the mouse and streams frames until the device detaches.
-fn pump(hub: &LiveHub) {
+fn pump(hub: &LiveHub, state: &crate::ipc::SharedLiveState) {
     let Some((path, name)) = find_mouse() else {
         debug!("live telemetry: MX Master event node not found");
         thread::sleep(RESCAN_DELAY);
@@ -234,15 +242,15 @@ fn pump(hub: &LiveHub) {
     info!("live telemetry attached to {name} ({path:?})");
 
     let mut accumulator = TelemetryAccumulator::new();
-    if let Err(e) = stream(&mut device, &mut accumulator, hub) {
+    if let Err(e) = stream(&mut device, &mut accumulator, hub, state) {
         info!("live telemetry detached from {name}: {e}");
     }
 }
 
 /// Runs the evdev tap until the process exits.
-pub fn run(hub: &LiveHub) {
+pub fn run(hub: &LiveHub, state: &crate::ipc::SharedLiveState) {
     loop {
-        pump(hub);
+        pump(hub, state);
     }
 }
 
@@ -267,8 +275,8 @@ mod tests {
         assert_eq!(key_bit(BTN_LEFT), Some(BTN_BIT_LEFT));
         assert_eq!(key_bit(BTN_RIGHT), Some(BTN_BIT_RIGHT));
         assert_eq!(key_bit(BTN_MIDDLE), Some(BTN_BIT_MIDDLE));
-        assert_eq!(key_bit(BTN_SIDE), Some(BTN_BIT_BACK));
-        assert_eq!(key_bit(BTN_EXTRA), Some(BTN_BIT_FORWARD));
+        assert_eq!(key_bit(BTN_SIDE), Some(BTN_BIT_FORWARD));
+        assert_eq!(key_bit(BTN_EXTRA), Some(BTN_BIT_BACK));
         assert_eq!(key_bit(BTN_FORWARD), Some(BTN_BIT_GESTURE));
     }
 

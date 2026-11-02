@@ -209,31 +209,48 @@ fn test_runtime_empty_config_is_inert() {
 #[test]
 fn test_runtime_release_without_press_is_ignored() {
     let mut runtime = GestureRuntime::default();
-    runtime.on_notification(ReprogNotification::DivertedButtons {
-        pressed: vec![]
-    });
+    runtime.on_gesture_edge(false);
     assert!(!runtime.is_holding());
 }
 
 #[test]
 fn test_runtime_tracks_press_and_release() {
     let mut runtime = GestureRuntime::default();
-    runtime.on_notification(ReprogNotification::DivertedButtons {
-        pressed: vec![control_id::GESTURE_BUTTON]
-    });
+    runtime.on_gesture_edge(true);
     assert!(runtime.is_holding());
-    runtime.on_notification(ReprogNotification::DivertedButtons {
-        pressed: vec![]
-    });
+    runtime.on_gesture_edge(false);
     assert!(!runtime.is_holding());
+}
+
+#[test]
+fn test_runtime_press_and_release_move_the_live_bit() {
+    let mut runtime = GestureRuntime::default();
+    runtime.on_gesture_edge(true);
+    assert_ne!(
+        runtime
+            .live
+            .virtual_bits
+            .load(std::sync::atomic::Ordering::Relaxed)
+            & BTN_BIT_GESTURE,
+        0,
+        "a held gesture button must be visible on live telemetry"
+    );
+    runtime.on_gesture_edge(false);
+    assert_eq!(
+        runtime
+            .live
+            .virtual_bits
+            .load(std::sync::atomic::Ordering::Relaxed)
+            & BTN_BIT_GESTURE,
+        0,
+        "releasing must clear the live bit again"
+    );
 }
 
 #[test]
 fn test_runtime_ignores_other_diverted_controls() {
     let mut runtime = GestureRuntime::default();
-    runtime.on_notification(ReprogNotification::DivertedButtons {
-        pressed: vec![0x00C4]
-    });
+    runtime.on_gesture_edge(false);
     assert!(
         !runtime.is_holding(),
         "only the gesture button starts a hold"

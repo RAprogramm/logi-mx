@@ -12,12 +12,18 @@
 //! All travel arithmetic saturates: a pathological hold must never panic
 //! inside the input pump, only misfire.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, Instant}
+};
 
 use logi_mx_driver::prelude::*;
 use tracing::{debug, info, warn};
 
-use crate::inject::Injector;
+use crate::{
+    inject::Injector,
+    ipc::{BTN_BIT_DPI, BTN_BIT_GESTURE, LiveFrame, LiveHub, SharedLiveState}
+};
 
 /// Minimum dominant-axis travel (raw-XY units) before a direction commits.
 pub const SWIPE_THRESHOLD: i32 = 50;
@@ -243,15 +249,29 @@ impl SwipeAccumulator {
     }
 }
 
+/// Divert bookkeeping for the wheel-mode (DPI shift) button.
+#[derive(Default)]
+struct DpiButton {
+    diverted: bool,
+    held:     bool
+}
+
 /// Wires the [`SwipeAccumulator`] to configured bindings and the key injector.
 ///
 /// Owns the divert lifecycle: the gesture button is diverted when a device
 /// arrives with gestures enabled and undiverted on removal or shutdown, so a
-/// daemon exit never leaves the button stranded in diverted mode.
+/// daemon exit never leaves the button stranded in diverted mode. The
+/// wheel-mode button is always diverted: the kernel never sees it, so the
+/// daemon toggles `SmartShift` itself and reports the press on live
+/// telemetry, which is the only way the HUD can light the button up.
 #[derive(Default)]
 pub struct GestureRuntime {
     bindings:           Vec<Gesture>,
     diverted:           bool,
+    dpi:                DpiButton,
+    smartshift:         SmartShiftConfig,
+    live:               SharedLiveState,
+    hub:                Option<LiveHub>,
     accumulator:        SwipeAccumulator,
     injector:           Injector,
     last_commit:        Option<GestureDirection>,
@@ -283,8 +303,15 @@ impl GestureRuntime {
         };
         Self {
             bindings,
+            smartshift: device.smartshift,
             ..Self::default()
         }
+    }
+
+    /// Attaches the live telemetry handles used to surface diverted buttons.
+    pub fn attach_live(&mut self, live: SharedLiveState, hub: LiveHub) {
+        self.live = live;
+        self.hub = Some(hub);
     }
 
     /// Whether the gesture button must be diverted for this configuration.
@@ -307,12 +334,17 @@ impl GestureRuntime {
         self.bindings = if enabled { bindings } else { Vec::new() };
     }
 
-    /// Diverts the gesture button after a device attach.
+    /// Diverts the gesture and wheel-mode buttons after a device attach.
     ///
-    /// When gestures are not configured the button is defensively undiverted
-    /// once: the divert flag persists in firmware, so this heals a button
-    /// stranded by a previous session or a crashed daemon.
+    /// When gestures are not configured the gesture button is defensively
+    /// undiverted once: the divert flag persists in firmware, so this heals a
+    /// button stranded by a previous session or a crashed daemon.
     pub fn apply(&mut self, device: &mut MxMaster3s) {
+        self.apply_gesture(device);
+        self.apply_dpi(device);
+    }
+
+    fn apply_gesture(&mut self, device: &mut MxMaster3s) {
         if self.should_divert() {
             if self.diverted {
                 return;
@@ -341,20 +373,51 @@ impl GestureRuntime {
                 Err(e) => warn!("failed to divert the gesture button: {e}")
             }
         } else if self.diverted {
-            self.detach(device);
+            self.undivert_gesture(device);
         } else {
             let _ = device.set_control_divert(control_id::GESTURE_BUTTON, false, false);
         }
     }
 
-    /// Undiverts the gesture button before a device drop or daemon exit.
+    /// Diverts the wheel-mode (DPI shift) button so its presses reach the
+    /// daemon. The kernel never reports this control, so without the divert
+    /// neither the HUD highlight nor the `SmartShift` toggle can work.
+    fn apply_dpi(&mut self, device: &mut MxMaster3s) {
+        if self.dpi.diverted {
+            return;
+        }
+        match device.set_control_divert(control_id::SMARTSHIFT_TOGGLE, true, false) {
+            Ok(()) => {
+                self.dpi.diverted = true;
+                info!("wheel-mode button diverted for live telemetry");
+            }
+            Err(e) => debug!("cannot divert the wheel-mode button: {e}")
+        }
+    }
+
+    /// Undiverts the gesture and wheel-mode buttons before a device drop or
+    /// daemon exit.
     pub fn detach(&mut self, device: &mut MxMaster3s) {
+        self.undivert_gesture(device);
+        if self.dpi.diverted {
+            self.dpi.diverted = false;
+            self.dpi.held = false;
+            self.set_live_bit(BTN_BIT_DPI, false);
+            if let Err(e) = device.set_control_divert(control_id::SMARTSHIFT_TOGGLE, false, false)
+            {
+                warn!("failed to undivert the wheel-mode button: {e}");
+            }
+        }
+    }
+
+    fn undivert_gesture(&mut self, device: &mut MxMaster3s) {
         if !self.diverted {
             return;
         }
         self.diverted = false;
         self.accumulator = SwipeAccumulator::default();
         self.last_commit = None;
+        self.set_live_bit(BTN_BIT_GESTURE, false);
         if let Err(e) = device.set_control_divert(control_id::GESTURE_BUTTON, false, false) {
             warn!("failed to undivert the gesture button: {e}");
         }
@@ -363,28 +426,21 @@ impl GestureRuntime {
     /// Drains pending reprogrammable-controls notifications and fires the
     /// actions they complete.
     pub fn pump(&mut self, device: &mut MxMaster3s) {
-        if !self.diverted {
+        if !self.diverted && !self.dpi.diverted {
             return;
         }
         while let Some(note) = device.read_reprog_notification(0) {
-            self.on_notification(note);
+            self.on_notification(note, device);
         }
     }
 
-    fn on_notification(&mut self, note: ReprogNotification) {
+    fn on_notification(&mut self, note: ReprogNotification, device: &mut MxMaster3s) {
         match note {
             ReprogNotification::DivertedButtons {
                 pressed
             } => {
-                let held = pressed.contains(&control_id::GESTURE_BUTTON);
-                if held && !self.accumulator.is_holding() {
-                    debug!("gesture button pressed");
-                    self.accumulator.begin(Instant::now());
-                    self.last_commit = None;
-                } else if !held && self.accumulator.is_holding() {
-                    debug!("gesture button released");
-                    self.finish_hold();
-                }
+                self.on_gesture_edge(pressed.contains(&control_id::GESTURE_BUTTON));
+                self.on_wheel_mode_edge(pressed.contains(&control_id::SMARTSHIFT_TOGGLE), device);
             }
             ReprogNotification::RawXy {
                 dx,
@@ -400,6 +456,73 @@ impl GestureRuntime {
                 }
             }
         }
+    }
+
+    /// Tracks the gesture button edge: press opens the swipe accumulator and
+    /// raises the live bit, release settles the hold and lowers it.
+    fn on_gesture_edge(&mut self, held: bool) {
+        if held && !self.accumulator.is_holding() {
+            debug!("gesture button pressed");
+            self.accumulator.begin(Instant::now());
+            self.last_commit = None;
+            self.set_live_bit(BTN_BIT_GESTURE, true);
+        } else if !held && self.accumulator.is_holding() {
+            debug!("gesture button released");
+            self.set_live_bit(BTN_BIT_GESTURE, false);
+            self.finish_hold();
+        }
+    }
+
+    /// Tracks the wheel-mode button edge: press toggles `SmartShift` (the
+    /// firmware's native job once the control is diverted) and raises the
+    /// live bit so the HUD lights the button up.
+    fn on_wheel_mode_edge(&mut self, pressed: bool, device: &mut MxMaster3s) {
+        if pressed == self.dpi.held {
+            return;
+        }
+        self.dpi.held = pressed;
+        self.set_live_bit(BTN_BIT_DPI, pressed);
+        if !pressed {
+            return;
+        }
+        self.smartshift.enabled = !self.smartshift.enabled;
+        match device.set_smartshift(self.smartshift) {
+            Ok(()) => info!(
+                "wheel-mode button: SmartShift {}",
+                if self.smartshift.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ),
+            Err(e) => {
+                self.smartshift.enabled = !self.smartshift.enabled;
+                warn!("failed to toggle SmartShift: {e}");
+            }
+        }
+    }
+
+    /// Raises or lowers a daemon-side button bit and publishes an immediate
+    /// frame so the HUD reacts without waiting for kernel input.
+    fn set_live_bit(&self, bit: u32, pressed: bool) {
+        if pressed {
+            self.live.virtual_bits.fetch_or(bit, Ordering::Relaxed);
+        } else {
+            self.live.virtual_bits.fetch_and(!bit, Ordering::Relaxed);
+        }
+        self.publish_live();
+    }
+
+    fn publish_live(&self) {
+        let Some(hub) = &self.hub else {
+            return;
+        };
+        let frame = LiveFrame {
+            buttons: self.live.last_buttons.load(Ordering::Relaxed)
+                | self.live.virtual_bits.load(Ordering::Relaxed),
+            ..LiveFrame::default()
+        };
+        let _ = hub.send(frame);
     }
 
     fn finish_hold(&mut self) {

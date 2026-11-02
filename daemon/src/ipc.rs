@@ -31,6 +31,24 @@ pub type RpcSender = mpsc::Sender<RpcRequest>;
 /// Fan-out channel carrying live input telemetry to subscribed clients.
 pub type LiveHub = tokio::sync::broadcast::Sender<LiveFrame>;
 
+/// Button state the daemon injects into live telemetry.
+///
+/// Diverted HID++ buttons (gesture, wheel mode) never reach the kernel, so
+/// the worker thread raises their bits here and the evdev tap merges them
+/// into every frame it publishes. `last_buttons` records the raw kernel
+/// button mask of the newest frame so an immediate daemon-published frame
+/// never drops physically held buttons.
+#[derive(Debug, Default)]
+pub struct LiveState {
+    /// Bits for daemon-side (diverted) pressed buttons.
+    pub virtual_bits: std::sync::atomic::AtomicU32,
+    /// Kernel button mask of the most recently published frame.
+    pub last_buttons: std::sync::atomic::AtomicU32
+}
+
+/// Shared handle to the daemon-injected button state.
+pub type SharedLiveState = std::sync::Arc<LiveState>;
+
 /// One coalesced live input snapshot pushed to `WatchLive` clients.
 ///
 /// Motion and wheel values are deltas accumulated since the previous frame;
@@ -64,12 +82,17 @@ pub const BTN_BIT_LEFT: u32 = 1 << 0;
 pub const BTN_BIT_RIGHT: u32 = 1 << 1;
 /// Bit for the wheel click in [`LiveFrame::buttons`].
 pub const BTN_BIT_MIDDLE: u32 = 1 << 2;
-/// Bit for the rear thumb button in [`LiveFrame::buttons`].
-pub const BTN_BIT_BACK: u32 = 1 << 3;
 /// Bit for the front thumb button in [`LiveFrame::buttons`].
+pub const BTN_BIT_BACK: u32 = 1 << 3;
+/// Bit for the rear thumb button in [`LiveFrame::buttons`].
 pub const BTN_BIT_FORWARD: u32 = 1 << 4;
 /// Bit for the gesture button in [`LiveFrame::buttons`].
 pub const BTN_BIT_GESTURE: u32 = 1 << 5;
+/// Bit for the wheel-mode (DPI shift) button in [`LiveFrame::buttons`].
+///
+/// The button is a pure HID++ control: the daemon diverts it and raises this
+/// bit itself, the kernel never reports it.
+pub const BTN_BIT_DPI: u32 = 1 << 6;
 
 /// Socket filename inside the runtime directory.
 const SOCKET_NAME: &str = "logi-mx.sock";

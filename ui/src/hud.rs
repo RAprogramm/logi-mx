@@ -38,8 +38,8 @@ use libadwaita::{
     prelude::*
 };
 use logi_mx_daemon::ipc::{
-    self, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT, BTN_BIT_MIDDLE,
-    BTN_BIT_RIGHT, LiveFrame, Response
+    self, BTN_BIT_BACK, BTN_BIT_DPI, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT,
+    BTN_BIT_MIDDLE, BTN_BIT_RIGHT, LiveFrame, Response
 };
 use logi_mx_driver::{
     devices::{Action, GestureDirection, GestureMode, control_id},
@@ -310,16 +310,16 @@ impl MouseButton {
         }
     }
 
-    /// Live telemetry bit for this button, when the kernel reports it.
-    const fn live_bit(self) -> Option<u32> {
+    /// Live telemetry bit for this button.
+    const fn live_bit(self) -> u32 {
         match self {
-            Self::Left => Some(BTN_BIT_LEFT),
-            Self::Right => Some(BTN_BIT_RIGHT),
-            Self::Wheel => Some(BTN_BIT_MIDDLE),
-            Self::Back => Some(BTN_BIT_BACK),
-            Self::Forward => Some(BTN_BIT_FORWARD),
-            Self::Gesture => Some(BTN_BIT_GESTURE),
-            Self::DpiShift => None
+            Self::Left => BTN_BIT_LEFT,
+            Self::Right => BTN_BIT_RIGHT,
+            Self::Wheel => BTN_BIT_MIDDLE,
+            Self::Back => BTN_BIT_BACK,
+            Self::Forward => BTN_BIT_FORWARD,
+            Self::Gesture => BTN_BIT_GESTURE,
+            Self::DpiShift => BTN_BIT_DPI
         }
     }
 
@@ -2346,9 +2346,7 @@ fn draw_pressed_shapes(
     masks: &HashMap<MouseButton, gtk4::cairo::ImageSurface>
 ) {
     for button in MouseButton::ALL {
-        let Some(bit) = button.live_bit() else {
-            continue;
-        };
+        let bit = button.live_bit();
         if (st.live.buttons | st.live.flash) & bit == 0 {
             continue;
         }
