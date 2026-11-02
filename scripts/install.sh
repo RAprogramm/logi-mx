@@ -31,6 +31,16 @@ else
   echo "  (skipped: need root for ${UDEV_RULES_DIR})"
 fi
 
+echo "Installing modules-load.d config..."
+MODULES_LOAD_DIR="${PREFIX}/lib/modules-load.d"
+if [ -w "${MODULES_LOAD_DIR}" ] || [ "$(id -u)" -eq 0 ]; then
+  install -d "${MODULES_LOAD_DIR}"
+  install -m 0644 "${ROOT_DIR}/uinput.conf" "${MODULES_LOAD_DIR}/uinput.conf"
+  modprobe uinput 2>/dev/null || true
+else
+  echo "  (skipped: need root for ${MODULES_LOAD_DIR})"
+fi
+
 DETECTED_DE="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION:-}}"
 HAS_DE=0
 if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; then

@@ -285,7 +285,12 @@ sudo curl -o /etc/udev/rules.d/90-logi-mx.rules \
   https://raw.githubusercontent.com/RAprogramm/logi-mx/main/90-logi-mx.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 
-# Add your user to input group (required for scroll speed multiplier)
+# Load uinput at boot (required for gesture key injection)
+sudo curl -o /etc/modules-load.d/uinput.conf \
+  https://raw.githubusercontent.com/RAprogramm/logi-mx/main/uinput.conf
+sudo modprobe uinput
+
+# Add your user to input group (required for live telemetry and gesture injection)
 sudo usermod -aG input $USER
 
 # Install systemd service
@@ -315,7 +320,11 @@ cargo install --path ui --locked
 sudo cp 90-logi-mx.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 
-# Add your user to input group (required for scroll speed multiplier)
+# Load uinput at boot (required for gesture key injection)
+sudo cp uinput.conf /etc/modules-load.d/
+sudo modprobe uinput
+
+# Add your user to input group (required for live telemetry and gesture injection)
 sudo usermod -aG input $USER
 
 # Install systemd service
