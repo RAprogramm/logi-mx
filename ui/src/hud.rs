@@ -13,7 +13,7 @@
 //! configured keybind; a second activation closes it.
 
 use std::{
-    cell::{OnceCell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::HashMap,
     fs,
     io::BufReader,
@@ -29,7 +29,8 @@ use std::{
 
 use gtk4::{
     Box as GtkBox, Button, CheckButton, DropDown, EventControllerKey, EventControllerMotion,
-    GestureClick, Grid, Label, Orientation, Scale, ScrolledWindow, Switch, glib
+    FlowBox, FlowBoxChild, GestureClick, Label, Orientation, Scale, ScrolledWindow, SelectionMode,
+    Switch, glib
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
@@ -392,15 +393,14 @@ struct HudState {
     hover:       Option<MouseButton>,
     assignments: HashMap<MouseButton, String>,
     live:        LiveVisual,
-    bg:          BgMode,
-    remap:       Option<PreferencesGroup>
+    bg:          BgMode
 }
 
-/// One button tile: the clickable row plus the assignment label on its right.
+/// One button tile: the card plus the dropdown assigning its behaviour.
 #[derive(Clone)]
 struct Tile {
-    row:        ActionRow,
-    assignment: Label
+    child:    FlowBoxChild,
+    dropdown: DropDown
 }
 
 /// Shared handle to the button tiles of the open window, keyed by button.
@@ -444,21 +444,15 @@ fn queue_leaders() {
 /// persistent selection, so both halves of the HUD always agree.
 fn sync_row_focus(state: &HudState) {
     let focus = state.hover.or(state.selected);
-    if let Some(group) = state.remap.as_ref() {
-        let title = state
-            .selected
-            .map_or_else(|| "Remap".to_string(), |b| format!("Remap — {}", b.label()));
-        group.set_title(&title);
-    }
     ROWS_REGISTRY.with(|registry| {
         let Some(rows) = registry.borrow().as_ref().map(Rc::clone) else {
             return;
         };
         for (button, tile) in rows.borrow().iter() {
             if Some(*button) == focus {
-                tile.row.add_css_class("hud-focus");
+                tile.child.add_css_class("hud-focus");
             } else {
-                tile.row.remove_css_class("hud-focus");
+                tile.child.remove_css_class("hud-focus");
             }
         }
     });
@@ -793,112 +787,178 @@ fn create_panel(
     toast
 }
 
-/// Native remap targets offered on the assignments page: label and CID.
-/// `0x0000` restores the device-native behaviour of the selected control.
-const REMAP_TARGETS: [(&str, u16); 8] = [
+/// Native remap targets offered on the assignment dropdowns: label and CID.
+const REMAP_TARGETS: [(&str, u16); 7] = [
     ("Left", control_id::LEFT_BUTTON),
     ("Right", control_id::RIGHT_BUTTON),
     ("Middle click", control_id::MIDDLE_BUTTON),
     ("Back", control_id::BACK_BUTTON),
     ("Forward", control_id::FORWARD_BUTTON),
     ("Gesture", control_id::GESTURE_BUTTON),
-    ("DPI Shift", control_id::SMARTSHIFT_TOGGLE),
-    ("Restore native", 0x0000)
+    ("DPI Shift", control_id::SMARTSHIFT_TOGGLE)
 ];
 
-/// Builds the button tiles: two columns of cards, each naming the button and
-/// its current assignment, with the seventh alone at the bottom. Activating a
-/// tile selects that button and highlights it on the diagram; hovering a tile
-/// previews the same highlight.
+/// Dropdown choices for a tile: index 0 restores the device-native behaviour,
+/// every later entry maps onto the matching `REMAP_TARGETS` element.
+const ASSIGNMENT_CHOICES: [&str; 8] = [
+    "Native",
+    "Left",
+    "Right",
+    "Middle click",
+    "Back",
+    "Forward",
+    "Gesture",
+    "DPI Shift"
+];
+
+/// Builds one button tile: a card with the button name and its assignment
+/// dropdown; picking an entry writes the remap into the mouse firmware
+/// instantly and reverts the choice when the daemon refuses.
+fn button_tile(
+    state: &Rc<RefCell<HudState>>,
+    drawing: &gtk4::DrawingArea,
+    toast: &ToastOverlay,
+    rows: &RowMap,
+    button: MouseButton
+) -> Tile {
+    let child = FlowBoxChild::new();
+    child.add_css_class("hud-tile");
+    let inner = GtkBox::new(Orientation::Horizontal, 12);
+    let name = Label::new(Some(button.label()));
+    name.add_css_class("title");
+    name.set_xalign(0.0);
+    name.set_hexpand(true);
+    name.set_valign(gtk4::Align::Center);
+    let dropdown = DropDown::from_strings(&ASSIGNMENT_CHOICES);
+    dropdown.add_css_class("hud-assign");
+    inner.append(&name);
+    inner.append(&dropdown);
+    child.set_child(Some(&inner));
+
+    let state_row = Rc::clone(state);
+    let drawing_row = drawing.clone();
+    child.connect_activate(move |_| {
+        let mut st = state_row.borrow_mut();
+        st.selected = Some(button);
+        drawing_row.queue_draw();
+        sync_row_focus(&st);
+    });
+
+    let state_enter = Rc::clone(state);
+    let drawing_enter = drawing.clone();
+    let motion = EventControllerMotion::new();
+    motion.connect_motion(move |_, _, _| {
+        let mut st = state_enter.borrow_mut();
+        if st.hover != Some(button) {
+            st.hover = Some(button);
+            drawing_enter.queue_draw();
+            sync_row_focus(&st);
+        }
+    });
+    let state_leave = Rc::clone(state);
+    let drawing_leave = drawing.clone();
+    motion.connect_leave(move |_| {
+        let mut st = state_leave.borrow_mut();
+        if st.hover == Some(button) {
+            st.hover = None;
+            drawing_leave.queue_draw();
+            sync_row_focus(&st);
+        }
+    });
+    child.add_controller(motion);
+    child.connect_map(|_| queue_leaders());
+
+    let state_assign = Rc::clone(state);
+    let rows_assign = Rc::clone(rows);
+    let drawing_assign = drawing.clone();
+    let toast_assign = toast.clone();
+    let applied = Rc::new(Cell::new(0_u32));
+    dropdown.connect_selected_notify(move |picker| {
+        let index = picker.selected();
+        if index == applied.get() {
+            return;
+        }
+        let target_cid = if index == 0 {
+            0
+        } else {
+            REMAP_TARGETS[(index - 1) as usize].1
+        };
+        let response = ipc::try_request(&ipc::Request::SetButtonRemap {
+            control_id: button.cid(),
+            target_cid
+        });
+        if matches!(response, Some(Response::Ok)) {
+            applied.set(index);
+            let label =
+                (target_cid != 0).then(|| REMAP_TARGETS[(index - 1) as usize].0.to_string());
+            set_assignment(
+                &state_assign,
+                &rows_assign,
+                &drawing_assign,
+                button,
+                label.clone()
+            );
+            let message = label.map_or_else(
+                || format!("{} restored to native", button.label()),
+                |target| format!("{} now acts as {target}", button.label())
+            );
+            toast_assign.add_toast(Toast::new(&message));
+        } else {
+            picker.set_selected(applied.get());
+            toast_assign.add_toast(Toast::new("Daemon unavailable — change not applied"));
+        }
+    });
+
+    Tile {
+        child,
+        dropdown
+    }
+}
+
+/// Builds the button tiles: an adaptive flow of cards, each pairing the
+/// button with a dropdown that assigns its behaviour straight into the mouse
+/// firmware. The flow fits one or two columns to the available width.
+/// Hovering a tile highlights the button on the diagram.
 fn buttons_list_section(
     state: &Rc<RefCell<HudState>>,
-    drawing: &gtk4::DrawingArea
+    drawing: &gtk4::DrawingArea,
+    toast: &ToastOverlay
 ) -> (GtkBox, RowMap) {
-    let section = GtkBox::new(Orientation::Vertical, 6);
+    let section = GtkBox::new(Orientation::Vertical, 8);
     let title = Label::new(Some("Buttons"));
     title.add_css_class("title-4");
     title.set_xalign(0.0);
     let description = Label::new(Some(
-        "Hover or select a button to highlight it on the diagram"
+        "Pick what each button should do; the mouse remembers it on its own"
     ));
     description.add_css_class("dim-label");
     description.add_css_class("caption");
     description.set_xalign(0.0);
 
-    let grid = Grid::new();
-    grid.set_column_homogeneous(true);
-    grid.set_row_spacing(6);
-    grid.set_column_spacing(6);
+    let flow = FlowBox::new();
+    flow.add_css_class("hud-tiles");
+    flow.set_selection_mode(SelectionMode::None);
+    flow.set_homogeneous(true);
+    flow.set_min_children_per_line(1);
+    flow.set_max_children_per_line(2);
+    flow.set_column_spacing(8);
+    flow.set_row_spacing(8);
 
     let rows: RowMap = Rc::new(RefCell::new(HashMap::new()));
-    let mut col = 0;
-    let mut row_pos = 0;
     for button in MouseButton::ALL {
-        let row = ActionRow::builder().title(button.label()).build();
-        let assignment = Label::new(Some("Native"));
-        assignment.add_css_class("dim-label");
-        assignment.add_css_class("caption");
-        assignment.set_valign(gtk4::Align::Center);
-        row.add_suffix(&assignment);
-        row.add_css_class("card");
-        row.add_css_class("hud-tile");
-        let state_row = Rc::clone(state);
-        let drawing_row = drawing.clone();
-        row.connect_activate(move |_| {
-            let mut st = state_row.borrow_mut();
-            st.selected = Some(button);
-            drawing_row.queue_draw();
-            sync_row_focus(&st);
-        });
-
-        let state_enter = Rc::clone(state);
-        let drawing_enter = drawing.clone();
-        let motion = EventControllerMotion::new();
-        motion.connect_motion(move |_, _, _| {
-            let mut st = state_enter.borrow_mut();
-            if st.hover != Some(button) {
-                st.hover = Some(button);
-                drawing_enter.queue_draw();
-                sync_row_focus(&st);
-            }
-        });
-        let state_leave = Rc::clone(state);
-        let drawing_leave = drawing.clone();
-        motion.connect_leave(move |_| {
-            let mut st = state_leave.borrow_mut();
-            if st.hover == Some(button) {
-                st.hover = None;
-                drawing_leave.queue_draw();
-                sync_row_focus(&st);
-            }
-        });
-        row.add_controller(motion);
-        row.connect_map(|_| queue_leaders());
-
-        rows.borrow_mut().insert(
-            button,
-            Tile {
-                row: row.clone(),
-                assignment
-            }
-        );
-        let width = if button == MouseButton::Gesture { 2 } else { 1 };
-        grid.attach(&row, col, row_pos, width, 1);
-        col += width;
-        if col >= 2 {
-            col = 0;
-            row_pos += 1;
-        }
+        let card = button_tile(state, drawing, toast, &rows, button);
+        rows.borrow_mut().insert(button, card.clone());
+        flow.append(&card.child);
     }
     ROWS_REGISTRY.with(|cell| *cell.borrow_mut() = Some(Rc::clone(&rows)));
 
     section.append(&title);
     section.append(&description);
-    section.append(&grid);
+    section.append(&flow);
     (section, rows)
 }
 
-/// Stores an assignment for a button and reflects it in the row subtitle and
+/// Stores an assignment for a button and reflects it in the tile dropdown and
 /// the diagram leader label; `None` restores the native behaviour.
 fn set_assignment(
     state: &Rc<RefCell<HudState>>,
@@ -907,97 +967,30 @@ fn set_assignment(
     button: MouseButton,
     action: Option<String>
 ) {
-    let subtitle = action.map_or_else(
-        || {
+    let index = action.as_ref().map_or(0, |label| {
+        REMAP_TARGETS
+            .iter()
+            .position(|(target, _)| target == label)
+            .and_then(|pos| u32::try_from(pos + 1).ok())
+            .unwrap_or(0)
+    });
+    match action {
+        None => {
             state.borrow_mut().assignments.remove(&button);
-            "Native".to_string()
-        },
-        |action| {
-            state
-                .borrow_mut()
-                .assignments
-                .insert(button, action.clone());
-            action
         }
-    );
+        Some(action) => {
+            state.borrow_mut().assignments.insert(button, action);
+        }
+    }
     if let Some(tile) = rows.borrow().get(&button) {
-        tile.assignment.set_text(&subtitle);
+        tile.dropdown.set_selected(index);
     }
     drawing.queue_draw();
     queue_leaders();
 }
 
-/// Builds the remap section: pick a target control and write it into
-/// the mouse firmware through HID++ reprogrammable controls.
-fn remap_section(
-    state: &Rc<RefCell<HudState>>,
-    drawing: &gtk4::DrawingArea,
-    toast: &ToastOverlay,
-    rows: &RowMap
-) -> PreferencesGroup {
-    let group = PreferencesGroup::new();
-    group.set_title("Remap");
-    group.set_description(Some(
-        "The selected button will behave like the chosen one, in the mouse firmware, without software"
-    ));
-
-    let target = DropDown::from_strings(
-        &REMAP_TARGETS
-            .iter()
-            .map(|(label, _)| *label)
-            .collect::<Vec<&str>>()
-    );
-    target.set_hexpand(true);
-
-    let apply = Button::with_label("Apply");
-    apply.add_css_class("suggested-action");
-    apply.add_css_class("pill");
-
-    let state_clone = Rc::clone(state);
-    let drawing_clone = drawing.clone();
-    let toast_clone = toast.clone();
-    let target_apply = target.clone();
-    let rows_apply = Rc::clone(rows);
-    apply.connect_clicked(move |_| {
-        let Some(selected) = state_clone.borrow().selected else {
-            toast_clone.add_toast(Toast::new("Select a button first"));
-            return;
-        };
-        let index = (target_apply.selected() as usize).min(REMAP_TARGETS.len() - 1);
-        let (label, target_cid) = REMAP_TARGETS[index];
-        let response = ipc::try_request(&ipc::Request::SetButtonRemap {
-            control_id: selected.cid(),
-            target_cid
-        });
-        let remapped = matches!(response, Some(Response::Ok));
-        let message = if target_cid == 0 {
-            format!("{} restored to native", selected.label())
-        } else {
-            format!("{} now acts as {label}", selected.label())
-        };
-        report(response, &toast_clone, &message);
-        if remapped {
-            set_assignment(
-                &state_clone,
-                &rows_apply,
-                &drawing_clone,
-                selected,
-                (target_cid != 0).then(|| label.to_string())
-            );
-        }
-    });
-
-    let picker = GtkBox::new(Orientation::Horizontal, 12);
-    picker.append(&target);
-    picker.append(&apply);
-    let picker_row = ActionRow::new();
-    picker_row.set_child(Some(&picker));
-    group.add(&picker_row);
-    group
-}
-
-/// Creates the assignment page: a button list that highlights the diagram
-/// and the native remap picker for the selected button.
+/// Creates the assignment page: adaptive button tiles that highlight the
+/// diagram, each carrying its own assignment dropdown.
 fn buttons_page(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
@@ -1008,11 +1001,8 @@ fn buttons_page(
         .vadjustment()
         .connect_value_changed(move |_| queue_leaders());
     let box_ = GtkBox::new(Orientation::Vertical, 0);
-    let (buttons_group, rows) = buttons_list_section(state, drawing);
-    box_.append(&buttons_group);
-    let remap = remap_section(state, drawing, toast, &rows);
-    state.borrow_mut().remap = Some(remap.clone());
-    box_.append(&remap);
+    let (buttons_section, _rows) = buttons_list_section(state, drawing, toast);
+    box_.append(&buttons_section);
     scroll.set_child(Some(&box_));
     scroll
 }
@@ -1883,7 +1873,7 @@ fn attach_leaders_draw(
             };
             let ax = ax.mul_add(scale, base_x);
             let ay = ay.mul_add(scale, base_y);
-            let Some((tx, ty)) = row_target(&tile.row, &window) else {
+            let Some((tx, ty)) = row_target(&tile.child, &window) else {
                 continue;
             };
             let focused = st.selected == Some(button) || st.hover == Some(button);
@@ -1910,17 +1900,17 @@ fn attach_leaders_draw(
     });
 }
 
-/// Window-space landing point of a button row's leader line: just left of the
-/// row, vertically centred and clamped to its scrolled viewport. `None` when
-/// the row is not on screen, for example while another page is open.
-fn row_target(row: &ActionRow, window: &ApplicationWindow) -> Option<(f64, f64)> {
-    if !row.is_mapped() {
+/// Window-space landing point of a button tile's leader line: just left of
+/// the tile, vertically centred and clamped to its scrolled viewport. `None`
+/// when the tile is not on screen, for example while another page is open.
+fn row_target(tile: &impl IsA<gtk4::Widget>, window: &ApplicationWindow) -> Option<(f64, f64)> {
+    if !tile.is_mapped() {
         return None;
     }
-    let bounds = row.compute_bounds(window)?;
+    let bounds = tile.compute_bounds(window)?;
     let x = f64::from(bounds.x()) - 4.0;
     let mut y = f64::from(bounds.y()) + f64::from(bounds.height()) / 2.0;
-    if let Some(scroll) = row.ancestor(gtk4::ScrolledWindow::static_type())
+    if let Some(scroll) = tile.ancestor(gtk4::ScrolledWindow::static_type())
         && let Some(area) = scroll.compute_bounds(window)
     {
         let top = f64::from(area.y()) + 8.0;

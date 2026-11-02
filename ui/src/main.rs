@@ -91,11 +91,24 @@ fn load_css() {
         window.hud-blur {
             backdrop-filter: blur(30px);
         }
-        row.hud-tile {
-            padding: 10px 14px;
+        flowbox.hud-tiles {
+            padding: 0;
         }
-        row.hud-focus {
-            background: alpha(#edaa75, 0.22);
+        flowbox.hud-tiles flowboxchild {
+            padding: 12px 16px;
+            border-radius: 14px;
+            background-color: alpha(#ffffff, 0.04);
+            border: 1px solid alpha(#ffffff, 0.07);
+        }
+        flowbox.hud-tiles flowboxchild:hover {
+            background-color: alpha(#ffffff, 0.08);
+        }
+        flowbox.hud-tiles flowboxchild.hud-focus {
+            background-color: alpha(#edaa75, 0.16);
+            border-color: alpha(#edaa75, 0.45);
+        }
+        dropdown.hud-assign button {
+            min-width: 120px;
         }
         "
     );
