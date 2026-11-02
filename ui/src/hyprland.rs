@@ -5,8 +5,8 @@
 //!
 //! Detects a running Hyprland session, locates its configuration (Lua for
 //! 0.55+, legacy hyprlang otherwise) and appends the integration block when
-//! it is missing: window rules that float and center the settings window and
-//! a keybind that opens the button-mapping overlay. Existing configuration
+//! it is missing: a keybind that opens the button-mapping overlay. The HUD is
+//! a layer-shell surface, so it needs no window rules. Existing configuration
 //! is never rewritten, only appended, and the marker makes the operation
 //! idempotent.
 
@@ -20,21 +20,12 @@ const INTEGRATION_MARKER: &str = "logi-mx integration";
 /// Lua snippet for Hyprland 0.55 and newer.
 const LUA_BLOCK: &str = "
 -- logi-mx integration
-hl.window_rule({
-    name  = \"logi-mx-ui\",
-    match = { title = \"^Logitech MX Master 3S$\" },
-    float = true,
-    center = true,
-})
-
 hl.bind(\"SUPER + M\", hl.dsp.exec_cmd(\"logi-mx-ui\"))
 ";
 
 /// Legacy hyprlang snippet for pre-Lua configurations.
 const CONF_BLOCK: &str = "
 # logi-mx integration
-windowrulev2 = float, title:^(Logitech MX Master 3S)$
-windowrulev2 = center, title:^(Logitech MX Master 3S)$
 bind = SUPER, M, exec, logi-mx-ui
 ";
 
@@ -160,19 +151,15 @@ mod tests {
     }
 
     #[test]
-    fn lua_block_declares_rule_and_bind() {
-        assert!(LUA_BLOCK.contains("hl.window_rule"));
-        assert!(LUA_BLOCK.contains("float = true"));
-        assert!(LUA_BLOCK.contains("center = true"));
-        assert!(LUA_BLOCK.contains("hl.bind"));
+    fn lua_block_declares_bind_only() {
+        assert!(!LUA_BLOCK.contains("window_rule"));
         assert!(LUA_BLOCK.contains("hl.bind(\"SUPER + M\", hl.dsp.exec_cmd(\"logi-mx-ui\"))"));
     }
 
     #[test]
-    fn conf_block_declares_rules_and_bind() {
-        assert!(CONF_BLOCK.contains("windowrulev2 = float"));
-        assert!(CONF_BLOCK.contains("windowrulev2 = center"));
-        assert!(CONF_BLOCK.contains("bind = SUPER, M, exec"));
+    fn conf_block_declares_bind_only() {
+        assert!(!CONF_BLOCK.contains("windowrulev2"));
+        assert!(CONF_BLOCK.contains("bind = SUPER, M, exec, logi-mx-ui"));
     }
 
     #[test]

@@ -28,8 +28,8 @@ use std::{
 };
 
 use gtk4::{
-    Box as GtkBox, Button, CheckButton, DropDown, Entry, EventControllerKey,
-    EventControllerMotion, GestureClick, Label, Orientation, Scale, ScrolledWindow, Switch, glib
+    Box as GtkBox, Button, CheckButton, DropDown, EventControllerKey, EventControllerMotion,
+    GestureClick, Label, Orientation, Scale, ScrolledWindow, Switch, glib
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
@@ -392,7 +392,8 @@ struct HudState {
     hover:       Option<MouseButton>,
     assignments: HashMap<MouseButton, String>,
     live:        LiveVisual,
-    bg:          BgMode
+    bg:          BgMode,
+    act_as:      Option<PreferencesGroup>
 }
 
 /// Shared handle to the button rows of the open window, keyed by button.
@@ -436,6 +437,13 @@ fn queue_leaders() {
 /// persistent selection, so both halves of the HUD always agree.
 fn sync_row_focus(state: &HudState) {
     let focus = state.hover.or(state.selected);
+    if let Some(group) = state.act_as.as_ref() {
+        let title = state.selected.map_or_else(
+            || "Act as".to_string(),
+            |b| format!("Act as — {}", b.label())
+        );
+        group.set_title(&title);
+    }
     ROWS_REGISTRY.with(|registry| {
         let Some(rows) = registry.borrow().as_ref().map(Rc::clone) else {
             return;
@@ -945,61 +953,8 @@ fn remap_section(
     group
 }
 
-/// Builds the custom action section: a keypress sequence stored per button and
-/// executed by the daemon input engine.
-fn custom_section(
-    state: &Rc<RefCell<HudState>>,
-    drawing: &gtk4::DrawingArea,
-    toast: &ToastOverlay,
-    rows: &RowMap
-) -> PreferencesGroup {
-    let group = PreferencesGroup::new();
-    group.set_title("Custom");
-    group.set_description(Some("Keypress actions run through the daemon input engine"));
-
-    let entry = Entry::new();
-    entry.set_placeholder_text(Some("e.g. ctrl+c"));
-    entry.set_hexpand(true);
-    let save = Button::with_label("Save");
-    save.add_css_class("pill");
-
-    let state_custom = Rc::clone(state);
-    let drawing_custom = drawing.clone();
-    let toast_custom = toast.clone();
-    let entry_save = entry.clone();
-    let rows_custom = Rc::clone(rows);
-    save.connect_clicked(move |_| {
-        let Some(selected) = state_custom.borrow().selected else {
-            toast_custom.add_toast(Toast::new("Select a button first"));
-            return;
-        };
-        let text = entry_save.text().trim().to_string();
-        if text.is_empty() {
-            toast_custom.add_toast(Toast::new("Type a keypress, e.g. ctrl+c"));
-            return;
-        }
-        let action = format!("Keypress: {text}");
-        set_assignment(
-            &state_custom,
-            &rows_custom,
-            &drawing_custom,
-            selected,
-            Some(action.clone())
-        );
-        toast_custom.add_toast(Toast::new(&format!("{} → {action}", selected.label())));
-    });
-
-    let custom_box = GtkBox::new(Orientation::Horizontal, 12);
-    custom_box.append(&entry);
-    custom_box.append(&save);
-    let custom_row = ActionRow::new();
-    custom_row.set_child(Some(&custom_box));
-    group.add(&custom_row);
-    group
-}
-
-/// Creates the assignment page: a button list that highlights the diagram,
-/// grouped native remap targets and a custom keypress slot.
+/// Creates the assignment page: a button list that highlights the diagram
+/// and the native remap picker for the selected button.
 fn buttons_page(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
@@ -1012,8 +967,9 @@ fn buttons_page(
     let box_ = GtkBox::new(Orientation::Vertical, 0);
     let (buttons_group, rows) = buttons_list_section(state, drawing);
     box_.append(&buttons_group);
-    box_.append(&remap_section(state, drawing, toast, &rows));
-    box_.append(&custom_section(state, drawing, toast, &rows));
+    let remap = remap_section(state, drawing, toast, &rows);
+    state.borrow_mut().act_as = Some(remap.clone());
+    box_.append(&remap);
     scroll.set_child(Some(&box_));
     scroll
 }
