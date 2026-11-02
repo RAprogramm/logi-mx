@@ -21,8 +21,9 @@ use crate::{
         BatteryStatusFunction, BatteryUnifiedFunction, ChangeHostFunction, DpiFunction,
         FEATURE_ADJUSTABLE_DPI, FEATURE_BATTERY_STATUS, FEATURE_CHANGE_HOST, FEATURE_DEVICE_NAME,
         FEATURE_HIRES_WHEEL, FEATURE_REPROG_CONTROLS, FEATURE_SMART_SHIFT,
-        FEATURE_UNIFIED_BATTERY, HidppDevice, HiresWheelFunction, ReprogControlsFunction,
-        SmartShiftFunction
+        FEATURE_UNIFIED_BATTERY, HidppDevice, HidppPacket, HiresWheelFunction,
+        ReprogControlsFunction, ReprogNotification, SmartShiftFunction,
+        decode_reprog_notification
     }
 };
 
@@ -630,6 +631,37 @@ impl MxMaster3s {
 
         info!("Control {control_id:04X} remapped to {target_cid:04X}");
         Ok(())
+    }
+
+    /// Reads one pending Reprogrammable Controls notification, if any.
+    ///
+    /// Diverted controls stream unsolicited reports while held: pressed
+    /// control IDs and raw pointer deltas. This drains a single report,
+    /// waiting up to `timeout_ms` (`0` polls without blocking) and returning
+    /// `None` on timeout, transport failure, or reports of other features,
+    /// so callers can poll it cheaply from an event loop.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout_ms` - Read timeout in milliseconds.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use logi_mx_driver::devices::MxMaster3s;
+    ///
+    /// let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
+    /// while let Some(note) = device.read_reprog_notification(0) {
+    ///     println!("{note:?}");
+    /// }
+    /// # Ok::<(), masterror::AppError>(())
+    /// ```
+    #[must_use]
+    pub fn read_reprog_notification(&mut self, timeout_ms: i32) -> Option<ReprogNotification> {
+        let feature_index = self.hidpp.feature_index(FEATURE_REPROG_CONTROLS).ok()?;
+        let bytes = self.hidpp.read_raw(timeout_ms)?;
+        let packet = HidppPacket::from_bytes(&bytes).ok()?;
+        decode_reprog_notification(feature_index, &packet)
     }
 
     fn battery_via(&mut self, feature_id: u16, function: u8) -> Result<BatteryInfo> {
