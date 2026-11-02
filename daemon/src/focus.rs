@@ -65,12 +65,13 @@ fn discover_dir(runtime: &str) -> Option<PathBuf> {
         .map(|entry| entry.path())
 }
 
-/// Extracts the `class` field from an `activewindow` JSON reply.
-fn extract_class(json: &str) -> Option<&str> {
-    let rest = json.split("\"class\":\"").nth(1)?;
-    let end = rest.find('"')?;
-    let class = &rest[..end];
-    (!class.is_empty()).then_some(class)
+/// Extracts the `class:` field from an `activewindow` text reply.
+fn text_class(reply: &str) -> Option<&str> {
+    reply
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("class:"))
+        .map(str::trim)
+        .filter(|class| !class.is_empty())
 }
 
 /// Parses one event-socket line, returning the class of an `activewindow`
@@ -88,7 +89,7 @@ fn initial_class(dir: &Path) -> Option<String> {
     stream.flush().ok()?;
     let mut reply = String::new();
     stream.read_to_string(&mut reply).ok()?;
-    extract_class(&reply).map(str::to_owned)
+    text_class(&reply).map(str::to_owned)
 }
 
 /// Stores a focus class, replacing the previous value.
@@ -176,16 +177,16 @@ mod tests {
     }
 
     #[test]
-    fn extract_class_reads_the_json_field() {
-        let json = r#"{"address":"0x1","class":"dota2","title":"Dota 2"}"#;
-        assert_eq!(extract_class(json), Some("dota2"));
+    fn text_class_reads_the_class_line() {
+        let reply = "Window 0x1 -> [1/2] Dota 2:\n\tmapped: 1\n\tclass: dota2\n\ttitle: Dota 2\n";
+        assert_eq!(text_class(reply), Some("dota2"));
     }
 
     #[test]
-    fn extract_class_rejects_malformed_replies() {
-        assert_eq!(extract_class("{}"), None);
-        assert_eq!(extract_class(r#"{"class":""}"#), None);
-        assert_eq!(extract_class(r#"{"class":"unterminated"#), None);
+    fn text_class_rejects_replies_without_a_class() {
+        assert_eq!(text_class("Window 0x1 -> [1/2] x:\n"), None);
+        assert_eq!(text_class("\tclass:\n"), None);
+        assert_eq!(text_class(""), None);
     }
 
     #[test]
