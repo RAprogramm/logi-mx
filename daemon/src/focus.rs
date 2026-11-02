@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
+    time::Duration
 };
 
 use tracing::{debug, info};
@@ -82,7 +82,7 @@ fn event_class(line: &str) -> Option<&str> {
 
 /// Queries the currently active window class through the request socket.
 fn initial_class(dir: &Path) -> Option<String> {
-    let mut stream = UnixStream::connect(dir.join(".socket1.sock")).ok()?;
+    let mut stream = UnixStream::connect(dir.join(".socket.sock")).ok()?;
     stream.set_read_timeout(Some(QUERY_TIMEOUT)).ok()?;
     stream.write_all(b"activewindow").ok()?;
     stream.flush().ok()?;
@@ -108,7 +108,7 @@ fn follow(stream: &UnixStream, shared: &SharedFocus) -> std::io::Result<()> {
         if reader.read_line(&mut line)? == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
-                "focus event stream closed",
+                "focus event stream closed"
             ));
         }
         let trimmed = line.trim_end();
@@ -137,7 +137,7 @@ pub fn spawn_watcher(shared: SharedFocus) {
                     .and_then(|stream| follow(&stream, &shared))
                 {
                     Ok(()) => {}
-                    Err(e) => info!("focus watcher: event stream ended: {e}"),
+                    Err(e) => info!("focus watcher: event stream ended: {e}")
                 }
                 store(&shared, None);
                 thread::sleep(RECONNECT_DELAY);
@@ -200,10 +200,12 @@ mod tests {
             Some("firefox")
         );
         store(&shared, None);
-        assert!(shared
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_none());
+        assert!(
+            shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+        );
     }
 
     #[test]
