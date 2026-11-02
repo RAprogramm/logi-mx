@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
-    time::Duration
+    time::Duration,
 };
 
 use tracing::{debug, info};
@@ -38,12 +38,31 @@ pub fn new_shared() -> SharedFocus {
     Arc::new(Mutex::new(None))
 }
 
-/// Resolves the Hyprland socket directory from the environment.
+/// Resolves the Hyprland socket directory: first from the environment, then
+/// by discovering the newest live instance on disk. The fallback matters for
+/// systemd user services, which do not inherit `HYPRLAND_INSTANCE_SIGNATURE`.
 fn instance_dir() -> Option<PathBuf> {
-    let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
     let runtime = std::env::var("XDG_RUNTIME_DIR").ok()?;
+    env_dir(&runtime).or_else(|| discover_dir(&runtime))
+}
+
+/// The instance directory named by `HYPRLAND_INSTANCE_SIGNATURE`, if it
+/// exists.
+fn env_dir(runtime: &str) -> Option<PathBuf> {
+    let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
     let dir = PathBuf::from(runtime).join("hypr").join(signature);
     dir.is_dir().then_some(dir)
+}
+
+/// The newest `hypr/<signature>` directory that carries an event socket.
+fn discover_dir(runtime: &str) -> Option<PathBuf> {
+    let root = Path::new(runtime).join("hypr");
+    let entries = std::fs::read_dir(root).ok()?;
+    entries
+        .flatten()
+        .filter(|entry| entry.path().join(".socket2.sock").is_file())
+        .max_by_key(|entry| entry.metadata().ok().and_then(|m| m.modified().ok()))
+        .map(|entry| entry.path())
 }
 
 /// Extracts the `class` field from an `activewindow` JSON reply.
@@ -89,7 +108,7 @@ fn follow(stream: &UnixStream, shared: &SharedFocus) -> std::io::Result<()> {
         if reader.read_line(&mut line)? == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
-                "focus event stream closed"
+                "focus event stream closed",
             ));
         }
         let trimmed = line.trim_end();
@@ -108,6 +127,7 @@ pub fn spawn_watcher(shared: SharedFocus) {
                 debug!("focus watcher: no Hyprland sockets; per-app profiles stay inactive");
                 return;
             };
+            info!("focus watcher: following {}", dir.display());
             if let Some(class) = initial_class(&dir) {
                 info!("focus watcher: active window class {class:?}");
                 store(&shared, Some(&class));
@@ -117,7 +137,7 @@ pub fn spawn_watcher(shared: SharedFocus) {
                     .and_then(|stream| follow(&stream, &shared))
                 {
                     Ok(()) => {}
-                    Err(e) => info!("focus watcher: event stream ended: {e}")
+                    Err(e) => info!("focus watcher: event stream ended: {e}"),
                 }
                 store(&shared, None);
                 thread::sleep(RECONNECT_DELAY);
@@ -180,11 +200,32 @@ mod tests {
             Some("firefox")
         );
         store(&shared, None);
-        assert!(
-            shared
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none()
-        );
+        assert!(shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none());
+    }
+
+    #[test]
+    fn env_dir_requires_the_signature_to_exist() {
+        assert!(env_dir("/nonexistent-logi-mx").is_none());
+    }
+
+    #[test]
+    fn discover_dir_picks_the_instance_with_a_live_socket() {
+        let root = std::env::temp_dir().join(format!("logi-mx-focus-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dead = root.join("hypr").join("dead");
+        let live = root.join("hypr").join("live");
+        std::fs::create_dir_all(&dead).unwrap();
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join(".socket2.sock"), b"").unwrap();
+        assert_eq!(discover_dir(&root.display().to_string()), Some(live));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discover_dir_is_none_without_the_hypr_root() {
+        assert!(discover_dir("/nonexistent-logi-mx").is_none());
     }
 }
