@@ -10,7 +10,9 @@
 
 use std::{path::PathBuf, sync::mpsc, time::Duration};
 
-use logi_mx_driver::prelude::{HiResScrollConfig, ReprogControl, SmartShiftConfig};
+use logi_mx_driver::prelude::{
+    Gesture, GestureDirection, GestureMode, HiResScrollConfig, ReprogControl, SmartShiftConfig
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -141,6 +143,27 @@ pub enum Request {
         /// Zero-based host index.
         host: u8
     },
+    /// Read the gesture configuration: opt-in flag and bindings.
+    GetGestures,
+    /// Enable or disable software gesture recognition; persists to config.
+    SetGesturesEnabled {
+        /// Whether the daemon should own the gesture button.
+        enabled: bool
+    },
+    /// Bind a key sequence to a gesture direction; persists to config.
+    SetGesture {
+        /// Direction to bind.
+        direction: GestureDirection,
+        /// When the action fires.
+        mode:      GestureMode,
+        /// `KEY_*` names to inject, validated against the evdev table.
+        keys:      Vec<String>
+    },
+    /// Remove the binding for a gesture direction; persists to config.
+    ClearGesture {
+        /// Direction to unbind.
+        direction: GestureDirection
+    },
     /// Subscribe to live input telemetry; the connection becomes a stream of
     /// [`Response::Live`] lines until it is closed.
     WatchLive
@@ -195,6 +218,13 @@ pub enum Response {
     HiresScroll {
         /// Current config.
         config: HiResScrollConfig
+    },
+    /// `GetGestures` reply.
+    Gestures {
+        /// Whether software gesture recognition is enabled.
+        enabled:  bool,
+        /// Current bindings.
+        gestures: Vec<Gesture>
     },
     /// Generic success for setters.
     Ok,

@@ -119,7 +119,7 @@ fn run_device_worker(
         crate::systemd::mark_worker_beat();
 
         while let Ok(req) = rpc_rx.try_recv() {
-            handle_rpc(req, &mut manager);
+            handle_rpc(req, &mut manager, &mut gestures);
         }
 
         let poll = if gestures.is_holding() {
@@ -130,7 +130,7 @@ fn run_device_worker(
         let should_refresh = match rx.recv_timeout(poll) {
             Ok(DeviceEvent::Added(path)) => {
                 manager.handle_device_added(path);
-                manager.for_each_cached_mut(|device| gestures.attach(device));
+                manager.for_each_cached_mut(|device| gestures.apply(device));
                 true
             }
             Ok(DeviceEvent::Removed(path)) => {
@@ -203,53 +203,149 @@ fn refresh_and_notify(
     }
 }
 
-fn handle_rpc(request: RpcRequest, manager: &mut DevicePool) {
-    let response = handle_request(manager, &request.request);
+fn handle_rpc(request: RpcRequest, manager: &mut DevicePool, gestures: &mut GestureRuntime) {
+    let response = handle_request(manager, gestures, &request.request);
     let _ = request.responder.send(response);
+}
+
+/// Pushes the stored gesture configuration into the runtime and applies the
+/// divert state to every connected device.
+fn apply_gestures(manager: &DevicePool, gestures: &mut GestureRuntime) {
+    let (enabled, bindings) = manager.gesture_config();
+    gestures.set_enabled(enabled, bindings);
+    manager.for_each_cached_mut(|device| gestures.apply(device));
+}
+
+/// Handles the configuration-only gesture requests that never touch the
+/// device; returns `None` for every other request.
+fn handle_gesture_request(
+    manager: &mut DevicePool,
+    gestures: &mut GestureRuntime,
+    request: &ipc::Request
+) -> Option<ipc::Response> {
+    let stored: std::result::Result<(), masterror::AppError> = match request {
+        ipc::Request::GetGestures => {
+            let (enabled, bindings) = manager.gesture_config();
+            return Some(ipc::Response::Gestures {
+                enabled,
+                gestures: bindings
+            });
+        }
+        ipc::Request::SetGesturesEnabled {
+            enabled
+        } => {
+            let (_, bindings) = manager.gesture_config();
+            manager.set_gestures(*enabled, bindings)
+        }
+        ipc::Request::SetGesture {
+            direction,
+            mode,
+            keys
+        } => {
+            if let Err(e) = crate::inject::resolve_sequence(keys) {
+                return Some(ipc::Response::Error {
+                    message: e.to_string()
+                });
+            }
+            let (enabled, mut bindings) = manager.gesture_config();
+            bindings.retain(|gesture| gesture.direction != *direction);
+            bindings.push(Gesture {
+                direction: *direction,
+                mode:      *mode,
+                action:    Box::new(Action::Keypress {
+                    keys: keys.clone()
+                })
+            });
+            manager.set_gestures(enabled, bindings)
+        }
+        ipc::Request::ClearGesture {
+            direction
+        } => {
+            let (enabled, mut bindings) = manager.gesture_config();
+            bindings.retain(|gesture| gesture.direction != *direction);
+            manager.set_gestures(enabled, bindings)
+        }
+        _ => return None
+    };
+
+    Some(match stored {
+        Ok(()) => {
+            apply_gestures(manager, gestures);
+            ipc::Response::Ok
+        }
+        Err(e) => ipc::Response::Error {
+            message: e.to_string()
+        }
+    })
 }
 
 /// Executes one RPC request against the pooled device.
 ///
 /// `WatchLive` connections are answered by the IPC server itself and never
 /// reach this function; the arm exists to keep the protocol exhaustive.
-fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Response {
+fn handle_request(
+    manager: &mut DevicePool,
+    gestures: &mut GestureRuntime,
+    request: &ipc::Request
+) -> ipc::Response {
+    if let Some(response) = handle_gesture_request(manager, gestures, request) {
+        return response;
+    }
+    handle_device_request(manager, request)
+}
+
+/// Answers read-only device requests; `Ok(None)` for every other request.
+fn handle_device_read(
+    device: &mut MxMaster3s,
+    request: &ipc::Request
+) -> std::result::Result<Option<ipc::Response>, masterror::AppError> {
+    Ok(Some(match request {
+        ipc::Request::Ping => ipc::Response::Pong,
+        ipc::Request::Info => handle_info(device),
+        ipc::Request::Battery => handle_battery(device),
+        ipc::Request::Hosts => {
+            let (hosts, current) = device.host_info()?;
+            ipc::Response::Hosts {
+                hosts,
+                current
+            }
+        }
+        ipc::Request::Buttons => {
+            let controls = device.list_reprog_controls()?;
+            ipc::Response::Buttons {
+                controls
+            }
+        }
+        ipc::Request::Dpi => {
+            let value = device.dpi()?;
+            ipc::Response::Dpi {
+                value
+            }
+        }
+        ipc::Request::SmartShift => {
+            let config = device.smartshift()?;
+            ipc::Response::SmartShift {
+                config
+            }
+        }
+        ipc::Request::HiresScroll => {
+            let config = device.hires_scroll()?;
+            ipc::Response::HiresScroll {
+                config
+            }
+        }
+        _ => return Ok(None)
+    }))
+}
+
+/// Executes a device-bound RPC request against the pooled device.
+fn handle_device_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Response {
     match manager.with_device(
         |device| -> std::result::Result<ipc::Response, masterror::AppError> {
+            if let Some(response) = handle_device_read(device, request)? {
+                return Ok(response);
+            }
             Ok(match request {
-                ipc::Request::Ping => ipc::Response::Pong,
-                ipc::Request::Info => handle_info(device),
-                ipc::Request::Battery => handle_battery(device),
-                ipc::Request::Hosts => {
-                    let (hosts, current) = device.host_info()?;
-                    ipc::Response::Hosts {
-                        hosts,
-                        current
-                    }
-                }
-                ipc::Request::Buttons => {
-                    let controls = device.list_reprog_controls()?;
-                    ipc::Response::Buttons {
-                        controls
-                    }
-                }
-                ipc::Request::Dpi => {
-                    let value = device.dpi()?;
-                    ipc::Response::Dpi {
-                        value
-                    }
-                }
-                ipc::Request::SmartShift => {
-                    let config = device.smartshift()?;
-                    ipc::Response::SmartShift {
-                        config
-                    }
-                }
-                ipc::Request::HiresScroll => {
-                    let config = device.hires_scroll()?;
-                    ipc::Response::HiresScroll {
-                        config
-                    }
-                }
                 ipc::Request::SetDpi {
                     value
                 } => {
@@ -303,6 +399,9 @@ fn handle_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Resp
                 }
                 ipc::Request::WatchLive => ipc::Response::Error {
                     message: "live streaming is handled by the IPC server".to_string()
+                },
+                _ => ipc::Response::Error {
+                    message: "request is answered before device writes".to_string()
                 }
             })
         }
@@ -455,6 +554,45 @@ impl DevicePool {
         for device in guard.values_mut() {
             f(device);
         }
+    }
+
+    /// Reads the gesture opt-in and bindings from the stored configuration.
+    fn gesture_config(&self) -> (bool, Vec<Gesture>) {
+        let Some(device) = self.config.devices.first() else {
+            return (false, Vec::new());
+        };
+        let bindings = match device.buttons.get(&ButtonId::ThumbGesture) {
+            Some(Action::Gestures {
+                gestures
+            }) => gestures.clone(),
+            _ => Vec::new()
+        };
+        (device.gestures_enabled, bindings)
+    }
+
+    /// Writes the gesture opt-in and bindings into the configuration and
+    /// persists it to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no device entry exists or the file cannot be
+    /// written.
+    fn set_gestures(
+        &mut self,
+        enabled: bool,
+        gestures: Vec<Gesture>
+    ) -> std::result::Result<(), masterror::AppError> {
+        let Some(device) = self.config.devices.first_mut() else {
+            return Err(masterror::AppError::bad_request("No configured device"));
+        };
+        device.gestures_enabled = enabled;
+        device.buttons.insert(
+            ButtonId::ThumbGesture,
+            Action::Gestures {
+                gestures
+            }
+        );
+        save_config(&self.config)
     }
 
     /// Drops the stored device handle for a removed hidraw path.

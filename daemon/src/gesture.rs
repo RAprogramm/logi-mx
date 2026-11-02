@@ -300,25 +300,34 @@ impl GestureRuntime {
         self.accumulator.is_holding()
     }
 
+    /// Replaces the bindings from a configuration change; disabling drops
+    /// them so [`Self::should_divert`] goes false and the button is released
+    /// back to the firmware on the next [`Self::apply`].
+    pub fn set_enabled(&mut self, enabled: bool, bindings: Vec<Gesture>) {
+        self.bindings = if enabled { bindings } else { Vec::new() };
+    }
+
     /// Diverts the gesture button after a device attach.
     ///
     /// When gestures are not configured the button is defensively undiverted
     /// once: the divert flag persists in firmware, so this heals a button
     /// stranded by a previous session or a crashed daemon.
-    pub fn attach(&mut self, device: &mut MxMaster3s) {
-        if self.diverted {
-            return;
-        }
-        if !self.should_divert() {
-            let _ = device.set_control_divert(control_id::GESTURE_BUTTON, false, false);
-            return;
-        }
-        match device.set_control_divert(control_id::GESTURE_BUTTON, true, true) {
-            Ok(()) => {
-                self.diverted = true;
-                info!("gesture button diverted for software recognition");
+    pub fn apply(&mut self, device: &mut MxMaster3s) {
+        if self.should_divert() {
+            if self.diverted {
+                return;
             }
-            Err(e) => warn!("failed to divert the gesture button: {e}")
+            match device.set_control_divert(control_id::GESTURE_BUTTON, true, true) {
+                Ok(()) => {
+                    self.diverted = true;
+                    info!("gesture button diverted for software recognition");
+                }
+                Err(e) => warn!("failed to divert the gesture button: {e}")
+            }
+        } else if self.diverted {
+            self.detach(device);
+        } else {
+            let _ = device.set_control_divert(control_id::GESTURE_BUTTON, false, false);
         }
     }
 
