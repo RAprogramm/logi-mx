@@ -188,6 +188,31 @@ pub enum Request {
         /// Direction to unbind.
         direction: GestureDirection
     },
+    /// Bind an action inside a per-application profile; persists to config.
+    SetAppGesture {
+        /// Hyprland window class the profile applies to.
+        app_id:    String,
+        /// Direction to bind.
+        direction: GestureDirection,
+        /// When the action fires.
+        mode:      GestureMode,
+        /// Action to run: a validated `KEY_*` sequence or a shell command.
+        action:    Box<Action>
+    },
+    /// Remove one direction from a per-application profile; persists.
+    ClearAppGesture {
+        /// Hyprland window class.
+        app_id:    String,
+        /// Direction to unbind.
+        direction: GestureDirection
+    },
+    /// Delete a per-application profile entirely; persists.
+    RemoveAppProfile {
+        /// Hyprland window class.
+        app_id: String
+    },
+    /// Report the currently focused Hyprland window class, if any.
+    GetFocusedApp,
     /// Subscribe to live input telemetry; the connection becomes a stream of
     /// [`Response::Live`] lines until it is closed.
     WatchLive
@@ -247,8 +272,15 @@ pub enum Response {
     Gestures {
         /// Whether software gesture recognition is enabled.
         enabled:  bool,
-        /// Current bindings.
-        gestures: Vec<Gesture>
+        /// Current global bindings.
+        gestures: Vec<Gesture>,
+        /// Per-application overrides keyed by window class.
+        profiles: std::collections::HashMap<String, Vec<Gesture>>
+    },
+    /// The focused window class reported by the desktop, if any.
+    FocusedApp {
+        /// Hyprland window class of the focused window.
+        app_id: Option<String>
     },
     /// Generic success for setters.
     Ok,

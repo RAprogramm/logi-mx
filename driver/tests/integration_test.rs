@@ -129,7 +129,8 @@ fn test_multiple_devices_config() {
             inverted: true
         },
         buttons:          std::collections::HashMap::new(),
-        gestures_enabled: false
+        gestures_enabled: false,
+        gesture_profiles: std::collections::HashMap::new()
     });
 
     assert_eq!(config.devices.len(), 2);

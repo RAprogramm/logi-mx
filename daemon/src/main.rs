@@ -9,6 +9,7 @@ mod tray_icon;
 #[cfg(feature = "notify")]
 mod notify;
 
+mod focus;
 mod gesture;
 mod inject;
 mod ipc;

@@ -206,6 +206,74 @@ fn test_runtime_empty_config_is_inert() {
     assert!(!runtime.should_divert());
 }
 
+fn key_gesture(direction: GestureDirection, key: &str) -> Gesture {
+    Gesture {
+        direction,
+        mode: GestureMode::OnRelease,
+        action: Box::new(Action::Keypress {
+            keys: vec![key.to_string()]
+        })
+    }
+}
+
+#[test]
+fn test_profile_replaces_only_its_direction() {
+    let mut runtime = GestureRuntime::default();
+    runtime.set_config(
+        true,
+        vec![
+            key_gesture(GestureDirection::Left, "KEY_A"),
+            key_gesture(GestureDirection::Right, "KEY_B"),
+        ],
+        HashMap::from([(
+            "firefox".to_string(),
+            vec![key_gesture(GestureDirection::Left, "KEY_C")]
+        )])
+    );
+
+    assert_eq!(
+        runtime.effective_bindings().len(),
+        2,
+        "without focus the global set applies"
+    );
+
+    runtime.attach_focus(crate::focus::new_shared());
+    *runtime
+        .focus
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some("firefox".to_string());
+
+    let effective = runtime.effective_bindings();
+    let left = effective
+        .iter()
+        .find(|g| g.direction == GestureDirection::Left)
+        .expect("left bound");
+    assert!(
+        matches!(left.action.as_ref(), Action::Keypress { keys } if keys == &vec!["KEY_C".to_string()]),
+        "the focused profile must win for its direction"
+    );
+    assert_eq!(effective.len(), 2, "the untouched direction falls through");
+}
+
+#[test]
+fn test_profiles_alone_still_require_the_divert() {
+    let mut runtime = GestureRuntime::default();
+    runtime.set_config(
+        true,
+        Vec::new(),
+        HashMap::from([(
+            "dota2".to_string(),
+            vec![key_gesture(GestureDirection::Up, "KEY_UP")]
+        )])
+    );
+    assert!(
+        runtime.should_divert(),
+        "a non-empty profile must keep the button diverted"
+    );
+    runtime.set_config(false, Vec::new(), HashMap::new());
+    assert!(!runtime.should_divert(), "disabling releases the button");
+}
+
 #[test]
 fn test_runtime_release_without_press_is_ignored() {
     let mut runtime = GestureRuntime::default();

@@ -13,6 +13,7 @@
 //! inside the input pump, only misfire.
 
 use std::{
+    collections::HashMap,
     sync::atomic::Ordering,
     time::{Duration, Instant}
 };
@@ -21,6 +22,7 @@ use logi_mx_driver::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::{
+    focus::SharedFocus,
     inject::Injector,
     ipc::{BTN_BIT_DPI, BTN_BIT_GESTURE, LiveFrame, LiveHub, SharedLiveState}
 };
@@ -267,6 +269,8 @@ struct DpiButton {
 #[derive(Default)]
 pub struct GestureRuntime {
     bindings:           Vec<Gesture>,
+    profiles:           HashMap<String, Vec<Gesture>>,
+    focus:              SharedFocus,
     diverted:           bool,
     dpi:                DpiButton,
     smartshift:         SmartShiftConfig,
@@ -282,14 +286,14 @@ pub struct GestureRuntime {
 impl GestureRuntime {
     /// Builds the runtime from the first configured device entry.
     ///
-    /// Without the `gestures_enabled` opt-in the bindings are dropped, so a
-    /// disabled runtime can never divert the button.
+    /// Without the `gestures_enabled` opt-in the bindings and profiles are
+    /// dropped, so a disabled runtime can never divert the button.
     #[must_use]
     pub fn from_config(config: &Config) -> Self {
         let Some(device) = config.devices.first() else {
             return Self::default();
         };
-        let bindings = match (
+        let (bindings, profiles) = match (
             device.gestures_enabled,
             device.buttons.get(&ButtonId::ThumbGesture)
         ) {
@@ -298,11 +302,12 @@ impl GestureRuntime {
                 Some(Action::Gestures {
                     gestures
                 })
-            ) => gestures.clone(),
-            _ => Vec::new()
+            ) => (gestures.clone(), device.gesture_profiles.clone()),
+            _ => (Vec::new(), HashMap::new())
         };
         Self {
             bindings,
+            profiles,
             smartshift: device.smartshift,
             ..Self::default()
         }
@@ -314,10 +319,24 @@ impl GestureRuntime {
         self.hub = Some(hub);
     }
 
+    /// Attaches the shared focus slot consulted when resolving bindings.
+    pub fn attach_focus(&mut self, focus: SharedFocus) {
+        self.focus = focus;
+    }
+
+    /// The class of the currently focused window, if the desktop reports one.
+    #[must_use]
+    pub fn focused_app(&self) -> Option<String> {
+        self.focus
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Whether the gesture button must be diverted for this configuration.
     #[must_use]
-    pub const fn should_divert(&self) -> bool {
-        !self.bindings.is_empty()
+    pub fn should_divert(&self) -> bool {
+        !self.bindings.is_empty() || self.profiles.values().any(|bindings| !bindings.is_empty())
     }
 
     /// Whether a gesture hold is currently in progress; callers poll faster
@@ -327,11 +346,44 @@ impl GestureRuntime {
         self.accumulator.is_holding()
     }
 
-    /// Replaces the bindings from a configuration change; disabling drops
-    /// them so [`Self::should_divert`] goes false and the button is released
-    /// back to the firmware on the next [`Self::apply`].
-    pub fn set_enabled(&mut self, enabled: bool, bindings: Vec<Gesture>) {
-        self.bindings = if enabled { bindings } else { Vec::new() };
+    /// Replaces the bindings and per-app profiles from a configuration
+    /// change; disabling drops everything so [`Self::should_divert`] goes
+    /// false and the button is released back to the firmware on the next
+    /// [`Self::apply`].
+    pub fn set_config(
+        &mut self,
+        enabled: bool,
+        bindings: Vec<Gesture>,
+        profiles: HashMap<String, Vec<Gesture>>
+    ) {
+        if enabled {
+            self.bindings = bindings;
+            self.profiles = profiles;
+        } else {
+            self.bindings = Vec::new();
+            self.profiles = HashMap::new();
+        }
+    }
+
+    /// The bindings in force right now: the global set with the focused
+    /// app's profile layered on top. A profile entry replaces the global
+    /// binding for its direction; directions the profile does not mention
+    /// fall through to the global set.
+    fn effective_bindings(&self) -> Vec<Gesture> {
+        let focused = self.focused_app();
+        let profile = focused.as_deref().and_then(|app| self.profiles.get(app));
+        self.bindings
+            .iter()
+            .filter(|binding| {
+                profile.is_none_or(|overrides| {
+                    !overrides
+                        .iter()
+                        .any(|entry| entry.direction == binding.direction)
+                })
+            })
+            .chain(profile.into_iter().flatten())
+            .cloned()
+            .collect()
     }
 
     /// Diverts the gesture and wheel-mode buttons after a device attach.
@@ -537,7 +589,8 @@ impl GestureRuntime {
     /// Fires every binding matching the direction; `mode` restricts the fire
     /// moment, while `None` fires both modes (release commit and click).
     fn fire(&mut self, direction: GestureDirection, mode: Option<GestureMode>) {
-        for gesture in &self.bindings {
+        let gestures = self.effective_bindings();
+        for gesture in &gestures {
             if gesture.direction != direction {
                 continue;
             }

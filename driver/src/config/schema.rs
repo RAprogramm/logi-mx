@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::devices::{
-    Action, ButtonId, GestureDirection, GestureMode, HiResScrollConfig, SmartShiftConfig
+    Action, ButtonId, Gesture, GestureDirection, GestureMode, HiResScrollConfig, SmartShiftConfig
 };
 
 /// Root configuration schema persisted at `~/.config/logi-mx.toml`.
@@ -64,7 +64,14 @@ pub struct DeviceConfig {
     /// Disabled by default so the button keeps its native firmware behaviour
     /// until the user opts in.
     #[serde(default)]
-    pub gestures_enabled: bool
+    pub gestures_enabled: bool,
+
+    /// Per-application gesture overrides keyed by the Hyprland window class.
+    /// A direction bound in a profile replaces the global binding for that
+    /// direction while the app is focused; unbound directions fall through
+    /// to the global set.
+    #[serde(default)]
+    pub gesture_profiles: HashMap<String, Vec<Gesture>>
 }
 
 const fn default_dpi() -> u16 {
@@ -140,7 +147,8 @@ impl Default for DeviceConfig {
                 inverted: false
             },
             buttons,
-            gestures_enabled: false
+            gestures_enabled: false,
+            gesture_profiles: HashMap::new()
         }
     }
 }

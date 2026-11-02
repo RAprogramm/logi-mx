@@ -660,11 +660,26 @@ fn set_gestures_enabled(enabled: bool) -> Result<()> {
     out.finish()
 }
 
-/// Prints the stored gesture opt-in and every binding.
+/// Renders one gesture binding as `DIRECTION (mode): action`.
+fn gesture_line(gesture: &Gesture) -> String {
+    let action = match gesture.action.as_ref() {
+        Action::Keypress {
+            keys
+        } => keys.join("+"),
+        Action::Command {
+            command
+        } => format!("$ {command}"),
+        other => format!("{other:?}")
+    };
+    format!("{:?} ({:?}): {action}", gesture.direction, gesture.mode)
+}
+
+/// Prints the stored gesture opt-in, every binding and the per-app profiles.
 fn show_gestures() -> Result<()> {
     let Some(Response::Gestures {
         enabled,
-        gestures
+        gestures,
+        profiles
     }) = try_request(&Request::GetGestures)
     else {
         return Err(AppError::internal(
@@ -680,19 +695,15 @@ fn show_gestures() -> Result<()> {
         out.line(format_args!("  No bindings"))?;
     }
     for gesture in &gestures {
-        let action = match gesture.action.as_ref() {
-            Action::Keypress {
-                keys
-            } => keys.join("+"),
-            Action::Command {
-                command
-            } => format!("$ {command}"),
-            other => format!("{other:?}")
-        };
-        out.line(format_args!(
-            "  {:?} ({:?}): {action}",
-            gesture.direction, gesture.mode
-        ))?;
+        out.line(format_args!("  {}", gesture_line(gesture)))?;
+    }
+    let mut apps: Vec<&String> = profiles.keys().collect();
+    apps.sort_unstable();
+    for app in apps {
+        out.line(format_args!("[{app}]"))?;
+        for gesture in &profiles[app] {
+            out.line(format_args!("  {}", gesture_line(gesture)))?;
+        }
     }
     out.finish()
 }

@@ -118,6 +118,9 @@ fn run_device_worker(
 ) {
     let mut gestures = GestureRuntime::from_config(&config);
     gestures.attach_live(live, hub);
+    let focus = crate::focus::new_shared();
+    crate::focus::spawn_watcher(crate::focus::SharedFocus::clone(&focus));
+    gestures.attach_focus(focus);
     let mut manager = DevicePool::new(config);
     #[cfg(feature = "notify")]
     let mut policy = crate::notify::NoticePolicy::new();
@@ -241,9 +244,39 @@ fn handle_rpc(request: RpcRequest, manager: &mut DevicePool, gestures: &mut Gest
 /// Pushes the stored gesture configuration into the runtime and applies the
 /// divert state to every connected device.
 fn apply_gestures(manager: &DevicePool, gestures: &mut GestureRuntime) {
-    let (enabled, bindings) = manager.gesture_config();
-    gestures.set_enabled(enabled, bindings);
+    let (enabled, bindings, profiles) = manager.gesture_config();
+    gestures.set_config(enabled, bindings, profiles);
     manager.for_each_cached_mut(|device| gestures.apply(device));
+}
+
+/// Validates a gesture action, returning the rejection reason if invalid.
+fn gesture_action_rejection(action: &Action) -> Option<String> {
+    match action {
+        Action::Keypress {
+            keys
+        } => crate::inject::resolve_sequence(keys)
+            .map_err(|e| e.to_string())
+            .err(),
+        Action::Command {
+            command
+        } => (command.trim().is_empty()).then(|| "gesture command must not be empty".to_string()),
+        _ => Some("gesture action must be a key sequence or a command".to_string())
+    }
+}
+
+/// Replaces or inserts one binding in a per-app profile list.
+fn upsert_binding(
+    bindings: &mut Vec<logi_mx_driver::prelude::Gesture>,
+    direction: GestureDirection,
+    mode: GestureMode,
+    action: &Action
+) {
+    bindings.retain(|gesture| gesture.direction != direction);
+    bindings.push(Gesture {
+        direction,
+        mode,
+        action: Box::new(action.clone())
+    });
 }
 
 /// Handles the configuration-only gesture requests that never touch the
@@ -255,55 +288,80 @@ fn handle_gesture_request(
 ) -> Option<ipc::Response> {
     let stored: std::result::Result<(), masterror::AppError> = match request {
         ipc::Request::GetGestures => {
-            let (enabled, bindings) = manager.gesture_config();
+            let (enabled, bindings, profiles) = manager.gesture_config();
             return Some(ipc::Response::Gestures {
                 enabled,
-                gestures: bindings
+                gestures: bindings,
+                profiles
+            });
+        }
+        ipc::Request::GetFocusedApp => {
+            return Some(ipc::Response::FocusedApp {
+                app_id: gestures.focused_app()
             });
         }
         ipc::Request::SetGesturesEnabled {
             enabled
         } => {
-            let (_, bindings) = manager.gesture_config();
-            manager.set_gestures(*enabled, bindings)
+            let (_, bindings, profiles) = manager.gesture_config();
+            manager.set_gestures(*enabled, bindings, profiles)
         }
         ipc::Request::SetGesture {
             direction,
             mode,
             action
         } => {
-            let validation = match action.as_ref() {
-                Action::Keypress {
-                    keys
-                } => crate::inject::resolve_sequence(keys)
-                    .map_err(|e| e.to_string())
-                    .err(),
-                Action::Command {
-                    command
-                } => (command.trim().is_empty())
-                    .then(|| "gesture command must not be empty".to_string()),
-                _ => Some("gesture action must be a key sequence or a command".to_string())
-            };
-            if let Some(message) = validation {
+            if let Some(message) = gesture_action_rejection(action) {
                 return Some(ipc::Response::Error {
                     message
                 });
             }
-            let (enabled, mut bindings) = manager.gesture_config();
-            bindings.retain(|gesture| gesture.direction != *direction);
-            bindings.push(Gesture {
-                direction: *direction,
-                mode:      *mode,
-                action:    Box::new(action.as_ref().clone())
-            });
-            manager.set_gestures(enabled, bindings)
+            let (enabled, mut bindings, profiles) = manager.gesture_config();
+            upsert_binding(&mut bindings, *direction, *mode, action);
+            manager.set_gestures(enabled, bindings, profiles)
         }
         ipc::Request::ClearGesture {
             direction
         } => {
-            let (enabled, mut bindings) = manager.gesture_config();
+            let (enabled, mut bindings, profiles) = manager.gesture_config();
             bindings.retain(|gesture| gesture.direction != *direction);
-            manager.set_gestures(enabled, bindings)
+            manager.set_gestures(enabled, bindings, profiles)
+        }
+        ipc::Request::SetAppGesture {
+            app_id,
+            direction,
+            mode,
+            action
+        } => {
+            if let Some(message) = gesture_action_rejection(action) {
+                return Some(ipc::Response::Error {
+                    message
+                });
+            }
+            let (enabled, bindings, mut profiles) = manager.gesture_config();
+            let entry = profiles.entry(app_id.clone()).or_default();
+            upsert_binding(entry, *direction, *mode, action);
+            manager.set_gestures(enabled, bindings, profiles)
+        }
+        ipc::Request::ClearAppGesture {
+            app_id,
+            direction
+        } => {
+            let (enabled, bindings, mut profiles) = manager.gesture_config();
+            if let Some(entry) = profiles.get_mut(app_id) {
+                entry.retain(|gesture| gesture.direction != *direction);
+                if entry.is_empty() {
+                    profiles.remove(app_id);
+                }
+            }
+            manager.set_gestures(enabled, bindings, profiles)
+        }
+        ipc::Request::RemoveAppProfile {
+            app_id
+        } => {
+            let (enabled, bindings, mut profiles) = manager.gesture_config();
+            profiles.remove(app_id);
+            manager.set_gestures(enabled, bindings, profiles)
         }
         _ => return None
     };
@@ -622,10 +680,17 @@ impl DevicePool {
         }
     }
 
-    /// Reads the gesture opt-in and bindings from the stored configuration.
-    fn gesture_config(&self) -> (bool, Vec<Gesture>) {
+    /// Reads the gesture opt-in, bindings and per-app profiles from the
+    /// stored configuration.
+    fn gesture_config(
+        &self
+    ) -> (
+        bool,
+        Vec<Gesture>,
+        std::collections::HashMap<String, Vec<Gesture>>
+    ) {
         let Some(device) = self.config.devices.first() else {
-            return (false, Vec::new());
+            return (false, Vec::new(), std::collections::HashMap::new());
         };
         let bindings = match device.buttons.get(&ButtonId::ThumbGesture) {
             Some(Action::Gestures {
@@ -633,11 +698,15 @@ impl DevicePool {
             }) => gestures.clone(),
             _ => Vec::new()
         };
-        (device.gestures_enabled, bindings)
+        (
+            device.gestures_enabled,
+            bindings,
+            device.gesture_profiles.clone()
+        )
     }
 
-    /// Writes the gesture opt-in and bindings into the configuration and
-    /// persists it to disk.
+    /// Writes the gesture opt-in, bindings and profiles into the
+    /// configuration and persists it to disk.
     ///
     /// # Errors
     ///
@@ -646,12 +715,14 @@ impl DevicePool {
     fn set_gestures(
         &mut self,
         enabled: bool,
-        gestures: Vec<Gesture>
+        gestures: Vec<Gesture>,
+        profiles: std::collections::HashMap<String, Vec<Gesture>>
     ) -> std::result::Result<(), masterror::AppError> {
         let Some(device) = self.config.devices.first_mut() else {
             return Err(masterror::AppError::bad_request("No configured device"));
         };
         device.gestures_enabled = enabled;
+        device.gesture_profiles = profiles;
         device.buttons.insert(
             ButtonId::ThumbGesture,
             Action::Gestures {
