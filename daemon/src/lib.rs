@@ -3,6 +3,7 @@
 
 //! Daemon library exports used by CLI and UI IPC clients.
 
+pub mod gesture;
 pub mod ipc;
 pub mod status;
 pub mod systemd;
