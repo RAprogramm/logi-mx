@@ -327,19 +327,6 @@ impl LogiTrayIcon {
             }
             .into(),
             MenuItem::Separator,
-            StandardItem {
-                label: "Refresh Status".into(),
-                icon_name: "view-refresh".into(),
-                activate: Box::new(|this: &mut Self| {
-                    let status = Arc::clone(&this.status);
-                    spawn_tray_task("tray-refresh", move || {
-                        crate::status::refresh_from_device(&status);
-                    });
-                }),
-                enabled: true,
-                ..Default::default()
-            }
-            .into(),
             Self::open_configuration_item(),
         ]
     }

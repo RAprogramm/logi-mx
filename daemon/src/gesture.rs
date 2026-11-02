@@ -15,7 +15,7 @@
 use std::time::{Duration, Instant};
 
 use logi_mx_driver::prelude::*;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::inject::Injector;
 
@@ -320,7 +320,23 @@ impl GestureRuntime {
             match device.set_control_divert(control_id::GESTURE_BUTTON, true, true) {
                 Ok(()) => {
                     self.diverted = true;
-                    info!("gesture button diverted for software recognition");
+                    match device.control_divert(control_id::GESTURE_BUTTON) {
+                        Ok((flags, _)) if flags & 0x01 != 0 => {
+                            info!(
+                                "gesture button diverted for software recognition (flags {flags:#04x})"
+                            );
+                        }
+                        Ok((flags, _)) => {
+                            self.diverted = false;
+                            warn!(
+                                "device accepted the divert but reports flags {flags:#04x}; gestures stay inactive"
+                            );
+                        }
+                        Err(e) => {
+                            debug!("divert accepted, read-back failed: {e}");
+                            info!("gesture button diverted for software recognition");
+                        }
+                    }
                 }
                 Err(e) => warn!("failed to divert the gesture button: {e}")
             }
@@ -362,9 +378,11 @@ impl GestureRuntime {
             } => {
                 let held = pressed.contains(&control_id::GESTURE_BUTTON);
                 if held && !self.accumulator.is_holding() {
+                    debug!("gesture button pressed");
                     self.accumulator.begin(Instant::now());
                     self.last_commit = None;
                 } else if !held && self.accumulator.is_holding() {
+                    debug!("gesture button released");
                     self.finish_hold();
                 }
             }
@@ -376,6 +394,7 @@ impl GestureRuntime {
                     self.accumulator
                         .accumulate(i32::from(dx), i32::from(dy), Instant::now())
                 {
+                    debug!("swipe committed: {dir:?}");
                     self.last_commit = Some(dir);
                     self.fire(dir, Some(GestureMode::OnPress));
                 }
@@ -405,14 +424,14 @@ impl GestureRuntime {
             match gesture.action.as_ref() {
                 Action::Keypress {
                     keys
-                } => {
-                    if let Err(e) = self.injector.press_sequence(keys)
-                        && !self.injection_warned
-                    {
+                } => match self.injector.press_sequence(keys) {
+                    Ok(()) => debug!("gesture fired {direction:?} -> {}", keys.join("+")),
+                    Err(e) if !self.injection_warned => {
                         self.injection_warned = true;
                         warn!("gesture injection failed: {e}");
                     }
-                }
+                    Err(_) => {}
+                },
                 _ => {
                     if !self.unsupported_warned {
                         self.unsupported_warned = true;

@@ -61,53 +61,59 @@ impl Default for DeviceStatus {
 /// Shared handle around [`DeviceStatus`].
 pub type SharedStatus = Arc<Mutex<DeviceStatus>>;
 
-/// Refreshes the shared status by querying the device once.
+/// Device readings folded into a status refresh.
 ///
-/// Opens the bolt receiver, reads battery, DPI and `SmartShift`, and
-/// publishes the snapshot. Runs on the worker thread; blocking I/O is
-/// expected.
-pub fn refresh_from_device(status: &SharedStatus) {
-    match MxMaster3s::open_bolt_receiver_discovered() {
-        Ok(mut device) => {
-            // Read everything from the device *before* taking the lock so the
-            // shared status mutex is never held across blocking HID++ I/O.
-            let battery = device.battery_info().ok();
-            let dpi = device.dpi().ok();
-            let smartshift = device.smartshift().ok();
+/// The worker owns exactly one HID++ handle per device; every surface reads
+/// through it. A second handle on the same hidraw node would split the HID++
+/// response stream between the two readers, so opening one per consumer is
+/// forbidden by design.
+#[derive(Debug, Default)]
+pub struct DeviceReadings {
+    /// Battery report, when the device answered.
+    pub battery:    Option<BatteryInfo>,
+    /// DPI setting, when the device answered.
+    pub dpi:        Option<u16>,
+    /// `SmartShift` configuration, when the device answered.
+    pub smartshift: Option<SmartShiftConfig>
+}
 
-            let (battery_level, dpi_value) = {
-                let mut guard = status
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.connected = true;
-                guard.error = None;
-
-                if let Some(battery) = battery {
-                    guard.battery_level = battery.level;
-                    guard.battery_status = format!("{:?}", battery.status);
-                }
-                if let Some(current_dpi) = dpi {
-                    guard.dpi = current_dpi;
-                }
-                if let Some(ss_config) = smartshift {
-                    guard.smartshift = ss_config.enabled;
-                    guard.smartshift_threshold = ss_config.threshold;
-                }
-
-                (guard.battery_level, guard.dpi)
-            };
-
-            debug!("Tray status refreshed: battery={battery_level}%, dpi={dpi_value}");
-        }
-        Err(e) => {
+/// Refreshes the shared status from one device reading.
+///
+/// Publishes the snapshot built from the worker's single device handle.
+/// `None` marks the device unreachable.
+pub fn refresh(status: &SharedStatus, readings: Option<DeviceReadings>) {
+    if let Some(readings) = readings {
+        let (battery_level, dpi_value) = {
             let mut guard = status
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            guard.connected = false;
-            guard.error = Some(e.to_string());
-            drop(guard);
-            debug!("Device not connected: {e}");
-        }
+            guard.connected = true;
+            guard.error = None;
+
+            if let Some(battery) = readings.battery {
+                guard.battery_level = battery.level;
+                guard.battery_status = format!("{:?}", battery.status);
+            }
+            if let Some(current_dpi) = readings.dpi {
+                guard.dpi = current_dpi;
+            }
+            if let Some(ss_config) = readings.smartshift {
+                guard.smartshift = ss_config.enabled;
+                guard.smartshift_threshold = ss_config.threshold;
+            }
+
+            (guard.battery_level, guard.dpi)
+        };
+
+        debug!("Tray status refreshed: battery={battery_level}%, dpi={dpi_value}");
+    } else {
+        let mut guard = status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.connected = false;
+        guard.error = Some("device not reachable".to_string());
+        drop(guard);
+        debug!("Device not connected");
     }
 }
 

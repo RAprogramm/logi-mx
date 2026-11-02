@@ -37,6 +37,9 @@ const GESTURE_POLL: Duration = Duration::from_millis(5);
 /// Notification poll interval while idle.
 const IDLE_POLL: Duration = Duration::from_millis(100);
 
+/// Map key for a handle opened by discovery rather than a udev event.
+const DISCOVERED_KEY: &str = "discovered";
+
 /// Commands accepted by the device worker.
 #[derive(Debug)]
 pub enum DeviceEvent {
@@ -112,7 +115,10 @@ fn run_device_worker(
     #[cfg(feature = "notify")]
     let mut policy = crate::notify::NoticePolicy::new();
 
-    refresh_and_notify(status, tray, &mut policy);
+    refresh_and_notify(&mut manager, status, tray, &mut policy);
+    if gestures.should_divert() {
+        manager.for_each_cached_mut(|device| gestures.apply(device));
+    }
     let mut last_refresh = std::time::Instant::now();
 
     loop {
@@ -145,7 +151,10 @@ fn run_device_worker(
         manager.for_each_cached_mut(|device| gestures.pump(device));
 
         if should_refresh {
-            refresh_and_notify(status, tray, &mut policy);
+            refresh_and_notify(&mut manager, status, tray, &mut policy);
+            if gestures.should_divert() {
+                manager.for_each_cached_mut(|device| gestures.apply(device));
+            }
             last_refresh = std::time::Instant::now();
         }
     }
@@ -156,13 +165,27 @@ fn run_device_worker(
 
 /// Refreshes the shared status, publishes user notices and updates the tray.
 ///
-/// Runs on the worker thread; blocking HID++ I/O is expected here.
+/// Reads through the pool's single device handle: a second handle on the
+/// same hidraw node would split the HID++ response stream and corrupt
+/// concurrent exchanges. Discovery happens through the pool too, so a
+/// device that appeared without a udev event still gets cached and
+/// configured. Runs on the worker thread; blocking HID++ I/O is expected.
 fn refresh_and_notify(
+    manager: &mut DevicePool,
     status: &SharedStatus,
     tray: &TraySlot,
     #[cfg(feature = "notify")] policy: &mut crate::notify::NoticePolicy
 ) {
-    crate::status::refresh_from_device(status);
+    let readings = manager
+        .with_device(|device| {
+            Ok(crate::status::DeviceReadings {
+                battery:    device.battery_info().ok(),
+                dpi:        device.dpi().ok(),
+                smartshift: device.smartshift().ok()
+            })
+        })
+        .ok();
+    crate::status::refresh(status, readings);
 
     {
         let guard = status
@@ -453,8 +476,34 @@ impl DevicePool {
 
     /// Opens the discovered device, applies its configuration and stores the
     /// handle keyed by hidraw path.
+    ///
+    /// The pool tracks exactly one device: a second handle on the same
+    /// receiver would split the HID++ response stream. A handle cached by
+    /// discovery is adopted under the real path instead of being reopened.
     fn handle_device_added(&mut self, device_path: String) {
         info!("Device added: {device_path}");
+
+        {
+            let mut guard = self
+                .devices
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if guard.contains_key(&device_path) {
+                debug!("Device at {device_path} is already tracked");
+                return;
+            }
+            if guard.len() == 1
+                && let Some(device) = guard.remove(DISCOVERED_KEY)
+            {
+                debug!("Adopted the discovered handle for {device_path}");
+                guard.insert(device_path, device);
+                return;
+            }
+            if !guard.is_empty() {
+                debug!("A device is already tracked; ignoring extra node {device_path}");
+                return;
+            }
+        }
 
         match self.open_device() {
             Ok(mut device) => {
@@ -536,7 +585,7 @@ impl DevicePool {
             .devices
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let device = guard.entry("discovered".to_string()).or_insert(device);
+        let device = guard.entry(DISCOVERED_KEY.to_string()).or_insert(device);
         let result = f(device);
         drop(guard);
         result
