@@ -425,13 +425,19 @@ impl GestureRuntime {
                 Action::Keypress {
                     keys
                 } => match self.injector.press_sequence(keys) {
-                    Ok(()) => debug!("gesture fired {direction:?} -> {}", keys.join("+")),
+                    Ok(()) => info!("gesture fired {direction:?} -> {}", keys.join("+")),
                     Err(e) if !self.injection_warned => {
                         self.injection_warned = true;
                         warn!("gesture injection failed: {e}");
                     }
                     Err(_) => {}
                 },
+                Action::Command {
+                    command
+                } => {
+                    info!("gesture fired {direction:?} -> command {command:?}");
+                    spawn_detached(command);
+                }
                 _ => {
                     if !self.unsupported_warned {
                         self.unsupported_warned = true;
@@ -440,6 +446,37 @@ impl GestureRuntime {
                 }
             }
         }
+    }
+}
+
+/// Runs a bound shell command detached from the daemon.
+///
+/// A waiter thread reaps the child so the daemon never accumulates zombies,
+/// and a long-running command can never block the gesture pump. The command
+/// comes from the user-owned config file, the same trust level as any
+/// autostart entry.
+fn spawn_detached(command: &str) {
+    let command = command.to_string();
+    let spawn = std::thread::Builder::new()
+        .name("gesture-command".to_string())
+        .spawn(move || {
+            let child = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&command)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            match child {
+                Ok(mut child) => match child.wait() {
+                    Ok(status) => debug!("gesture command finished: {status}"),
+                    Err(e) => warn!("failed to wait for gesture command: {e}")
+                },
+                Err(e) => warn!("failed to spawn gesture command: {e}")
+            }
+        });
+    if spawn.is_err() {
+        warn!("failed to start the gesture command thread");
     }
 }
 

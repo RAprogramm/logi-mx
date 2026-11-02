@@ -107,6 +107,14 @@ label.hud-chip-sep {
     margin: 0 2px;
 }
 
+entry.hud-command {
+    font-family: monospace;
+    font-size: 0.85rem;
+    background-color: alpha(#000000, 0.25);
+    border: 1px solid alpha(#ffffff, 0.12);
+    border-radius: 10px;
+}
+
 dropdown.hud-assign button {
     min-width: 120px;
 }

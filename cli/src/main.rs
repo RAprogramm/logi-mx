@@ -680,14 +680,17 @@ fn show_gestures() -> Result<()> {
         out.line(format_args!("  No bindings"))?;
     }
     for gesture in &gestures {
-        let keys = match gesture.action.as_ref() {
+        let action = match gesture.action.as_ref() {
             Action::Keypress {
                 keys
             } => keys.join("+"),
+            Action::Command {
+                command
+            } => format!("$ {command}"),
             other => format!("{other:?}")
         };
         out.line(format_args!(
-            "  {:?} ({:?}): {keys}",
+            "  {:?} ({:?}): {action}",
             gesture.direction, gesture.mode
         ))?;
     }

@@ -83,6 +83,8 @@ pub enum ButtonId {
 pub enum Action {
     /// Sends a key sequence, e.g. `["KEY_LEFTCTRL", "KEY_C"]`.
     Keypress { keys: Vec<String> },
+    /// Runs a shell command through `/bin/sh -c`.
+    Command { command: String },
     /// Runs direction-based gestures on the thumb gesture button.
     Gestures { gestures: Vec<Gesture> },
     /// Toggles `SmartShift` ratchet mode.

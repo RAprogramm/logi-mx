@@ -11,7 +11,8 @@
 use std::{path::PathBuf, sync::mpsc, time::Duration};
 
 use logi_mx_driver::prelude::{
-    Gesture, GestureDirection, GestureMode, HiResScrollConfig, ReprogControl, SmartShiftConfig
+    Action, Gesture, GestureDirection, GestureMode, HiResScrollConfig, ReprogControl,
+    SmartShiftConfig
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -150,14 +151,14 @@ pub enum Request {
         /// Whether the daemon should own the gesture button.
         enabled: bool
     },
-    /// Bind a key sequence to a gesture direction; persists to config.
+    /// Bind an action to a gesture direction; persists to config.
     SetGesture {
         /// Direction to bind.
         direction: GestureDirection,
         /// When the action fires.
         mode:      GestureMode,
-        /// `KEY_*` names to inject, validated against the evdev table.
-        keys:      Vec<String>
+        /// Action to run: a validated `KEY_*` sequence or a shell command.
+        action:    Box<Action>
     },
     /// Remove the binding for a gesture direction; persists to config.
     ClearGesture {

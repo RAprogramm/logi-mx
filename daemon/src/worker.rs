@@ -263,11 +263,23 @@ fn handle_gesture_request(
         ipc::Request::SetGesture {
             direction,
             mode,
-            keys
+            action
         } => {
-            if let Err(e) = crate::inject::resolve_sequence(keys) {
+            let validation = match action.as_ref() {
+                Action::Keypress {
+                    keys
+                } => crate::inject::resolve_sequence(keys)
+                    .map_err(|e| e.to_string())
+                    .err(),
+                Action::Command {
+                    command
+                } => (command.trim().is_empty())
+                    .then(|| "gesture command must not be empty".to_string()),
+                _ => Some("gesture action must be a key sequence or a command".to_string())
+            };
+            if let Some(message) = validation {
                 return Some(ipc::Response::Error {
-                    message: e.to_string()
+                    message
                 });
             }
             let (enabled, mut bindings) = manager.gesture_config();
@@ -275,9 +287,7 @@ fn handle_gesture_request(
             bindings.push(Gesture {
                 direction: *direction,
                 mode:      *mode,
-                action:    Box::new(Action::Keypress {
-                    keys: keys.clone()
-                })
+                action:    Box::new(action.as_ref().clone())
             });
             manager.set_gestures(enabled, bindings)
         }

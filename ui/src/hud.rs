@@ -28,9 +28,9 @@ use std::{
 };
 
 use gtk4::{
-    Box as GtkBox, Button, CheckButton, DropDown, EventControllerKey, EventControllerMotion,
-    FlowBox, FlowBoxChild, GestureClick, Image, Label, Orientation, Scale, ScrolledWindow,
-    SelectionMode, Switch, ToggleButton, glib
+    Box as GtkBox, Button, CheckButton, DropDown, Entry, EventControllerKey,
+    EventControllerMotion, FlowBox, FlowBoxChild, GestureClick, Image, Label, Orientation, Scale,
+    ScrolledWindow, SelectionMode, Switch, ToggleButton, glib
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
@@ -1141,6 +1141,9 @@ const GESTURE_TILES: [(GestureDirection, &str); 5] = [
 /// Fire moments offered on every gesture tile.
 const GESTURE_MODES: [&str; 2] = ["On press", "On release"];
 
+/// Action kinds offered on every gesture tile.
+const GESTURE_KINDS: [&str; 2] = ["Keys", "Command"];
+
 /// Shared registry of the built gesture tiles.
 type GestureTiles = Rc<RefCell<HashMap<GestureDirection, GestureTile>>>;
 
@@ -1148,12 +1151,15 @@ type GestureTiles = Rc<RefCell<HashMap<GestureDirection, GestureTile>>>;
 /// pressed so far, in press order.
 type GestureCapture = Rc<RefCell<Option<(GestureDirection, Vec<u16>)>>>;
 
-/// One editable gesture binding: direction, key sequence and its widgets.
+/// One editable gesture binding: direction, action and its widgets.
 #[derive(Clone)]
 struct GestureTile {
     child:   FlowBoxChild,
     keys:    Rc<RefCell<Vec<String>>>,
+    command: Rc<RefCell<String>>,
     binding: GtkBox,
+    entry:   Entry,
+    kind:    DropDown,
     mode:    DropDown,
     capture: Button
 }
@@ -1183,6 +1189,43 @@ impl GestureTile {
         }
         self.binding.set_tooltip_text(Some(&binding_text(&keys)));
         *self.keys.borrow_mut() = keys;
+        self.kind.set_selected(0);
+        self.show_command(false);
+    }
+
+    /// Reflects a bound shell command and switches the tile to command mode.
+    fn set_command(&self, command: String) {
+        self.entry.set_text(&command);
+        *self.command.borrow_mut() = command;
+        self.kind.set_selected(1);
+        self.show_command(true);
+    }
+
+    /// Switches the editable control between key capture and command entry.
+    fn show_command(&self, command: bool) {
+        self.binding.set_visible(!command);
+        self.capture.set_visible(!command);
+        self.entry.set_visible(command);
+    }
+
+    /// The fire moment currently selected on this tile.
+    fn current_mode(&self) -> GestureMode {
+        picker_mode(&self.mode)
+    }
+
+    /// The action currently edited on this tile, if any is complete.
+    fn current_action(&self) -> Option<Action> {
+        if self.kind.selected() == 1 {
+            let command = self.command.borrow().clone();
+            (!command.is_empty()).then_some(Action::Command {
+                command
+            })
+        } else {
+            let keys = self.keys.borrow().clone();
+            (!keys.is_empty()).then_some(Action::Keypress {
+                keys
+            })
+        }
     }
 }
 
@@ -1220,8 +1263,8 @@ fn disarm_capture(capture: &GestureCapture, tiles: &GestureTiles) {
     }
 }
 
-/// Builds one gesture tile: direction, current binding, fire moment and the
-/// capture/clear controls.
+/// Builds one gesture tile: direction, current binding, action kind, fire
+/// moment and the capture/clear controls.
 fn gesture_tile(
     direction: GestureDirection,
     label: &str,
@@ -1241,10 +1284,20 @@ fn gesture_tile(
     let binding = GtkBox::new(Orientation::Horizontal, 4);
     binding.set_halign(gtk4::Align::End);
     binding.set_hexpand(true);
+    let entry = Entry::new();
+    entry.add_css_class("hud-command");
+    entry.set_placeholder_text(Some("shell command, Enter applies"));
+    entry.set_hexpand(true);
+    entry.set_valign(gtk4::Align::Center);
+    entry.set_visible(false);
     head.append(&title);
     head.append(&binding);
+    head.append(&entry);
 
     let controls = GtkBox::new(Orientation::Horizontal, 8);
+    let kind = DropDown::from_strings(&GESTURE_KINDS);
+    kind.set_valign(gtk4::Align::Center);
+    kind.set_tooltip_text(Some("Action kind"));
     let mode = DropDown::from_strings(&GESTURE_MODES);
     mode.set_valign(gtk4::Align::Center);
     let spring = Label::new(None);
@@ -1253,6 +1306,7 @@ fn gesture_tile(
     let clear_btn = Button::from_icon_name("user-trash-symbolic");
     clear_btn.add_css_class("flat");
     clear_btn.set_tooltip_text(Some("Clear binding"));
+    controls.append(&kind);
     controls.append(&mode);
     controls.append(&spring);
     controls.append(&capture_btn);
@@ -1263,26 +1317,16 @@ fn gesture_tile(
     child.set_child(Some(&column));
 
     let keys: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let command: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
 
-    let toast_mode = toast.clone();
-    let keys_mode = Rc::clone(&keys);
-    mode.connect_selected_notify(move |picker| {
-        let current = keys_mode.borrow().clone();
-        if current.is_empty() {
-            return;
+    let tiles_kind = Rc::clone(tiles);
+    kind.connect_selected_notify(move |picker| {
+        if let Some(tile) = tiles_kind.borrow().get(&direction) {
+            tile.show_command(picker.selected() == 1);
         }
-        let moment = if picker.selected() == 0 {
-            GestureMode::OnPress
-        } else {
-            GestureMode::OnRelease
-        };
-        let response = ipc::try_request(&ipc::Request::SetGesture {
-            direction,
-            mode: moment,
-            keys: current
-        });
-        report(response, &toast_mode, "Gesture updated");
     });
+    wire_command_entry(&entry, toast, tiles, direction);
+    wire_moment_update(&mode, toast, tiles, direction);
 
     let toast_clear = toast.clone();
     let tiles_clear = Rc::clone(tiles);
@@ -1293,6 +1337,7 @@ fn gesture_tile(
         if let Some(tile) = tiles_clear.borrow().get(&direction)
             && matches!(response, Some(Response::Ok))
         {
+            *tile.command.borrow_mut() = String::new();
             tile.set_keys(Vec::new());
         }
         report(response, &toast_clear, "Gesture cleared");
@@ -1312,12 +1357,82 @@ fn gesture_tile(
     let gesture = GestureTile {
         child,
         keys,
+        command,
         binding,
+        entry,
+        kind,
         mode,
         capture: capture_btn
     };
     gesture.set_keys(Vec::new());
     gesture
+}
+
+/// Wires the command entry of a gesture tile: Enter binds the shell command
+/// for the direction at the tile's current fire moment.
+fn wire_command_entry(
+    entry: &Entry,
+    toast: &ToastOverlay,
+    tiles: &GestureTiles,
+    direction: GestureDirection
+) {
+    let toast_bind = toast.clone();
+    let tiles_bind = Rc::clone(tiles);
+    entry.connect_activate(move |field| {
+        let text = field.text().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let Some(found) = tiles_bind.borrow().get(&direction).cloned() else {
+            return;
+        };
+        let response = ipc::try_request(&ipc::Request::SetGesture {
+            direction,
+            mode: found.current_mode(),
+            action: Box::new(Action::Command {
+                command: text.clone()
+            })
+        });
+        if matches!(response, Some(Response::Ok)) {
+            *found.command.borrow_mut() = text;
+        }
+        report(response, &toast_bind, "Gesture bound");
+    });
+}
+
+/// Wires the fire-moment picker: changing it re-sends the action currently
+/// edited on the tile with the new moment.
+fn wire_moment_update(
+    mode: &DropDown,
+    toast: &ToastOverlay,
+    tiles: &GestureTiles,
+    direction: GestureDirection
+) {
+    let toast_pick = toast.clone();
+    let tiles_pick = Rc::clone(tiles);
+    mode.connect_selected_notify(move |picker| {
+        let Some(found) = tiles_pick.borrow().get(&direction).cloned() else {
+            return;
+        };
+        let Some(action) = found.current_action() else {
+            return;
+        };
+        let response = ipc::try_request(&ipc::Request::SetGesture {
+            direction,
+            mode: picker_mode(picker),
+            action: Box::new(action)
+        });
+        report(response, &toast_pick, "Gesture updated");
+    });
+}
+
+/// Maps a fire-moment picker selection to its `GestureMode`.
+fn picker_mode(picker: &DropDown) -> GestureMode {
+    if picker.selected() == 0 {
+        GestureMode::OnPress
+    } else {
+        GestureMode::OnRelease
+    }
 }
 
 /// Builds the Gestures page: a master switch plus one tile per direction.
@@ -1371,11 +1486,14 @@ fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) -> ScrolledWi
             if let Some(tile) = tiles.borrow().get(&gesture.direction) {
                 tile.mode
                     .set_selected(u32::from(gesture.mode != GestureMode::OnPress));
-                if let Action::Keypress {
-                    keys
-                } = gesture.action.as_ref()
-                {
-                    tile.set_keys(keys.clone());
+                match gesture.action.as_ref() {
+                    Action::Keypress {
+                        keys
+                    } => tile.set_keys(keys.clone()),
+                    Action::Command {
+                        command
+                    } => tile.set_command(command.clone()),
+                    _ => {}
                 }
             }
         }
@@ -1458,7 +1576,9 @@ fn attach_gesture_capture(
         let response = ipc::try_request(&ipc::Request::SetGesture {
             direction,
             mode: moment,
-            keys: names.clone()
+            action: Box::new(Action::Keypress {
+                keys: names.clone()
+            })
         });
         if matches!(response, Some(Response::Ok)) {
             tile.set_keys(names);
