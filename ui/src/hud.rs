@@ -393,7 +393,7 @@ struct HudState {
     assignments: HashMap<MouseButton, String>,
     live:        LiveVisual,
     bg:          BgMode,
-    act_as:      Option<PreferencesGroup>
+    remap:       Option<PreferencesGroup>
 }
 
 /// One button tile: the clickable row plus the assignment label on its right.
@@ -444,11 +444,10 @@ fn queue_leaders() {
 /// persistent selection, so both halves of the HUD always agree.
 fn sync_row_focus(state: &HudState) {
     let focus = state.hover.or(state.selected);
-    if let Some(group) = state.act_as.as_ref() {
-        let title = state.selected.map_or_else(
-            || "Act as".to_string(),
-            |b| format!("Act as — {}", b.label())
-        );
+    if let Some(group) = state.remap.as_ref() {
+        let title = state
+            .selected
+            .map_or_else(|| "Remap".to_string(), |b| format!("Remap — {}", b.label()));
         group.set_title(&title);
     }
     ROWS_REGISTRY.with(|registry| {
@@ -797,13 +796,13 @@ fn create_panel(
 /// Native remap targets offered on the assignments page: label and CID.
 /// `0x0000` restores the device-native behaviour of the selected control.
 const REMAP_TARGETS: [(&str, u16); 8] = [
-    ("Act as Left", control_id::LEFT_BUTTON),
-    ("Act as Right", control_id::RIGHT_BUTTON),
-    ("Act as Middle", control_id::MIDDLE_BUTTON),
-    ("Act as Back", control_id::BACK_BUTTON),
-    ("Act as Forward", control_id::FORWARD_BUTTON),
-    ("Act as Gesture", control_id::GESTURE_BUTTON),
-    ("Act as DPI Shift", control_id::SMARTSHIFT_TOGGLE),
+    ("Left", control_id::LEFT_BUTTON),
+    ("Right", control_id::RIGHT_BUTTON),
+    ("Middle click", control_id::MIDDLE_BUTTON),
+    ("Back", control_id::BACK_BUTTON),
+    ("Forward", control_id::FORWARD_BUTTON),
+    ("Gesture", control_id::GESTURE_BUTTON),
+    ("DPI Shift", control_id::SMARTSHIFT_TOGGLE),
     ("Restore native", 0x0000)
 ];
 
@@ -928,7 +927,7 @@ fn set_assignment(
     queue_leaders();
 }
 
-/// Builds the native remap section: pick a target control and write it into
+/// Builds the remap section: pick a target control and write it into
 /// the mouse firmware through HID++ reprogrammable controls.
 fn remap_section(
     state: &Rc<RefCell<HudState>>,
@@ -937,8 +936,10 @@ fn remap_section(
     rows: &RowMap
 ) -> PreferencesGroup {
     let group = PreferencesGroup::new();
-    group.set_title("Act as");
-    group.set_description(Some("Native remap written into the mouse firmware"));
+    group.set_title("Remap");
+    group.set_description(Some(
+        "The selected button will behave like the chosen one, in the mouse firmware, without software"
+    ));
 
     let target = DropDown::from_strings(
         &REMAP_TARGETS
@@ -969,11 +970,12 @@ fn remap_section(
             target_cid
         });
         let remapped = matches!(response, Some(Response::Ok));
-        report(
-            response,
-            &toast_clone,
-            &format!("{} now acts as {label}", selected.label())
-        );
+        let message = if target_cid == 0 {
+            format!("{} restored to native", selected.label())
+        } else {
+            format!("{} now acts as {label}", selected.label())
+        };
+        report(response, &toast_clone, &message);
         if remapped {
             set_assignment(
                 &state_clone,
@@ -1009,7 +1011,7 @@ fn buttons_page(
     let (buttons_group, rows) = buttons_list_section(state, drawing);
     box_.append(&buttons_group);
     let remap = remap_section(state, drawing, toast, &rows);
-    state.borrow_mut().act_as = Some(remap.clone());
+    state.borrow_mut().remap = Some(remap.clone());
     box_.append(&remap);
     scroll.set_child(Some(&box_));
     scroll
