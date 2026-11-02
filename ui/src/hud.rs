@@ -396,8 +396,15 @@ struct HudState {
     act_as:      Option<PreferencesGroup>
 }
 
-/// Shared handle to the button rows of the open window, keyed by button.
-type RowMap = Rc<RefCell<HashMap<MouseButton, ActionRow>>>;
+/// One button tile: the clickable row plus the assignment label on its right.
+#[derive(Clone)]
+struct Tile {
+    row:        ActionRow,
+    assignment: Label
+}
+
+/// Shared handle to the button tiles of the open window, keyed by button.
+type RowMap = Rc<RefCell<HashMap<MouseButton, Tile>>>;
 
 thread_local! {
     /// The HUD window while it is open, so a second activation closes it
@@ -448,11 +455,11 @@ fn sync_row_focus(state: &HudState) {
         let Some(rows) = registry.borrow().as_ref().map(Rc::clone) else {
             return;
         };
-        for (button, row) in rows.borrow().iter() {
+        for (button, tile) in rows.borrow().iter() {
             if Some(*button) == focus {
-                row.add_css_class("hud-focus");
+                tile.row.add_css_class("hud-focus");
             } else {
-                row.remove_css_class("hud-focus");
+                tile.row.remove_css_class("hud-focus");
             }
         }
     });
@@ -828,10 +835,12 @@ fn buttons_list_section(
     let mut col = 0;
     let mut row_pos = 0;
     for button in MouseButton::ALL {
-        let row = ActionRow::builder()
-            .title(button.label())
-            .subtitle("Native")
-            .build();
+        let row = ActionRow::builder().title(button.label()).build();
+        let assignment = Label::new(Some("Native"));
+        assignment.add_css_class("dim-label");
+        assignment.add_css_class("caption");
+        assignment.set_valign(gtk4::Align::Center);
+        row.add_suffix(&assignment);
         row.add_css_class("card");
         row.add_css_class("hud-tile");
         let state_row = Rc::clone(state);
@@ -867,7 +876,13 @@ fn buttons_list_section(
         row.add_controller(motion);
         row.connect_map(|_| queue_leaders());
 
-        rows.borrow_mut().insert(button, row.clone());
+        rows.borrow_mut().insert(
+            button,
+            Tile {
+                row: row.clone(),
+                assignment
+            }
+        );
         let width = if button == MouseButton::Gesture { 2 } else { 1 };
         grid.attach(&row, col, row_pos, width, 1);
         col += width;
@@ -906,8 +921,8 @@ fn set_assignment(
             action
         }
     );
-    if let Some(row) = rows.borrow().get(&button) {
-        row.set_subtitle(&subtitle);
+    if let Some(tile) = rows.borrow().get(&button) {
+        tile.assignment.set_text(&subtitle);
     }
     drawing.queue_draw();
     queue_leaders();
@@ -1861,12 +1876,12 @@ fn attach_leaders_draw(
             let Some(&(ax, ay)) = anchors.get(&button) else {
                 continue;
             };
-            let Some(row) = rows.get(&button) else {
+            let Some(tile) = rows.get(&button) else {
                 continue;
             };
             let ax = ax.mul_add(scale, base_x);
             let ay = ay.mul_add(scale, base_y);
-            let Some((tx, ty)) = row_target(row, &window) else {
+            let Some((tx, ty)) = row_target(&tile.row, &window) else {
                 continue;
             };
             let focused = st.selected == Some(button) || st.hover == Some(button);
