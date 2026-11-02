@@ -197,6 +197,27 @@ fn find_mouse() -> Option<(std::path::PathBuf, String)> {
     fallback
 }
 
+/// Streams event batches until the device stops answering.
+///
+/// `evdev::Device::fetch_events` performs a single blocking read and its
+/// iterator ends as soon as that batch is drained, so the stream is only
+/// alive while this loop keeps re-arming reads. A read error — typically
+/// `ENODEV` after an unplug — ends the attachment and lets the caller
+/// rescan for a fresh node.
+fn stream(
+    device: &mut Device,
+    accumulator: &mut TelemetryAccumulator,
+    hub: &LiveHub
+) -> std::io::Result<()> {
+    loop {
+        for event in device.fetch_events()? {
+            if let Some(frame) = accumulator.apply(&event) {
+                let _ = hub.send(frame);
+            }
+        }
+    }
+}
+
 /// Attaches to the mouse and streams frames until the device detaches.
 fn pump(hub: &LiveHub) {
     let Some((path, name)) = find_mouse() else {
@@ -213,15 +234,9 @@ fn pump(hub: &LiveHub) {
     info!("live telemetry attached to {name} ({path:?})");
 
     let mut accumulator = TelemetryAccumulator::new();
-    if let Ok(events) = device.fetch_events() {
-        for event in events {
-            if let Some(frame) = accumulator.apply(&event) {
-                let _ = hub.send(frame);
-            }
-        }
+    if let Err(e) = stream(&mut device, &mut accumulator, hub) {
+        info!("live telemetry detached from {name}: {e}");
     }
-
-    warn!("live telemetry detached from {name}; waiting for the device");
 }
 
 /// Runs the evdev tap until the process exits.
