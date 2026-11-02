@@ -811,6 +811,11 @@ const ASSIGNMENT_CHOICES: [&str; 8] = [
     "DPI Shift"
 ];
 
+/// Smallest height (in pixels) one tile row needs to stay comfortable; the
+/// flow drops to two columns only when the panel cannot fit every row at this
+/// height in a single column.
+const TILE_ROW_MIN_HEIGHT: i32 = 64;
+
 /// Builds one button tile: a card with the button name and its assignment
 /// dropdown; picking an entry writes the remap into the mouse firmware
 /// instantly and reverts the choice when the daemon refuses.
@@ -823,6 +828,8 @@ fn button_tile(
 ) -> Tile {
     let child = FlowBoxChild::new();
     child.add_css_class("hud-tile");
+    child.set_hexpand(true);
+    child.set_vexpand(true);
     let inner = GtkBox::new(Orientation::Horizontal, 12);
     let name = Label::new(Some(button.label()));
     name.add_css_class("title");
@@ -831,6 +838,7 @@ fn button_tile(
     name.set_valign(gtk4::Align::Center);
     let dropdown = DropDown::from_strings(&ASSIGNMENT_CHOICES);
     dropdown.add_css_class("hud-assign");
+    dropdown.set_valign(gtk4::Align::Center);
     inner.append(&name);
     inner.append(&dropdown);
     child.set_child(Some(&inner));
@@ -925,6 +933,7 @@ fn buttons_list_section(
     toast: &ToastOverlay
 ) -> (GtkBox, RowMap) {
     let section = GtkBox::new(Orientation::Vertical, 8);
+    section.set_vexpand(true);
     let title = Label::new(Some("Buttons"));
     title.add_css_class("title-4");
     title.set_xalign(0.0);
@@ -938,11 +947,22 @@ fn buttons_list_section(
     let flow = FlowBox::new();
     flow.add_css_class("hud-tiles");
     flow.set_selection_mode(SelectionMode::None);
-    flow.set_homogeneous(true);
+    flow.set_homogeneous(false);
     flow.set_min_children_per_line(1);
-    flow.set_max_children_per_line(2);
-    flow.set_column_spacing(8);
-    flow.set_row_spacing(8);
+    flow.set_max_children_per_line(1);
+    flow.set_hexpand(true);
+    flow.set_vexpand(true);
+    flow.set_column_spacing(12);
+    flow.set_row_spacing(12);
+
+    flow.connect_notify_local(Some("height"), move |flow, _| {
+        let rows = i32::try_from(MouseButton::ALL.len()).unwrap_or(7);
+        let fits_one_column = flow.height() >= TILE_ROW_MIN_HEIGHT * rows;
+        let wanted = if fits_one_column { 1 } else { 2 };
+        if flow.max_children_per_line() != wanted {
+            flow.set_max_children_per_line(wanted);
+        }
+    });
 
     let rows: RowMap = Rc::new(RefCell::new(HashMap::new()));
     for button in MouseButton::ALL {
