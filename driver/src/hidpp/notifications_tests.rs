@@ -28,7 +28,9 @@ fn test_release_reports_no_pressed_controls() {
     let packet = long_notification(0x09, 0x00, &[]);
     assert_eq!(
         decode_reprog_notification(0x09, &packet),
-        Some(ReprogNotification::DivertedButtons { pressed: vec![] })
+        Some(ReprogNotification::DivertedButtons {
+            pressed: vec![]
+        })
     );
 }
 
@@ -38,13 +40,17 @@ fn test_raw_xy_positive_and_negative() {
     let burst = long_notification(0x09, 0x01, &[0x01, 0xC3, 0x00, 0x16]);
     assert_eq!(
         decode_reprog_notification(0x09, &burst),
-        Some(ReprogNotification::RawXy { dx: 451, dy: 22 })
+        Some(ReprogNotification::RawXy {
+            dx: 451, dy: 22
+        })
     );
 
     let drift = long_notification(0x09, 0x01, &[0xFF, 0xFF, 0x00, 0x00]);
     assert_eq!(
         decode_reprog_notification(0x09, &drift),
-        Some(ReprogNotification::RawXy { dx: -1, dy: 0 })
+        Some(ReprogNotification::RawXy {
+            dx: -1, dy: 0
+        })
     );
 }
 

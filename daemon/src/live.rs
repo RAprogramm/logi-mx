@@ -178,6 +178,9 @@ fn find_mouse() -> Option<(std::path::PathBuf, String)> {
     let mut fallback = None;
     for (path, device) in evdev::enumerate() {
         let name = device.name().unwrap_or_default().to_lowercase();
+        if name.contains(crate::inject::INJECTOR_NAME) {
+            continue;
+        }
         let is_pointer = device
             .supported_relative_axes()
             .is_some_and(|axes| axes.contains(RelativeAxisCode::REL_X));

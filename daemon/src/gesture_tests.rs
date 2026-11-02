@@ -3,8 +3,6 @@
 
 use std::time::{Duration, Instant};
 
-use logi_mx_driver::devices::GestureDirection;
-
 use super::*;
 
 fn base() -> Instant {
@@ -177,4 +175,67 @@ fn test_saturating_travel_never_panics() {
         acc.accumulate(i32::MAX, i32::MIN, t0 + at(step));
     }
     let _ = acc.end();
+}
+
+#[test]
+fn test_runtime_gestures_are_opt_in() {
+    let config = Config::default();
+    let runtime = GestureRuntime::from_config(&config);
+    assert!(!runtime.should_divert(), "default config must not divert");
+    assert!(!runtime.is_holding());
+}
+
+#[test]
+fn test_runtime_diverts_only_with_opt_in_and_bindings() {
+    let mut config = Config::default();
+    config.devices[0].gestures_enabled = true;
+    assert!(GestureRuntime::from_config(&config).should_divert());
+
+    config.devices[0].buttons.remove(&ButtonId::ThumbGesture);
+    assert!(
+        !GestureRuntime::from_config(&config).should_divert(),
+        "an empty binding set must not divert the button"
+    );
+}
+
+#[test]
+fn test_runtime_empty_config_is_inert() {
+    let runtime = GestureRuntime::from_config(&Config {
+        devices: Vec::new()
+    });
+    assert!(!runtime.should_divert());
+}
+
+#[test]
+fn test_runtime_release_without_press_is_ignored() {
+    let mut runtime = GestureRuntime::default();
+    runtime.on_notification(ReprogNotification::DivertedButtons {
+        pressed: vec![]
+    });
+    assert!(!runtime.is_holding());
+}
+
+#[test]
+fn test_runtime_tracks_press_and_release() {
+    let mut runtime = GestureRuntime::default();
+    runtime.on_notification(ReprogNotification::DivertedButtons {
+        pressed: vec![control_id::GESTURE_BUTTON]
+    });
+    assert!(runtime.is_holding());
+    runtime.on_notification(ReprogNotification::DivertedButtons {
+        pressed: vec![]
+    });
+    assert!(!runtime.is_holding());
+}
+
+#[test]
+fn test_runtime_ignores_other_diverted_controls() {
+    let mut runtime = GestureRuntime::default();
+    runtime.on_notification(ReprogNotification::DivertedButtons {
+        pressed: vec![0x00C4]
+    });
+    assert!(
+        !runtime.is_holding(),
+        "only the gesture button starts a hold"
+    );
 }

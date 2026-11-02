@@ -63,33 +63,16 @@ pub fn resolve_sequence(keys: &[String]) -> Result<Vec<u16>> {
 /// Injects key combinations through a lazily created uinput keyboard.
 ///
 /// The virtual device is built on the first successful injection and reused
-/// afterwards; a failed build is remembered as [`Injector::failure`] and
-/// retried on the next call, so granting uinput permission mid-session heals
-/// the injector without a restart.
+/// afterwards; a failed build is logged once and retried on the next call,
+/// so granting uinput permission mid-session heals the injector without a
+/// restart.
 #[derive(Default)]
 pub struct Injector {
     device:         Option<VirtualDevice>,
-    failure:        Option<String>,
     failure_logged: bool
 }
 
 impl Injector {
-    /// Creates an injector without touching `/dev/uinput`.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            device:         None,
-            failure:        None,
-            failure_logged: false
-        }
-    }
-
-    /// Description of the last device-creation failure, if any.
-    #[must_use]
-    pub fn failure(&self) -> Option<&str> {
-        self.failure.as_deref()
-    }
-
     /// Presses the given `KEY_*` combination in order, holds it briefly and
     /// releases it in reverse order, as a keyboard would.
     ///
@@ -103,7 +86,7 @@ impl Injector {
     /// ```no_run
     /// use logi_mx_daemon::inject::Injector;
     ///
-    /// let mut injector = Injector::new();
+    /// let mut injector = Injector::default();
     /// injector.press_sequence(&["KEY_LEFTCTRL".into(), "KEY_RIGHT".into()])?;
     /// # Ok::<(), masterror::AppError>(())
     /// ```
@@ -123,16 +106,12 @@ impl Injector {
     fn ensure_device(&mut self) -> Result<&mut VirtualDevice> {
         if self.device.is_none() {
             match build_keyboard() {
-                Ok(device) => {
-                    self.failure = None;
-                    self.device = Some(device);
-                }
+                Ok(device) => self.device = Some(device),
                 Err(error) => {
                     if !self.failure_logged {
                         self.failure_logged = true;
                         warn!("gesture injection unavailable: {error}");
                     }
-                    self.failure = Some(error.to_string());
                     return Err(error);
                 }
             }

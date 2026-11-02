@@ -32,17 +32,17 @@ fn test_resolve_sequence_rejects_empty_list() {
 
 #[test]
 fn test_injector_starts_without_touching_uinput() {
-    let injector = Injector::new();
-    assert!(injector.failure().is_none());
+    let injector = Injector::default();
+    assert!(injector.device.is_none());
 }
 
 #[test]
 fn test_press_rejects_bad_names_before_touching_device() {
-    let mut injector = Injector::new();
+    let mut injector = Injector::default();
     assert!(injector.press_sequence(&seq(&["KEY_NOPE"])).is_err());
     assert!(injector.press_sequence(&[]).is_err());
     assert!(
-        injector.failure().is_none(),
-        "a validation error must not be recorded as a device failure"
+        injector.device.is_none(),
+        "a validation error must not create the virtual device"
     );
 }

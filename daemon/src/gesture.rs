@@ -14,7 +14,10 @@
 
 use std::time::{Duration, Instant};
 
-use logi_mx_driver::devices::GestureDirection;
+use logi_mx_driver::prelude::*;
+use tracing::{info, warn};
+
+use crate::inject::Injector;
 
 /// Minimum dominant-axis travel (raw-XY units) before a direction commits.
 pub const SWIPE_THRESHOLD: i32 = 50;
@@ -84,7 +87,7 @@ const fn along(dir: GestureDirection, dx: i32, dy: i32) -> i32 {
         GestureDirection::Left => dx.saturating_neg(),
         GestureDirection::Down => dy,
         GestureDirection::Up => dy.saturating_neg(),
-        GestureDirection::None => 0,
+        GestureDirection::None => 0
     }
 }
 
@@ -93,7 +96,7 @@ const fn across(dir: GestureDirection, dx: i32, dy: i32) -> i32 {
     match dir {
         GestureDirection::Right | GestureDirection::Left => dy,
         GestureDirection::Up | GestureDirection::Down => dx,
-        GestureDirection::None => 0,
+        GestureDirection::None => 0
     }
 }
 
@@ -103,23 +106,23 @@ const fn across(dir: GestureDirection, dx: i32, dy: i32) -> i32 {
 #[derive(Debug, Default)]
 pub struct SwipeAccumulator {
     /// When the current hold began; `None` when not holding.
-    held_since: Option<Instant>,
+    held_since:    Option<Instant>,
     /// Travel accumulated since the last commit (saturating).
-    dx: i32,
-    dy: i32,
+    dx:            i32,
+    dy:            i32,
     /// Whether any direction already fired during this hold.
-    fired: bool,
+    fired:         bool,
     /// Direction committed by the current stroke, if any.
-    last: Option<GestureDirection>,
+    last:          Option<GestureDirection>,
     /// Travel continuing `last` since it committed; fires again at
     /// [`REPEAT_DISTANCE`].
-    repeat: i32,
+    repeat:        i32,
     /// Sideways drift accompanying `repeat`.
-    repeat_cross: i32,
+    repeat_cross:  i32,
     /// When the last motion arrived, to detect the re-arm pause.
-    moved_at: Option<Instant>,
+    moved_at:      Option<Instant>,
     /// Whether the MX Master 3S pre-press burst was already dropped.
-    burst_dropped: bool,
+    burst_dropped: bool
 }
 
 impl SwipeAccumulator {
@@ -237,6 +240,178 @@ impl SwipeAccumulator {
             return None;
         }
         Some(settled.unwrap_or(GestureDirection::None))
+    }
+}
+
+/// Wires the [`SwipeAccumulator`] to configured bindings and the key injector.
+///
+/// Owns the divert lifecycle: the gesture button is diverted when a device
+/// arrives with gestures enabled and undiverted on removal or shutdown, so a
+/// daemon exit never leaves the button stranded in diverted mode.
+#[derive(Default)]
+pub struct GestureRuntime {
+    bindings:           Vec<Gesture>,
+    diverted:           bool,
+    accumulator:        SwipeAccumulator,
+    injector:           Injector,
+    last_commit:        Option<GestureDirection>,
+    injection_warned:   bool,
+    unsupported_warned: bool
+}
+
+impl GestureRuntime {
+    /// Builds the runtime from the first configured device entry.
+    ///
+    /// Without the `gestures_enabled` opt-in the bindings are dropped, so a
+    /// disabled runtime can never divert the button.
+    #[must_use]
+    pub fn from_config(config: &Config) -> Self {
+        let Some(device) = config.devices.first() else {
+            return Self::default();
+        };
+        let bindings = match (
+            device.gestures_enabled,
+            device.buttons.get(&ButtonId::ThumbGesture)
+        ) {
+            (
+                true,
+                Some(Action::Gestures {
+                    gestures
+                })
+            ) => gestures.clone(),
+            _ => Vec::new()
+        };
+        Self {
+            bindings,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the gesture button must be diverted for this configuration.
+    #[must_use]
+    pub const fn should_divert(&self) -> bool {
+        !self.bindings.is_empty()
+    }
+
+    /// Whether a gesture hold is currently in progress; callers poll faster
+    /// while this is true.
+    #[must_use]
+    pub const fn is_holding(&self) -> bool {
+        self.accumulator.is_holding()
+    }
+
+    /// Diverts the gesture button after a device attach.
+    ///
+    /// When gestures are not configured the button is defensively undiverted
+    /// once: the divert flag persists in firmware, so this heals a button
+    /// stranded by a previous session or a crashed daemon.
+    pub fn attach(&mut self, device: &mut MxMaster3s) {
+        if self.diverted {
+            return;
+        }
+        if !self.should_divert() {
+            let _ = device.set_control_divert(control_id::GESTURE_BUTTON, false, false);
+            return;
+        }
+        match device.set_control_divert(control_id::GESTURE_BUTTON, true, true) {
+            Ok(()) => {
+                self.diverted = true;
+                info!("gesture button diverted for software recognition");
+            }
+            Err(e) => warn!("failed to divert the gesture button: {e}")
+        }
+    }
+
+    /// Undiverts the gesture button before a device drop or daemon exit.
+    pub fn detach(&mut self, device: &mut MxMaster3s) {
+        if !self.diverted {
+            return;
+        }
+        self.diverted = false;
+        self.accumulator = SwipeAccumulator::default();
+        self.last_commit = None;
+        if let Err(e) = device.set_control_divert(control_id::GESTURE_BUTTON, false, false) {
+            warn!("failed to undivert the gesture button: {e}");
+        }
+    }
+
+    /// Drains pending reprogrammable-controls notifications and fires the
+    /// actions they complete.
+    pub fn pump(&mut self, device: &mut MxMaster3s) {
+        if !self.diverted {
+            return;
+        }
+        while let Some(note) = device.read_reprog_notification(0) {
+            self.on_notification(note);
+        }
+    }
+
+    fn on_notification(&mut self, note: ReprogNotification) {
+        match note {
+            ReprogNotification::DivertedButtons {
+                pressed
+            } => {
+                let held = pressed.contains(&control_id::GESTURE_BUTTON);
+                if held && !self.accumulator.is_holding() {
+                    self.accumulator.begin(Instant::now());
+                    self.last_commit = None;
+                } else if !held && self.accumulator.is_holding() {
+                    self.finish_hold();
+                }
+            }
+            ReprogNotification::RawXy {
+                dx,
+                dy
+            } => {
+                if let Some(dir) =
+                    self.accumulator
+                        .accumulate(i32::from(dx), i32::from(dy), Instant::now())
+                {
+                    self.last_commit = Some(dir);
+                    self.fire(dir, Some(GestureMode::OnPress));
+                }
+            }
+        }
+    }
+
+    fn finish_hold(&mut self) {
+        let committed = self.last_commit.take();
+        match self.accumulator.end() {
+            Some(dir) => self.fire(dir, None),
+            None if let Some(dir) = committed => self.fire(dir, Some(GestureMode::OnRelease)),
+            None => {}
+        }
+    }
+
+    /// Fires every binding matching the direction; `mode` restricts the fire
+    /// moment, while `None` fires both modes (release commit and click).
+    fn fire(&mut self, direction: GestureDirection, mode: Option<GestureMode>) {
+        for gesture in &self.bindings {
+            if gesture.direction != direction {
+                continue;
+            }
+            if mode.is_some_and(|wanted| gesture.mode != wanted) {
+                continue;
+            }
+            match gesture.action.as_ref() {
+                Action::Keypress {
+                    keys
+                } => {
+                    if let Err(e) = self.injector.press_sequence(keys)
+                        && !self.injection_warned
+                    {
+                        self.injection_warned = true;
+                        warn!("gesture injection failed: {e}");
+                    }
+                }
+                _ => {
+                    if !self.unsupported_warned {
+                        self.unsupported_warned = true;
+                        warn!("gesture action not supported yet: {:?}", gesture.action);
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -58,7 +58,13 @@ pub struct DeviceConfig {
 
     /// Per-button remapping applied by the daemon on device attach.
     #[serde(default)]
-    pub buttons: HashMap<ButtonId, Action>
+    pub buttons: HashMap<ButtonId, Action>,
+
+    /// Diverts the gesture button to the daemon for software recognition.
+    /// Disabled by default so the button keeps its native firmware behaviour
+    /// until the user opts in.
+    #[serde(default)]
+    pub gestures_enabled: bool
 }
 
 const fn default_dpi() -> u16 {
@@ -133,7 +139,8 @@ impl Default for DeviceConfig {
                 enabled:  true,
                 inverted: false
             },
-            buttons
+            buttons,
+            gestures_enabled: false
         }
     }
 }

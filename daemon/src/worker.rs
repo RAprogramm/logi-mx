@@ -22,12 +22,20 @@ use tokio::runtime::Handle as TokioHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    gesture::GestureRuntime,
     ipc::{self, RpcRequest, RpcSender},
     status::SharedStatus
 };
 
 /// Interval between periodic status refreshes.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Notification poll interval while a gesture hold is in progress; raw-XY
+/// reports stream every few milliseconds, so the pump must keep up.
+const GESTURE_POLL: Duration = Duration::from_millis(5);
+
+/// Notification poll interval while idle.
+const IDLE_POLL: Duration = Duration::from_millis(100);
 
 /// Commands accepted by the device worker.
 #[derive(Debug)]
@@ -99,6 +107,7 @@ fn run_device_worker(
     status: &SharedStatus,
     tray: &TraySlot
 ) {
+    let mut gestures = GestureRuntime::from_config(&config);
     let mut manager = DevicePool::new(config);
     #[cfg(feature = "notify")]
     let mut policy = crate::notify::NoticePolicy::new();
@@ -113,12 +122,19 @@ fn run_device_worker(
             handle_rpc(req, &mut manager);
         }
 
-        let should_refresh = match rx.recv_timeout(Duration::from_millis(100)) {
+        let poll = if gestures.is_holding() {
+            GESTURE_POLL
+        } else {
+            IDLE_POLL
+        };
+        let should_refresh = match rx.recv_timeout(poll) {
             Ok(DeviceEvent::Added(path)) => {
                 manager.handle_device_added(path);
+                manager.for_each_cached_mut(|device| gestures.attach(device));
                 true
             }
             Ok(DeviceEvent::Removed(path)) => {
+                manager.for_each_cached_mut(|device| gestures.detach(device));
                 manager.handle_device_removed(&path);
                 true
             }
@@ -126,12 +142,15 @@ fn run_device_worker(
             Err(mpsc::RecvTimeoutError::Disconnected) => break
         };
 
+        manager.for_each_cached_mut(|device| gestures.pump(device));
+
         if should_refresh {
             refresh_and_notify(status, tray, &mut policy);
             last_refresh = std::time::Instant::now();
         }
     }
 
+    manager.for_each_cached_mut(|device| gestures.detach(device));
     debug!("Device worker stopped");
 }
 
@@ -422,6 +441,20 @@ impl DevicePool {
         let result = f(device);
         drop(guard);
         result
+    }
+
+    /// Runs a closure against every cached device handle, if any.
+    ///
+    /// Never discovers a device: used by the periodic gesture pump, which
+    /// must stay cheap when no device is connected.
+    fn for_each_cached_mut(&self, mut f: impl FnMut(&mut MxMaster3s)) {
+        let mut guard = self
+            .devices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for device in guard.values_mut() {
+            f(device);
+        }
     }
 
     /// Drops the stored device handle for a removed hidraw path.

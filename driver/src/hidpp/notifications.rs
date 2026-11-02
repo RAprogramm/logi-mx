@@ -27,15 +27,15 @@ pub enum ReprogNotification {
     /// The diverted controls currently held down; empty means all released.
     DivertedButtons {
         /// Control IDs reported as pressed, in wire order.
-        pressed: Vec<u16>,
+        pressed: Vec<u16>
     },
     /// A raw pointer delta streamed while a raw-XY control is held.
     RawXy {
         /// Horizontal movement, positive to the right.
         dx: i16,
         /// Vertical movement, positive downwards.
-        dy: i16,
-    },
+        dy: i16
+    }
 }
 
 /// Decodes a packet into a [`ReprogNotification`].
@@ -68,7 +68,7 @@ pub enum ReprogNotification {
 #[must_use]
 pub fn decode_reprog_notification(
     feature_index: u8,
-    packet: &HidppPacket,
+    packet: &HidppPacket
 ) -> Option<ReprogNotification> {
     let HidppPacket::Long(report) = packet else {
         return None;
@@ -79,13 +79,13 @@ pub fn decode_reprog_notification(
 
     match report.function_id {
         0x00 => Some(ReprogNotification::DivertedButtons {
-            pressed: parse_pressed(&report.parameters),
+            pressed: parse_pressed(&report.parameters)
         }),
         0x01 => Some(ReprogNotification::RawXy {
             dx: i16::from_be_bytes([report.parameters[0], report.parameters[1]]),
-            dy: i16::from_be_bytes([report.parameters[2], report.parameters[3]]),
+            dy: i16::from_be_bytes([report.parameters[2], report.parameters[3]])
         }),
-        _ => None,
+        _ => None
     }
 }
 
