@@ -41,7 +41,10 @@ use logi_mx_daemon::ipc::{
     self, BTN_BIT_BACK, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT, BTN_BIT_MIDDLE,
     BTN_BIT_RIGHT, LiveFrame, Response
 };
-use logi_mx_driver::devices::control_id;
+use logi_mx_driver::{
+    devices::{Action, GestureDirection, GestureMode, control_id},
+    keys::key_name
+};
 
 use crate::snapshot::{DeviceSnapshot, collect_device_snapshot};
 
@@ -723,7 +726,7 @@ fn create_panel(
     toast.set_size_request(PANEL_WIDTH, -1);
     toast.add_css_class("card");
 
-    let root = GtkBox::new(Orientation::Vertical, 8);
+    let root = GtkBox::new(Orientation::Vertical, 12);
     root.set_margin_top(16);
     root.set_margin_bottom(16);
     root.set_margin_start(16);
@@ -740,6 +743,12 @@ fn create_panel(
             "buttons",
             "Buttons",
             "input-mouse-symbolic"
+        ),
+        (
+            gestures_page(&toast, window),
+            "gestures",
+            "Gestures",
+            "input-touchpad-symbolic"
         ),
         (
             wheel_page(&toast, widgets),
@@ -1025,6 +1034,327 @@ fn buttons_page(
     box_.append(&buttons_section);
     scroll.set_child(Some(&box_));
     scroll
+}
+
+/// Gesture tiles in display order: direction and human label.
+const GESTURE_TILES: [(GestureDirection, &str); 5] = [
+    (GestureDirection::Up, "Swipe up"),
+    (GestureDirection::Down, "Swipe down"),
+    (GestureDirection::Left, "Swipe left"),
+    (GestureDirection::Right, "Swipe right"),
+    (GestureDirection::None, "Click")
+];
+
+/// Fire moments offered on every gesture tile.
+const GESTURE_MODES: [&str; 2] = ["On press", "On release"];
+
+/// Shared registry of the built gesture tiles.
+type GestureTiles = Rc<RefCell<HashMap<GestureDirection, GestureTile>>>;
+
+/// Pending key capture: the direction being bound and the evdev codes
+/// pressed so far, in press order.
+type GestureCapture = Rc<RefCell<Option<(GestureDirection, Vec<u16>)>>>;
+
+/// One editable gesture binding: direction, key sequence and its widgets.
+#[derive(Clone)]
+struct GestureTile {
+    child:   FlowBoxChild,
+    keys:    Rc<RefCell<Vec<String>>>,
+    binding: Label,
+    mode:    DropDown,
+    capture: Button
+}
+
+impl GestureTile {
+    /// Reflects a bound key sequence on the tile.
+    fn set_keys(&self, keys: Vec<String>) {
+        self.binding.set_text(&binding_text(&keys));
+        *self.keys.borrow_mut() = keys;
+    }
+}
+
+/// Renders a key sequence for the tile label, e.g. `Left Ctrl + Right`.
+fn binding_text(keys: &[String]) -> String {
+    if keys.is_empty() {
+        return "Not bound".to_string();
+    }
+    keys.iter()
+        .map(|name| {
+            name.trim_start_matches("KEY_")
+                .split('_')
+                .map(|word| {
+                    let lower = word.to_lowercase();
+                    let mut chars = lower.chars();
+                    let head: String = chars
+                        .next()
+                        .map_or(String::new(), |c| c.to_uppercase().collect());
+                    head + chars.as_str()
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+/// Disarms a pending capture and restores the tile button.
+fn disarm_capture(capture: &GestureCapture, tiles: &GestureTiles) {
+    if let Some((direction, _)) = capture.borrow_mut().take()
+        && let Some(tile) = tiles.borrow().get(&direction)
+    {
+        tile.capture.set_label("Capture");
+        tile.capture.remove_css_class("suggested");
+    }
+}
+
+/// Builds one gesture tile: direction, current binding, fire moment and the
+/// capture/clear controls.
+fn gesture_tile(
+    direction: GestureDirection,
+    label: &str,
+    toast: &ToastOverlay,
+    capture: &GestureCapture,
+    tiles: &GestureTiles
+) -> GestureTile {
+    let child = FlowBoxChild::new();
+    child.add_css_class("hud-tile");
+    child.set_hexpand(true);
+    let column = GtkBox::new(Orientation::Vertical, 8);
+
+    let head = GtkBox::new(Orientation::Horizontal, 8);
+    let title = Label::new(Some(label));
+    title.add_css_class("title-4");
+    title.set_xalign(0.0);
+    let binding = Label::new(Some("Not bound"));
+    binding.add_css_class("dim-label");
+    binding.add_css_class("caption");
+    binding.set_hexpand(true);
+    binding.set_xalign(1.0);
+    binding.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    head.append(&title);
+    head.append(&binding);
+
+    let controls = GtkBox::new(Orientation::Horizontal, 8);
+    let mode = DropDown::from_strings(&GESTURE_MODES);
+    mode.set_valign(gtk4::Align::Center);
+    let spring = Label::new(None);
+    spring.set_hexpand(true);
+    let capture_btn = Button::with_label("Capture");
+    let clear_btn = Button::from_icon_name("user-trash-symbolic");
+    clear_btn.add_css_class("flat");
+    clear_btn.set_tooltip_text(Some("Clear binding"));
+    controls.append(&mode);
+    controls.append(&spring);
+    controls.append(&capture_btn);
+    controls.append(&clear_btn);
+
+    column.append(&head);
+    column.append(&controls);
+    child.set_child(Some(&column));
+
+    let keys: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let toast_mode = toast.clone();
+    let keys_mode = Rc::clone(&keys);
+    mode.connect_selected_notify(move |picker| {
+        let current = keys_mode.borrow().clone();
+        if current.is_empty() {
+            return;
+        }
+        let moment = if picker.selected() == 0 {
+            GestureMode::OnPress
+        } else {
+            GestureMode::OnRelease
+        };
+        let response = ipc::try_request(&ipc::Request::SetGesture {
+            direction,
+            mode: moment,
+            keys: current
+        });
+        report(response, &toast_mode, "Gesture updated");
+    });
+
+    let toast_clear = toast.clone();
+    let tiles_clear = Rc::clone(tiles);
+    clear_btn.connect_clicked(move |_| {
+        let response = ipc::try_request(&ipc::Request::ClearGesture {
+            direction
+        });
+        if let Some(tile) = tiles_clear.borrow().get(&direction)
+            && matches!(response, Some(Response::Ok))
+        {
+            tile.set_keys(Vec::new());
+        }
+        report(response, &toast_clear, "Gesture cleared");
+    });
+
+    let capture_arm = Rc::clone(capture);
+    let tiles_arm = Rc::clone(tiles);
+    capture_btn.connect_clicked(move |_| {
+        disarm_capture(&capture_arm, &tiles_arm);
+        *capture_arm.borrow_mut() = Some((direction, Vec::new()));
+        if let Some(tile) = tiles_arm.borrow().get(&direction) {
+            tile.capture.set_label("Press keys…");
+            tile.capture.add_css_class("suggested");
+        }
+    });
+
+    GestureTile {
+        child,
+        keys,
+        binding,
+        mode,
+        capture: capture_btn
+    }
+}
+
+/// Builds the Gestures page: a master switch plus one tile per direction.
+///
+/// Capture arms a window-level key listener: the next chord becomes the
+/// binding the moment a key is released, Escape cancels. Every change is
+/// applied and persisted by the daemon immediately.
+fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) -> ScrolledWindow {
+    let scroll = page_scroll();
+    let box_ = GtkBox::new(Orientation::Vertical, 0);
+
+    let enable_group = PreferencesGroup::new();
+    enable_group.set_title("Gesture recognition");
+    enable_group.set_description(Some(
+        "Take over the gesture button and fire key combinations on swipes"
+    ));
+    let enable_row = ActionRow::new();
+    enable_row.set_title("Enable gestures");
+    let enable_switch = Switch::new();
+    enable_switch.set_valign(gtk4::Align::Center);
+    enable_row.add_suffix(&enable_switch);
+    enable_row.set_activatable_widget(Some(&enable_switch));
+    enable_group.add(&enable_row);
+
+    let tiles: GestureTiles = Rc::new(RefCell::new(HashMap::new()));
+    let capture: GestureCapture = Rc::new(RefCell::new(None));
+
+    let flow = FlowBox::new();
+    flow.add_css_class("hud-tiles");
+    flow.set_selection_mode(SelectionMode::None);
+    flow.set_min_children_per_line(1);
+    flow.set_max_children_per_line(1);
+    flow.set_row_spacing(12);
+    for (direction, label) in GESTURE_TILES {
+        let tile = gesture_tile(direction, label, toast, &capture, &tiles);
+        tiles.borrow_mut().insert(direction, tile.clone());
+        flow.append(&tile.child);
+    }
+
+    box_.append(&enable_group);
+    box_.append(&flow);
+    scroll.set_child(Some(&box_));
+
+    if let Some(Response::Gestures {
+        enabled,
+        gestures
+    }) = ipc::try_request(&ipc::Request::GetGestures)
+    {
+        enable_switch.set_active(enabled);
+        for gesture in gestures {
+            if let Some(tile) = tiles.borrow().get(&gesture.direction) {
+                tile.mode
+                    .set_selected(u32::from(gesture.mode != GestureMode::OnPress));
+                if let Action::Keypress {
+                    keys
+                } = gesture.action.as_ref()
+                {
+                    tile.set_keys(keys.clone());
+                }
+            }
+        }
+    }
+
+    let toast_enable = toast.clone();
+    enable_switch.connect_active_notify(move |switch| {
+        let response = ipc::try_request(&ipc::Request::SetGesturesEnabled {
+            enabled: switch.is_active()
+        });
+        let outcome = if switch.is_active() {
+            "Gestures enabled"
+        } else {
+            "Gestures disabled"
+        };
+        report(response, &toast_enable, outcome);
+    });
+
+    attach_gesture_capture(window, &capture, &tiles, toast);
+    scroll
+}
+
+/// Installs the window-level capture listener for gesture binding.
+///
+/// Runs in the capture phase so chords never reach the diagram shortcuts or
+/// the Escape-to-close controller while a binding is armed.
+fn attach_gesture_capture(
+    window: &ApplicationWindow,
+    capture: &GestureCapture,
+    tiles: &GestureTiles,
+    toast: &ToastOverlay
+) {
+    let controller = EventControllerKey::new();
+    controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+
+    let capture_press = Rc::clone(capture);
+    let tiles_press = Rc::clone(tiles);
+    controller.connect_key_pressed(move |_controller, key, code, _state| {
+        if capture_press.borrow().is_none() {
+            return glib::Propagation::Proceed;
+        }
+        if key == gtk4::gdk::Key::Escape {
+            disarm_capture(&capture_press, &tiles_press);
+            return glib::Propagation::Stop;
+        }
+        if let Some(evdev) = code.checked_sub(8).and_then(|raw| u16::try_from(raw).ok())
+            && key_name(evdev).is_some()
+            && let Some((_, pressed)) = capture_press.borrow_mut().as_mut()
+            && !pressed.contains(&evdev)
+        {
+            pressed.push(evdev);
+        }
+        glib::Propagation::Stop
+    });
+
+    let capture_release = Rc::clone(capture);
+    let tiles_release = Rc::clone(tiles);
+    let toast_release = toast.clone();
+    controller.connect_key_released(move |_controller, _key, _code, _state| {
+        let Some((direction, pressed)) = capture_release.borrow().clone() else {
+            return;
+        };
+        if pressed.is_empty() {
+            return;
+        }
+        disarm_capture(&capture_release, &tiles_release);
+        let names: Vec<String> = pressed
+            .iter()
+            .filter_map(|code| key_name(*code))
+            .map(str::to_string)
+            .collect();
+        let Some(tile) = tiles_release.borrow().get(&direction).cloned() else {
+            return;
+        };
+        let moment = if tile.mode.selected() == 0 {
+            GestureMode::OnPress
+        } else {
+            GestureMode::OnRelease
+        };
+        let response = ipc::try_request(&ipc::Request::SetGesture {
+            direction,
+            mode: moment,
+            keys: names.clone()
+        });
+        if matches!(response, Some(Response::Ok)) {
+            tile.set_keys(names);
+        }
+        report(response, &toast_release, "Gesture bound");
+    });
+
+    window.add_controller(controller);
 }
 
 /// Creates the wheel page: `SmartShift`, hi-res and direction settings.
@@ -1338,6 +1668,7 @@ fn device_page(
 /// A page-sized vertical scroller for panel content.
 fn page_scroll() -> ScrolledWindow {
     let scroll = ScrolledWindow::new();
+    scroll.add_css_class("hud-page");
     scroll.set_vexpand(true);
     scroll.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
     scroll

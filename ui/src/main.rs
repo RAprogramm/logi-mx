@@ -110,6 +110,28 @@ fn load_css() {
         dropdown.hud-assign button {
             min-width: 120px;
         }
+        scrolledwindow.hud-page scrollbar {
+            background-color: transparent;
+            border: none;
+            padding: 0;
+        }
+        scrolledwindow.hud-page scrollbar slider {
+            min-width: 6px;
+            min-height: 6px;
+            margin: 2px 4px;
+            border: none;
+            border-radius: 99px;
+            background-color: alpha(#ffffff, 0.16);
+        }
+        scrolledwindow.hud-page scrollbar slider:hover {
+            background-color: alpha(#ffffff, 0.32);
+        }
+        scrolledwindow.hud-page undershoot,
+        scrolledwindow.hud-page overshoot {
+            background-color: transparent;
+            background-image: none;
+            box-shadow: none;
+        }
         "
     );
     if let Some(display) = gtk4::gdk::Display::default() {
