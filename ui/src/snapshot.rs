@@ -5,7 +5,6 @@ use logi_mx_daemon::ipc::{Request, Response, try_request};
 use logi_mx_driver::prelude::*;
 
 const DEFAULT_DEVICE_NAME: &str = "MX Master 3S";
-const DEFAULT_DPI: u16 = 1000;
 
 /// One-shot device state collected at startup.
 ///
@@ -17,8 +16,8 @@ pub struct DeviceSnapshot {
     pub name:        String,
     /// Battery state, when the battery feature answered.
     pub battery:     Option<BatteryInfo>,
-    /// Currently applied DPI.
-    pub dpi:         u16,
+    /// Currently applied DPI, `None` when the DPI read did not answer.
+    pub dpi:         Option<u16>,
     /// Current `SmartShift` configuration.
     pub smartshift:  SmartShiftConfig,
     /// Current hi-res wheel configuration.
@@ -63,7 +62,7 @@ pub fn collect_device_snapshot() -> Option<DeviceSnapshot> {
         return Some(DeviceSnapshot {
             name,
             battery,
-            dpi,
+            dpi: Some(dpi),
             smartshift,
             hiresscroll: hires
         });
@@ -89,7 +88,7 @@ fn collect_device_snapshot_direct() -> Option<DeviceSnapshot> {
         .device_name()
         .unwrap_or_else(|_| DEFAULT_DEVICE_NAME.to_string());
     let battery = device.battery_info().ok();
-    let dpi = device.dpi().unwrap_or(DEFAULT_DPI);
+    let dpi = device.dpi().ok();
     let smartshift = device.smartshift().unwrap_or_default();
     let hiresscroll = device.hires_scroll().unwrap_or_default();
 

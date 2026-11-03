@@ -66,6 +66,13 @@ use crate::snapshot::{DeviceSnapshot, collect_device_snapshot};
 
 /// Width of the settings panel in pixels.
 const PANEL_WIDTH: i32 = 380;
+
+/// Vertical gap between the sections of a settings page.
+const SECTION_SPACING: i32 = 18;
+
+/// Right gutter of a page column: the overlay scrollbar plus a visible gap
+/// between it and the tiles.
+const SCROLLBAR_GUTTER: i32 = 20;
 /// Margin between the HUD window and the screen edges in pixels.
 const HUD_MARGIN: i32 = 80;
 /// Padding added to thin hotspots so they remain easy to click.
@@ -114,6 +121,16 @@ impl BgMode {
         matches!(self, Self::Blur | Self::BlurDim)
     }
 
+    /// The same backdrop with compositor blur dropped, used when the runtime
+    /// GTK cannot request compositor blur regions.
+    const fn without_blur(self) -> Self {
+        match self {
+            Self::Blur => Self::None,
+            Self::BlurDim => Self::Dim,
+            other => other
+        }
+    }
+
     const fn dim_on(self) -> bool {
         matches!(self, Self::Dim | Self::BlurDim)
     }
@@ -154,11 +171,26 @@ fn background_path() -> Option<PathBuf> {
     Some(base.join("logi-mx").join("hud-background"))
 }
 
+/// Whether the runtime GTK translates the HUD's `backdrop-filter` into a
+/// real compositor blur region (the `ext-background-effect` protocol added
+/// in GTK 4.24).
+fn blur_supported() -> bool {
+    gtk4::check_version(4, 24, 0).is_none()
+}
+
 /// Reads the persisted backdrop mode, defaulting to [`BgMode::Dim`].
+///
+/// Blur modes fall back to their unblurred equivalents when the runtime GTK
+/// is older than 4.24, where `backdrop-filter` paints only a faint tint.
 fn load_background() -> BgMode {
-    background_path()
+    let mode = background_path()
         .and_then(|path| fs::read_to_string(path).ok())
-        .map_or_else(BgMode::default, |token| BgMode::from_token(token.trim()))
+        .map_or_else(BgMode::default, |token| BgMode::from_token(token.trim()));
+    if blur_supported() {
+        mode
+    } else {
+        mode.without_blur()
+    }
 }
 
 /// Persists the backdrop mode; failures are logged, never fatal.
@@ -360,6 +392,22 @@ impl LiveVisual {
         if frame.hwheel_hi != 0 {
             self.hwheel_dir = frame.hwheel_hi.signum();
         }
+    }
+
+    /// Folds one main-context live update: the newest frame, the stream state
+    /// and the tap flashes collected between two wakes.
+    ///
+    /// A dropped stream clears the pressed-button mask so a button cannot
+    /// stay tinted on a stale mask while no telemetry arrives.
+    fn fold(&mut self, frame: Option<LiveFrame>, connected: bool, flashed: u32) {
+        if let Some(frame) = frame {
+            self.apply(&frame);
+        }
+        self.connected = connected;
+        if !connected {
+            self.buttons = 0;
+        }
+        self.flash |= flashed;
     }
 
     /// Fades the velocity gauges toward zero and clears the tap flashes while
@@ -590,7 +638,9 @@ fn attach_escape_to_close(window: &ApplicationWindow) {
 ///
 /// The panel is built with placeholders before the window is presented; the
 /// background loader fills these widgets in as soon as the daemon answers,
-/// so the first frame never waits on device I/O.
+/// so the first frame never waits on device I/O. The snapshot-seeded
+/// controls and their Apply buttons start insensitive and are enabled only
+/// once real values arrive.
 #[derive(Default)]
 pub(super) struct PanelWidgets {
     /// Model row on the device page.
@@ -613,15 +663,50 @@ pub(super) struct PanelWidgets {
     hires_switch:      Option<Switch>,
     /// Natural scrolling switch.
     inverted_switch:   Option<Switch>,
+    /// DPI Apply button, kept insensitive until the snapshot provides a real
+    /// DPI value.
+    dpi_apply:         Option<Button>,
+    /// `SmartShift` Apply button, kept insensitive until the snapshot seeds
+    /// the `SmartShift` controls.
+    smartshift_apply:  Option<Button>,
+    /// Scrolling Apply button, kept insensitive until the snapshot seeds the
+    /// scroll switches.
+    scroll_apply:      Option<Button>,
+    /// DPI carried for the header chip so a battery refresh can repaint the
+    /// chip without losing the DPI part.
+    chip_dpi:          Option<u16>,
     /// Set once a snapshot (or its failure) has been applied; later
     /// deliveries never overwrite values the user may have edited.
     applied:           bool
 }
 
+/// Paints a fresh battery reading onto the battery row and the header status
+/// chip so the panel never shows two different levels at once.
+///
+/// The chip keeps the connection wording and appends the DPI part recorded
+/// by the last snapshot.
+pub(super) fn apply_battery(widgets: &PanelWidgets, battery: &str) {
+    if let Some(row) = &widgets.battery_row {
+        row.set_subtitle(battery);
+    }
+    if let Some(chip) = &widgets.status_chip {
+        let mut text = format!("Connected · {battery}");
+        if let Some(dpi) = widgets.chip_dpi {
+            text = format!("{text} · {dpi} DPI");
+        }
+        chip.set_text(&text);
+        chip.remove_css_class("hud-status-bad");
+        chip.add_css_class("hud-status-ok");
+    }
+}
+
 /// Fills the registered panel widgets from a device snapshot.
 ///
-/// `None` marks the device unreachable and leaves the controls at their
-/// defaults with explicit "unavailable" subtitles.
+/// The snapshot-seeded controls start insensitive so their placeholder
+/// values can never be edited or applied before the device answers; a
+/// successful snapshot fills them in and enables them. `None` marks the
+/// device unreachable and leaves the controls at their defaults with
+/// explicit "unavailable" subtitles.
 fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceSnapshot>) {
     {
         let mut w = widgets.borrow_mut();
@@ -629,6 +714,7 @@ fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceS
             return;
         }
         w.applied = true;
+        w.chip_dpi = snapshot.and_then(|snapshot| snapshot.dpi);
     }
     let w = widgets.borrow();
     let Some(snapshot) = snapshot else {
@@ -648,45 +734,56 @@ fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceS
         }
         return;
     };
-    if let Some(chip) = &w.status_chip {
-        let battery = snapshot.battery.map_or_else(
-            || "battery unknown".to_string(),
-            |battery| format!("{}%", battery.level)
-        );
-        chip.set_text(&format!("Connected · {battery} · {} DPI", snapshot.dpi));
-        chip.remove_css_class("hud-status-bad");
-        chip.add_css_class("hud-status-ok");
-    }
     if let Some(row) = &w.model_row {
         row.set_subtitle(snapshot.name.as_str());
     }
-    if let Some(row) = &w.battery_row {
-        row.set_subtitle(&snapshot.battery.map_or_else(
-            || "unknown".to_string(),
-            |b| format!("{}% · {:?}", b.level, b.status)
-        ));
-    }
     if let Some(row) = &w.dpi_row {
-        row.set_subtitle(&format!("{} DPI", snapshot.dpi));
+        let dpi_text = snapshot
+            .dpi
+            .map_or_else(|| "unknown".to_string(), |dpi| format!("{dpi} DPI"));
+        row.set_subtitle(&dpi_text);
     }
-    if let Some(scale) = &w.dpi_scale {
-        scale.set_value(f64::from(snapshot.dpi));
+    if let Some(scale) = &w.dpi_scale
+        && let Some(dpi) = snapshot.dpi
+    {
+        scale.set_value(f64::from(dpi));
+        scale.set_sensitive(true);
+    }
+    if let Some(button) = &w.dpi_apply {
+        button.set_sensitive(snapshot.dpi.is_some());
     }
     if let Some(switch) = &w.smartshift_switch {
         switch.set_active(snapshot.smartshift.enabled);
+        switch.set_sensitive(true);
     }
     if let Some(scale) = &w.smartshift_scale {
         scale.set_value(f64::from(snapshot.smartshift.threshold));
+        scale.set_sensitive(true);
     }
     if let Some(row) = &w.smartshift_row {
         row.set_subtitle(&format!("Current: {}", snapshot.smartshift.threshold));
     }
+    if let Some(button) = &w.smartshift_apply {
+        button.set_sensitive(true);
+    }
     if let Some(switch) = &w.hires_switch {
         switch.set_active(snapshot.hiresscroll.enabled);
+        switch.set_sensitive(true);
     }
     if let Some(switch) = &w.inverted_switch {
         switch.set_active(snapshot.hiresscroll.inverted);
+        switch.set_sensitive(true);
     }
+    if let Some(button) = &w.scroll_apply {
+        button.set_sensitive(true);
+    }
+    apply_battery(
+        &w,
+        &snapshot.battery.map_or_else(
+            || "unknown".to_string(),
+            |b| format!("{}% · {:?}", b.level, b.status)
+        )
+    );
 }
 
 /// Loads the device snapshot off the main thread and applies it to the panel.
@@ -917,6 +1014,11 @@ pub(super) fn background_section(
     blur_check.set_valign(gtk4::Align::Center);
     blur_row.add_suffix(&blur_check);
     blur_row.set_activatable_widget(Some(&blur_check));
+    if !blur_supported() {
+        blur_check.set_sensitive(false);
+        blur_row.set_tooltip_text(Some("Compositor blur requires GTK 4.24 or newer"));
+        blur_check.set_tooltip_text(Some("Compositor blur requires GTK 4.24 or newer"));
+    }
 
     let state_sync = Rc::clone(state);
     let window_sync = window.clone();
@@ -950,6 +1052,14 @@ pub(super) fn page_scroll() -> ScrolledWindow {
     scroll
 }
 
+/// Vertical column of a settings page: section rhythm plus a right gutter
+/// that keeps the overlay scrollbar clear of the tiles.
+pub(super) fn page_body() -> GtkBox {
+    let box_ = GtkBox::new(Orientation::Vertical, SECTION_SPACING);
+    box_.set_margin_end(SCROLLBAR_GUTTER);
+    box_
+}
+
 /// Turns a daemon reply into a toast message.
 pub(super) fn report(response: Option<Response>, toast: &ToastOverlay, success: &str) {
     let message = match response {
@@ -981,14 +1091,8 @@ fn start_live(state: &Rc<RefCell<HudState>>, drawing: &gtk4::DrawingArea) {
     let hook: Rc<dyn Fn()> = Rc::new(move || {
         let frame = slot_hook.lock().ok().and_then(|mut guard| guard.take());
         let flashed = burst_hook.swap(0, Ordering::Relaxed);
-        {
-            let mut st = state_hook.borrow_mut();
-            st.live.connected = connected_hook.load(Ordering::Relaxed);
-            if let Some(frame) = frame {
-                st.live.apply(&frame);
-            }
-            st.live.flash |= flashed;
-        }
+        let connected = connected_hook.load(Ordering::Relaxed);
+        state_hook.borrow_mut().live.fold(frame, connected, flashed);
         drawing_hook.queue_draw();
     });
     LIVE_HOOK.with(|cell| *cell.borrow_mut() = Some(Rc::clone(&hook)));
@@ -1206,6 +1310,43 @@ mod tests {
     }
 
     #[test]
+    fn disconnect_clears_pressed_buttons() {
+        let mut live = LiveVisual::default();
+        let pressed = LiveFrame {
+            buttons: BTN_BIT_LEFT,
+            ..LiveFrame::default()
+        };
+        live.fold(Some(pressed), true, 0);
+        assert_ne!(live.buttons & BTN_BIT_LEFT, 0);
+
+        live.fold(None, false, 0);
+        assert!(!live.connected);
+        assert_eq!(live.buttons, 0);
+    }
+
+    #[test]
+    fn disconnected_frame_cannot_restore_pressed_buttons() {
+        let mut live = LiveVisual::default();
+        let pressed = LiveFrame {
+            buttons: BTN_BIT_RIGHT,
+            ..LiveFrame::default()
+        };
+        live.fold(Some(pressed), false, 0);
+
+        assert!(!live.connected);
+        assert_eq!(live.buttons, 0);
+    }
+
+    #[test]
+    fn connected_fold_keeps_buttons_and_flashes() {
+        let mut live = LiveVisual::default();
+        live.fold(None, true, BTN_BIT_GESTURE);
+
+        assert!(live.connected);
+        assert_eq!(live.flash & BTN_BIT_GESTURE, BTN_BIT_GESTURE);
+    }
+
+    #[test]
     fn background_mode_round_trips_through_bools_and_tokens() {
         for mode in BgMode::ALL {
             assert_eq!(BgMode::from_bools(mode.dim_on(), mode.wants_blur()), mode);
@@ -1214,5 +1355,13 @@ mod tests {
         assert_eq!(BgMode::from_bools(false, false), BgMode::None);
         assert_eq!(BgMode::from_bools(true, true), BgMode::BlurDim);
         assert_eq!(BgMode::from_token("garbage"), BgMode::default());
+    }
+
+    #[test]
+    fn without_blur_drops_compositor_modes() {
+        assert_eq!(BgMode::Blur.without_blur(), BgMode::None);
+        assert_eq!(BgMode::BlurDim.without_blur(), BgMode::Dim);
+        assert_eq!(BgMode::None.without_blur(), BgMode::None);
+        assert_eq!(BgMode::Dim.without_blur(), BgMode::Dim);
     }
 }

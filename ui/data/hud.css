@@ -14,6 +14,9 @@ window.hud-tint {
     background: rgba(0, 0, 0, 0.02);
 }
 
+/* Compositor blur: GTK 4.24+ translates backdrop-filter into an
+   ext-background-effect blur region for the compositor; on older GTK only
+   the faint tint shows through, so the UI gates this mode at runtime. */
 window.hud-blur {
     backdrop-filter: blur(30px);
 }

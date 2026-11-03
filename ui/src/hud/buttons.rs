@@ -25,7 +25,7 @@ use logi_mx_driver::{
 };
 
 use super::{
-    HudState, MouseButton, ROWS_REGISTRY, RowMap, Tile, keybinds::open_keybind_picker,
+    HudState, MouseButton, ROWS_REGISTRY, RowMap, Tile, keybinds::open_keybind_picker, page_body,
     page_scroll, queue_leaders, report, sync_row_focus
 };
 
@@ -1055,7 +1055,7 @@ pub(super) fn buttons_page(
     scroll
         .vadjustment()
         .connect_value_changed(move |_| queue_leaders());
-    let box_ = GtkBox::new(Orientation::Vertical, 0);
+    let box_ = page_body();
     let (buttons_section, _rows) = buttons_list_section(state, drawing, toast);
     box_.append(&buttons_section);
     box_.append(&thumb_remap_section(toast, window));

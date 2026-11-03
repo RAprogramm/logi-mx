@@ -12,7 +12,9 @@ use libadwaita::{
 };
 use logi_mx_daemon::ipc::{self, Response};
 
-use super::{HudState, PanelWidgets, background_section, page_scroll, report};
+use super::{
+    HudState, PanelWidgets, apply_battery, background_section, page_body, page_scroll, report
+};
 
 /// DPI slider bounds accepted by the device.
 const DPI_MIN: f64 = 400.0;
@@ -35,8 +37,9 @@ const fn scale_dpi(value: f64) -> u16 {
 
 /// Creates the pointer page with the DPI slider.
 ///
-/// The slider starts at the neutral default; the snapshot loader fills in
-/// the real value once the daemon answers.
+/// The slider starts at the neutral default and stays insensitive together
+/// with the Apply button; the snapshot loader fills in the real value and
+/// enables both once the daemon answers, so the placeholder is never sent.
 pub(super) fn pointer_page(
     toast: &ToastOverlay,
     widgets: &Rc<RefCell<PanelWidgets>>
@@ -56,6 +59,7 @@ pub(super) fn pointer_page(
     scale.set_value(f64::from(DEFAULT_DPI));
     scale.set_draw_value(true);
     scale.set_hexpand(true);
+    scale.set_sensitive(false);
     let dr = dpi_row.clone();
     scale.connect_value_changed(move |s| {
         dr.set_subtitle(&format!("{} DPI", scale_dpi(s.value())));
@@ -64,6 +68,7 @@ pub(super) fn pointer_page(
     let apply = Button::with_label("Apply");
     apply.add_css_class("suggested-action");
     apply.add_css_class("pill");
+    apply.set_sensitive(false);
     let sc = scale.clone();
     let to = toast.clone();
     apply.connect_clicked(move |_| {
@@ -89,6 +94,7 @@ pub(super) fn pointer_page(
     let mut w = widgets.borrow_mut();
     w.dpi_row = Some(dpi_row);
     w.dpi_scale = Some(scale);
+    w.dpi_apply = Some(apply);
     drop(w);
     scroll
 }
@@ -105,7 +111,7 @@ pub(super) fn device_page(
     widgets: &Rc<RefCell<PanelWidgets>>
 ) -> ScrolledWindow {
     let scroll = page_scroll();
-    let box_ = GtkBox::new(Orientation::Vertical, 0);
+    let box_ = page_body();
 
     let info_group = PreferencesGroup::new();
     info_group.set_title("Device");
@@ -117,14 +123,14 @@ pub(super) fn device_page(
     battery_row.set_subtitle("Detecting…");
     let refresh = Button::with_label("Refresh");
     refresh.add_css_class("pill");
-    let br = battery_row.clone();
+    let widgets_refresh = Rc::clone(widgets);
     let to = toast.clone();
     refresh.connect_clicked(move |_| match ipc::try_request(&ipc::Request::Battery) {
         Some(Response::Battery {
             level,
             status
         }) => {
-            br.set_subtitle(&format!("{level}% · {status}"));
+            apply_battery(&widgets_refresh.borrow(), &format!("{level}% · {status}"));
         }
         _ => {
             to.add_toast(Toast::new("Daemon unavailable"));

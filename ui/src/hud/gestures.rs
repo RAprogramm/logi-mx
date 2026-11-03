@@ -24,7 +24,7 @@ use logi_mx_driver::{
     keys::key_name
 };
 
-use super::{keybinds::open_keybind_picker, page_scroll, report};
+use super::{keybinds::open_keybind_picker, page_body, page_scroll, report};
 
 /// Gesture tiles in display order: direction and human label. The four
 /// diagonals only ever fire from the radial pie menu, but they bind through
@@ -288,6 +288,7 @@ fn apply_scope(tiles: &GestureTiles, store: &StoreCell, loading: &Cell<bool>) {
     for (direction, tile) in tiles.borrow().iter() {
         tile.set_keys(Vec::new());
         tile.entry.set_text("");
+        *tile.command.borrow_mut() = String::new();
         let Some(gesture) = bindings
             .iter()
             .find(|binding| binding.direction == *direction)
@@ -861,7 +862,7 @@ fn radial_menu_group(toast: &ToastOverlay, initial: &PieConfig) -> (PreferencesG
 /// applied and persisted by the daemon immediately.
 pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) -> ScrolledWindow {
     let scroll = page_scroll();
-    let box_ = GtkBox::new(Orientation::Vertical, 0);
+    let box_ = page_body();
 
     let enable_group = PreferencesGroup::new();
     enable_group.set_title("Gesture recognition");
@@ -924,11 +925,24 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
     }
 
     let toast_enable = toast.clone();
+    let enable_guard = Rc::new(Cell::new(false));
+    let last_enabled = Rc::new(Cell::new(enable_switch.is_active()));
     enable_switch.connect_active_notify(move |switch| {
+        if enable_guard.get() {
+            return;
+        }
+        let enabled = switch.is_active();
         let response = ipc::try_request(&ipc::Request::SetGesturesEnabled {
-            enabled: switch.is_active()
+            enabled
         });
-        let outcome = if switch.is_active() {
+        if matches!(response, Some(Response::Ok)) {
+            last_enabled.set(enabled);
+        } else {
+            enable_guard.set(true);
+            switch.set_active(last_enabled.get());
+            enable_guard.set(false);
+        }
+        let outcome = if enabled {
             "Gestures enabled"
         } else {
             "Gestures disabled"
