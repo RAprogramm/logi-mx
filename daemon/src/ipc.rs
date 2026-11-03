@@ -666,9 +666,11 @@ async fn stream_pie(
     hub: PieHub
 ) -> Result<(), masterror::AppError> {
     use tokio::{io::AsyncReadExt as _, sync::oneshot};
+    use tracing::debug;
 
     let (mut reader, mut writer) = stream.into_split();
     let mut events = hub.subscribe();
+    debug!(subscribers = hub.receiver_count(), "pie: watcher connected");
 
     write_line(&mut writer, &Response::PieReady)
         .await
@@ -701,6 +703,7 @@ async fn stream_pie(
             }
         }
     }
+    debug!("pie: watcher gone");
     Ok(())
 }
 

@@ -104,8 +104,13 @@ pub fn spawn(queue: Arc<Mutex<Vec<PieEvent>>>, connected: Arc<AtomicBool>, wake:
 /// Connect-pump-retry loop, run on the background thread.
 fn run(queue: &Arc<Mutex<Vec<PieEvent>>>, connected: &Arc<AtomicBool>, wake: &Wake) {
     let mut delay = RECONNECT_MIN;
+    let mut waiting = false;
     loop {
         if let Ok(socket) = ipc::open_pie_stream() {
+            if waiting {
+                eprintln!("overlay: pie stream reconnected");
+            }
+            waiting = false;
             delay = RECONNECT_MIN;
             connected.store(true, Ordering::Relaxed);
             wake();
@@ -113,6 +118,10 @@ fn run(queue: &Arc<Mutex<Vec<PieEvent>>>, connected: &Arc<AtomicBool>, wake: &Wa
             connected.store(false, Ordering::Relaxed);
             wake();
         } else {
+            if !waiting {
+                eprintln!("overlay: daemon pie stream unavailable, retrying");
+                waiting = true;
+            }
             connected.store(false, Ordering::Relaxed);
             thread::sleep(delay);
             delay = delay.mul_f32(2.0).min(RECONNECT_MAX);

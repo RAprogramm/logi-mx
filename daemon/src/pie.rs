@@ -326,6 +326,11 @@ impl PieRuntime {
     /// the bound sectors and arms the pie. Without bindings or without a
     /// readable cursor the hold stays a plain swipe and nothing is sent.
     pub fn on_press(&mut self) {
+        debug!(
+            enabled = self.config.enabled,
+            should_open = self.should_open(),
+            "pie: press"
+        );
         if !self.should_open() {
             return;
         }
@@ -336,6 +341,11 @@ impl PieRuntime {
         self.anchor = Some(anchor);
         self.sectors = self.bound_sectors();
         self.armed = true;
+        debug!(
+            ?anchor,
+            sectors = self.sectors.len(),
+            "pie: armed, waiting for the activation radius"
+        );
     }
 
     /// Advances the state machine one poll while the button is held.
@@ -362,6 +372,7 @@ impl PieRuntime {
             }
             self.armed = false;
             self.open = true;
+            debug!(?anchor, sectors = self.sectors.len(), "pie: open");
             self.send(PieEvent::Open {
                 anchor,
                 sectors: self.sectors.clone()
@@ -452,8 +463,18 @@ impl PieRuntime {
     }
 
     fn send(&self, event: PieEvent) {
-        if let Some(hub) = &self.hub {
-            let _ = hub.send(event);
+        match &self.hub {
+            Some(hub) => {
+                debug!(
+                    ?event,
+                    subscribers = hub.receiver_count(),
+                    "pie: event published"
+                );
+                let _ = hub.send(event);
+            }
+            None => {
+                debug!(?event, "pie: event dropped, no hub attached");
+            }
         }
     }
 }
