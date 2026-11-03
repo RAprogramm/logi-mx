@@ -22,6 +22,7 @@ mod device;
 mod diagram;
 mod gestures;
 mod keybinds;
+mod toasts;
 mod wheel;
 
 use std::{
@@ -46,8 +47,7 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita::{
-    ActionRow, Application, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay, ViewStack,
-    prelude::*
+    ActionRow, Application, ApplicationWindow, PreferencesGroup, ViewStack, prelude::*
 };
 use logi_mx_daemon::ipc::{
     self, BTN_BIT_BACK, BTN_BIT_DPI, BTN_BIT_FORWARD, BTN_BIT_GESTURE, BTN_BIT_LEFT,
@@ -60,6 +60,7 @@ use self::{
     device::{device_page, pointer_page},
     diagram::{attach_draw_callback, attach_leaders_draw, build_button_masks, to_layout},
     gestures::gestures_page,
+    toasts::Toasts,
     wheel::wheel_page
 };
 use crate::snapshot::{DeviceSnapshot, collect_device_snapshot};
@@ -537,7 +538,8 @@ fn build_hud(app: &Application) {
     let leaders = create_leaders_area();
     LEADERS_AREA.with(|cell| *cell.borrow_mut() = Some(leaders.clone()));
     let widgets = Rc::new(RefCell::new(PanelWidgets::default()));
-    let panel = create_panel(&state, &drawing, &window, &widgets);
+    let toasts = Toasts::new();
+    let panel = create_panel(&state, &drawing, &window, &widgets, &toasts);
 
     attach_hit_testing(&state, &drawing);
     attach_draw_callback(&state, &drawing, &image, &masks);
@@ -841,13 +843,9 @@ fn create_panel(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     window: &ApplicationWindow,
-    widgets: &Rc<RefCell<PanelWidgets>>
-) -> ToastOverlay {
-    let toast = ToastOverlay::new();
-    toast.set_size_request(PANEL_WIDTH, -1);
-    toast.add_css_class("card");
-    toast.add_css_class("hud-panel");
-
+    widgets: &Rc<RefCell<PanelWidgets>>,
+    toasts: &Toasts
+) -> gtk4::Overlay {
     let root = GtkBox::new(Orientation::Vertical, 14);
     root.set_margin_top(18);
     root.set_margin_bottom(18);
@@ -859,31 +857,31 @@ fn create_panel(
     let stack = ViewStack::new();
     let pages = [
         (
-            buttons_page(state, drawing, window, &toast),
+            buttons_page(state, drawing, window, toasts),
             "buttons",
             "Buttons",
             "input-mouse-symbolic"
         ),
         (
-            gestures_page(&toast, window),
+            gestures_page(toasts, window),
             "gestures",
             "Gestures",
             "input-touchpad-symbolic"
         ),
         (
-            wheel_page(&toast, widgets),
+            wheel_page(toasts, widgets),
             "wheel",
             "Wheel",
             "view-continuous-symbolic"
         ),
         (
-            pointer_page(&toast, widgets),
+            pointer_page(toasts, widgets),
             "pointer",
             "Pointer",
             "preferences-desktop-input-symbolic"
         ),
         (
-            device_page(state, window, &toast, widgets),
+            device_page(state, window, toasts, widgets),
             "device",
             "Device",
             "battery-symbolic"
@@ -901,8 +899,13 @@ fn create_panel(
     stack_box.append(&stack);
     root.append(&stack_box);
 
-    toast.set_child(Some(&root));
-    toast
+    let overlay = gtk4::Overlay::new();
+    overlay.set_child(Some(&root));
+    overlay.add_overlay(&toasts.widget());
+    overlay.set_size_request(PANEL_WIDTH, -1);
+    overlay.add_css_class("card");
+    overlay.add_css_class("hud-panel");
+    overlay
 }
 
 /// Builds the panel header: device title, live status chip and close button.
@@ -1061,7 +1064,7 @@ pub(super) fn page_body() -> GtkBox {
 }
 
 /// Turns a daemon reply into a toast message.
-pub(super) fn report(response: Option<Response>, toast: &ToastOverlay, success: &str) {
+pub(super) fn report(response: Option<Response>, toast: &Toasts, success: &str) {
     let message = match response {
         Some(Response::Ok) => success.to_string(),
         Some(Response::Error {
@@ -1069,7 +1072,7 @@ pub(super) fn report(response: Option<Response>, toast: &ToastOverlay, success: 
         }) => message,
         _ => "Daemon unavailable".to_string()
     };
-    toast.add_toast(Toast::new(&message));
+    toast.show(&message);
 }
 
 /// Subscribes to daemon telemetry and folds frames into the HUD state.

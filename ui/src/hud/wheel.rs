@@ -6,10 +6,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gtk4::{Button, Orientation, Scale, ScrolledWindow, Switch};
-use libadwaita::{prelude::*, ActionRow, PreferencesGroup, ToastOverlay};
+use libadwaita::{ActionRow, PreferencesGroup, prelude::*};
 use logi_mx_daemon::ipc;
 
-use super::{page_body, page_scroll, report, PanelWidgets};
+use super::{PanelWidgets, page_body, page_scroll, report, toasts::Toasts};
 
 /// `SmartShift` threshold slider bounds.
 const SMARTSHIFT_MIN: f64 = 1.0;
@@ -33,10 +33,7 @@ const fn scale_threshold(value: f64) -> u8 {
 /// Controls start at neutral placeholders and stay insensitive until the
 /// snapshot loader fills them in once the daemon answers, so a placeholder
 /// can never be applied before real values arrive.
-pub(super) fn wheel_page(
-    toast: &ToastOverlay,
-    widgets: &Rc<RefCell<PanelWidgets>>,
-) -> ScrolledWindow {
+pub(super) fn wheel_page(toast: &Toasts, widgets: &Rc<RefCell<PanelWidgets>>) -> ScrolledWindow {
     let scroll = page_scroll();
     let box_ = page_body();
 
@@ -59,7 +56,7 @@ pub(super) fn wheel_page(
         Orientation::Horizontal,
         SMARTSHIFT_MIN,
         SMARTSHIFT_MAX,
-        SMARTSHIFT_STEP,
+        SMARTSHIFT_STEP
     );
     threshold_scale.set_draw_value(true);
     threshold_scale.set_hexpand(true);
@@ -78,8 +75,8 @@ pub(super) fn wheel_page(
     let to = toast.clone();
     shift_apply.connect_clicked(move |_| {
         let request = ipc::Request::SetSmartShift {
-            enabled: sw.is_active(),
-            threshold: scale_threshold(ts.value()),
+            enabled:   sw.is_active(),
+            threshold: scale_threshold(ts.value())
         };
         report(ipc::try_request(&request), &to, "SmartShift applied");
     });
@@ -120,8 +117,8 @@ pub(super) fn wheel_page(
     let to = toast.clone();
     scroll_apply.connect_clicked(move |_| {
         let request = ipc::Request::SetHires {
-            enabled: hs.is_active(),
-            inverted: inv.is_active(),
+            enabled:  hs.is_active(),
+            inverted: inv.is_active()
         };
         report(ipc::try_request(&request), &to, "Scroll settings applied");
     });

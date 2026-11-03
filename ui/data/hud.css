@@ -42,6 +42,15 @@ label.hud-status-bad {
     color: #f7768e;
 }
 
+/* Top toast pill */
+box.hud-toast {
+    background-color: alpha(#000000, 0.78);
+    border: 1px solid alpha(#ffffff, 0.10);
+    border-radius: 999px;
+    padding: 8px 10px 8px 18px;
+    box-shadow: 0 8px 28px alpha(#000000, 0.45);
+}
+
 /* Segmented page switcher */
 box.hud-tabs {
     background-color: alpha(#000000, 0.22);

@@ -15,9 +15,7 @@ use gtk4::{
     Box as GtkBox, Button, DropDown, Entry, EventControllerKey, EventControllerMotion, FlowBox,
     FlowBoxChild, Label, Orientation, ScrolledWindow, SelectionMode, glib
 };
-use libadwaita::{
-    ActionRow, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay, prelude::*
-};
+use libadwaita::{ActionRow, ApplicationWindow, PreferencesGroup, prelude::*};
 use logi_mx_daemon::ipc::{self, Response};
 use logi_mx_driver::{
     devices::{Action, ButtonId, control_id},
@@ -26,7 +24,7 @@ use logi_mx_driver::{
 
 use super::{
     HudState, MouseButton, ROWS_REGISTRY, RowMap, Tile, keybinds::open_keybind_picker, page_body,
-    page_scroll, queue_leaders, report, sync_row_focus
+    page_scroll, queue_leaders, report, sync_row_focus, toasts::Toasts
 };
 
 /// Native remap targets offered on the assignment dropdowns: label and CID.
@@ -81,7 +79,7 @@ fn initial_assignment(button: MouseButton) -> u32 {
 fn button_tile(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     rows: &RowMap,
     button: MouseButton
 ) -> Tile {
@@ -171,10 +169,10 @@ fn button_tile(
                 || format!("{} restored to native", button.label()),
                 |target| format!("{} now acts as {target}", button.label())
             );
-            toast_assign.add_toast(Toast::new(&message));
+            toast_assign.show(&message);
         } else {
             picker.set_selected(applied.get());
-            toast_assign.add_toast(Toast::new("Daemon unavailable — change not applied"));
+            toast_assign.show("Daemon unavailable — change not applied");
         }
     });
 
@@ -191,7 +189,7 @@ fn button_tile(
 fn buttons_list_section(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
-    toast: &ToastOverlay
+    toast: &Toasts
 ) -> (GtkBox, RowMap) {
     let section = GtkBox::new(Orientation::Vertical, 8);
     section.set_vexpand(true);
@@ -548,7 +546,7 @@ fn arm_capture(button: ButtonId, capture: &RemapCapture, tiles: &RemapTiles) {
 fn wire_remap_kind(
     kind: &DropDown,
     button: ButtonId,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     capture: &RemapCapture,
     tiles: &RemapTiles,
     store: &StoreCell,
@@ -591,7 +589,7 @@ fn wire_remap_kind(
 fn wire_remap_command(
     entry: &Entry,
     button: ButtonId,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     tiles: &RemapTiles,
     store: &StoreCell
 ) {
@@ -622,7 +620,7 @@ fn wire_remap_command(
 fn wire_remap_clear(
     clear_btn: &Button,
     button: ButtonId,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     tiles: &RemapTiles,
     store: &StoreCell,
     loading: &Rc<Cell<bool>>
@@ -656,7 +654,7 @@ fn wire_remap_clear(
 fn remap_tile(
     button: ButtonId,
     label: &str,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     capture: &RemapCapture,
     tiles: &RemapTiles,
     store: &StoreCell,
@@ -738,7 +736,9 @@ fn remap_tile(
         capture: capture_btn,
         hypr: hypr_btn
     };
+    loading.set(true);
     row.set_native();
+    loading.set(false);
     row
 }
 
@@ -746,7 +746,7 @@ fn remap_tile(
 /// mappings and per-application overrides, plus controls to add a profile by
 /// window class, adopt the focused window's class, or remove the profile.
 fn remap_scope_bar(
-    toast: &ToastOverlay,
+    toast: &Toasts,
     store: &StoreCell,
     tiles: &RemapTiles,
     loading: &Rc<Cell<bool>>
@@ -844,7 +844,7 @@ fn remap_scope_bar(
 
 /// Shared handles the scope bar profile controls mutate.
 struct ScopeHandles<'a> {
-    toast:       &'a ToastOverlay,
+    toast:       &'a Toasts,
     store:       &'a StoreCell,
     tiles:       &'a RemapTiles,
     loading:     &'a Rc<Cell<bool>>,
@@ -886,7 +886,7 @@ fn wire_scope_profile_buttons(handles: ScopeHandles<'_>) {
                 &tiles_focus,
                 loading_focus.as_ref()
             ),
-            _ => toast_focus.add_toast(Toast::new("The desktop reported no focused window"))
+            _ => toast_focus.show("The desktop reported no focused window")
         }
     );
 
@@ -900,7 +900,7 @@ fn wire_scope_profile_buttons(handles: ScopeHandles<'_>) {
         let app = match store_remove.borrow().scope.clone() {
             RemapScope::App(app) => app,
             RemapScope::Global => {
-                toast_remove.add_toast(Toast::new("The global mappings cannot be removed"));
+                toast_remove.show("The global mappings cannot be removed");
                 return;
             }
         };
@@ -932,7 +932,7 @@ fn commit_remap_keys(
     tiles: &RemapTiles,
     store: &StoreCell,
     loading: &Cell<bool>,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     names: &[String]
 ) {
     let Some(tile) = tiles.borrow().get(&button).cloned() else {
@@ -962,7 +962,7 @@ fn attach_remap_capture(
     tiles: &RemapTiles,
     store: &StoreCell,
     loading: &Rc<Cell<bool>>,
-    toast: &ToastOverlay
+    toast: &Toasts
 ) {
     let controller = EventControllerKey::new();
     controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
@@ -1021,7 +1021,7 @@ fn attach_remap_capture(
 /// Builds the thumb remap section: the scope bar and one row per thumb side
 /// button, editing the daemon-side software remap rather than the firmware
 /// assignment above it.
-fn thumb_remap_section(toast: &ToastOverlay, window: &ApplicationWindow) -> GtkBox {
+fn thumb_remap_section(toast: &Toasts, window: &ApplicationWindow) -> GtkBox {
     let section = GtkBox::new(Orientation::Vertical, 8);
     let store: StoreCell = Rc::new(RefCell::new(ButtonStore::default()));
     let tiles: RemapTiles = Rc::new(RefCell::new(HashMap::new()));
@@ -1069,7 +1069,7 @@ pub(super) fn buttons_page(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
     window: &ApplicationWindow,
-    toast: &ToastOverlay
+    toast: &Toasts
 ) -> ScrolledWindow {
     let scroll = page_scroll();
     scroll

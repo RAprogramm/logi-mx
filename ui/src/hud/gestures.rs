@@ -14,9 +14,7 @@ use gtk4::{
     Box as GtkBox, Button, DropDown, Entry, EventControllerKey, FlowBox, FlowBoxChild, Label,
     Orientation, ScrolledWindow, SelectionMode, Switch, glib
 };
-use libadwaita::{
-    ActionRow, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay, prelude::*
-};
+use libadwaita::{ActionRow, ApplicationWindow, PreferencesGroup, prelude::*};
 use logi_mx_daemon::ipc::{self, Response};
 use logi_mx_driver::{
     config::PieConfig,
@@ -24,7 +22,7 @@ use logi_mx_driver::{
     keys::key_name
 };
 
-use super::{keybinds::open_keybind_picker, page_body, page_scroll, report};
+use super::{keybinds::open_keybind_picker, page_body, page_scroll, report, toasts::Toasts};
 
 /// Gesture tiles in display order: direction and human label. The four
 /// diagonals only ever fire from the radial pie menu, but they bind through
@@ -349,7 +347,7 @@ fn select_app_scope(
 fn gesture_tile(
     direction: GestureDirection,
     label: &str,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     capture: &GestureCapture,
     tiles: &GestureTiles,
     store: &StoreCell,
@@ -463,7 +461,7 @@ fn gesture_tile(
 fn wire_gesture_hypr(
     button: &Button,
     direction: GestureDirection,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     tiles: &GestureTiles,
     store: &StoreCell
 ) {
@@ -486,7 +484,7 @@ fn wire_gesture_hypr(
 /// active scope.
 fn wire_command_entry(
     entry: &Entry,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     tiles: &GestureTiles,
     store: &StoreCell,
     direction: GestureDirection
@@ -523,7 +521,7 @@ fn wire_command_entry(
 /// refilled by a scope switch.
 fn wire_moment_update(
     mode: &DropDown,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     tiles: &GestureTiles,
     store: &StoreCell,
     loading: &Rc<Cell<bool>>,
@@ -568,7 +566,7 @@ fn picker_mode(picker: &DropDown) -> GestureMode {
 /// and per-application profiles, plus controls to add a profile by window
 /// class, adopt the focused window's class, or remove the current profile.
 fn gesture_scope_bar(
-    toast: &ToastOverlay,
+    toast: &Toasts,
     store: &StoreCell,
     tiles: &GestureTiles,
     loading: &Rc<Cell<bool>>
@@ -668,7 +666,7 @@ fn gesture_scope_bar(
 
 /// Shared handles the scope bar controls mutate.
 struct ScopeHandles<'a> {
-    toast:   &'a ToastOverlay,
+    toast:   &'a Toasts,
     store:   &'a StoreCell,
     tiles:   &'a GestureTiles,
     loading: &'a Rc<Cell<bool>>,
@@ -710,7 +708,7 @@ fn wire_scope_profile_buttons(
                 &tiles_focus,
                 loading_focus.as_ref()
             ),
-            _ => toast_focus.add_toast(Toast::new("The desktop reported no focused window"))
+            _ => toast_focus.show("The desktop reported no focused window")
         }
     );
 
@@ -723,7 +721,7 @@ fn wire_scope_profile_buttons(
         let app = match store_remove.borrow().scope.clone() {
             BindingScope::App(app) => app,
             BindingScope::Global => {
-                toast_remove.add_toast(Toast::new("The global bindings cannot be removed"));
+                toast_remove.show("The global bindings cannot be removed");
                 return;
             }
         };
@@ -772,7 +770,7 @@ struct PieWidgets {
 /// Builds the Radial menu group: the enable switch, the activation radius
 /// and dead zone entries, and an Apply button that sends
 /// [`ipc::Request::SetPie`] and toasts the outcome.
-fn radial_menu_group(toast: &ToastOverlay, initial: &PieConfig) -> (PreferencesGroup, PieWidgets) {
+fn radial_menu_group(toast: &Toasts, initial: &PieConfig) -> (PreferencesGroup, PieWidgets) {
     let group = PreferencesGroup::new();
     group.set_title("Radial menu");
     group.set_description(Some(
@@ -827,9 +825,8 @@ fn radial_menu_group(toast: &ToastOverlay, initial: &PieConfig) -> (PreferencesG
             _ => None
         };
         let Some((radius, dead)) = tuning else {
-            toast_apply.add_toast(Toast::new(
-                "Activation radius and dead zone must be whole pixels between 1 and 4000"
-            ));
+            toast_apply
+                .show("Activation radius and dead zone must be whole pixels between 1 and 4000");
             return;
         };
         let response = ipc::try_request(&ipc::Request::SetPie {
@@ -860,7 +857,7 @@ fn radial_menu_group(toast: &ToastOverlay, initial: &PieConfig) -> (PreferencesG
 /// Capture arms a window-level key listener: the next chord becomes the
 /// binding the moment a key is released, Escape cancels. Every change is
 /// applied and persisted by the daemon immediately.
-pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) -> ScrolledWindow {
+pub(super) fn gestures_page(toast: &Toasts, window: &ApplicationWindow) -> ScrolledWindow {
     let scroll = page_scroll();
     let box_ = page_body();
 
@@ -961,7 +958,7 @@ fn commit_gesture_keys(
     direction: GestureDirection,
     tiles: &GestureTiles,
     store: &StoreCell,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     names: Vec<String>
 ) {
     let Some(tile) = tiles.borrow().get(&direction).cloned() else {
@@ -991,7 +988,7 @@ fn attach_gesture_capture(
     capture: &GestureCapture,
     tiles: &GestureTiles,
     store: &StoreCell,
-    toast: &ToastOverlay
+    toast: &Toasts
 ) {
     let controller = EventControllerKey::new();
     controller.set_propagation_phase(gtk4::PropagationPhase::Capture);

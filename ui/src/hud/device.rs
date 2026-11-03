@@ -7,13 +7,12 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gtk4::{Box as GtkBox, Button, Orientation, Scale, ScrolledWindow};
-use libadwaita::{
-    ActionRow, ApplicationWindow, PreferencesGroup, Toast, ToastOverlay, prelude::*
-};
+use libadwaita::{ActionRow, ApplicationWindow, PreferencesGroup, prelude::*};
 use logi_mx_daemon::ipc::{self, Response};
 
 use super::{
-    HudState, PanelWidgets, apply_battery, background_section, page_body, page_scroll, report
+    HudState, PanelWidgets, apply_battery, background_section, page_body, page_scroll, report,
+    toasts::Toasts
 };
 
 /// DPI slider bounds accepted by the device.
@@ -40,10 +39,7 @@ const fn scale_dpi(value: f64) -> u16 {
 /// The slider starts at the neutral default and stays insensitive together
 /// with the Apply button; the snapshot loader fills in the real value and
 /// enables both once the daemon answers, so the placeholder is never sent.
-pub(super) fn pointer_page(
-    toast: &ToastOverlay,
-    widgets: &Rc<RefCell<PanelWidgets>>
-) -> ScrolledWindow {
+pub(super) fn pointer_page(toast: &Toasts, widgets: &Rc<RefCell<PanelWidgets>>) -> ScrolledWindow {
     let scroll = page_scroll();
     let group = PreferencesGroup::new();
     group.set_title("Pointer Sensitivity");
@@ -107,7 +103,7 @@ pub(super) fn pointer_page(
 pub(super) fn device_page(
     state: &Rc<RefCell<HudState>>,
     window: &ApplicationWindow,
-    toast: &ToastOverlay,
+    toast: &Toasts,
     widgets: &Rc<RefCell<PanelWidgets>>
 ) -> ScrolledWindow {
     let scroll = page_scroll();
@@ -133,7 +129,7 @@ pub(super) fn device_page(
             apply_battery(&widgets_refresh.borrow(), &format!("{level}% · {status}"));
         }
         _ => {
-            to.add_toast(Toast::new("Daemon unavailable"));
+            to.show("Daemon unavailable");
         }
     });
     battery_row.add_suffix(&refresh);
@@ -166,7 +162,7 @@ pub(super) fn device_page(
             }
             Err(e) => format!("Hyprland setup failed: {e}")
         };
-        to.add_toast(Toast::new(&message));
+        to.show(&message);
     });
     integration_row.add_suffix(&configure);
     integration_group.add(&integration_row);

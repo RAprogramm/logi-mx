@@ -18,11 +18,13 @@ use gtk4::{
     SearchEntry, SelectionMode, Window, glib
 };
 use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
-use libadwaita::{Toast, ToastOverlay, prelude::*};
+use libadwaita::prelude::*;
 use logi_mx_daemon::{
     hyprbind::KeybindEntry,
     ipc::{self, Response}
 };
+
+use super::toasts::Toasts;
 
 /// Upper bound on rendered rows; a huge config is truncated rather than
 /// freezing the list build.
@@ -40,7 +42,7 @@ const MAX_ROWS: usize = 300;
 ///
 /// * `toast` - Overlay receiving the error notices.
 /// * `on_pick` - Callback receiving the chosen chord.
-pub(super) fn open_keybind_picker<F>(toast: &ToastOverlay, on_pick: F)
+pub(super) fn open_keybind_picker<F>(toast: &Toasts, on_pick: F)
 where
     F: Fn(Vec<String>) + 'static
 {
@@ -92,7 +94,7 @@ where
 }
 
 /// Fetches the replayable bindings from the daemon, reporting failures.
-fn load_entries(toast: &ToastOverlay) -> Vec<KeybindEntry> {
+fn load_entries(toast: &Toasts) -> Vec<KeybindEntry> {
     match ipc::try_request(&ipc::Request::GetKeybinds) {
         Some(Response::Keybinds {
             entries
@@ -100,11 +102,11 @@ fn load_entries(toast: &ToastOverlay) -> Vec<KeybindEntry> {
         Some(Response::Error {
             message
         }) => {
-            toast.add_toast(Toast::new(&message));
+            toast.show(&message);
             Vec::new()
         }
         _ => {
-            toast.add_toast(Toast::new("Daemon unavailable — no keybinds to list"));
+            toast.show("Daemon unavailable — no keybinds to list");
             Vec::new()
         }
     }
