@@ -86,6 +86,7 @@ pub fn set_runtime_handle(handle: TokioHandle) {
 /// * `tray` - Tray slot refreshed alongside the shared status.
 /// * `live` - Shared daemon-side button state merged into live telemetry.
 /// * `hub` - Live frame fan-out the worker publishes immediate frames on.
+/// * `pie_hub` - Pie event fan-out the radial menu publishes on.
 ///
 /// # Returns
 ///
@@ -99,7 +100,8 @@ pub fn spawn_device_worker(
     status: SharedStatus,
     tray: TraySlot,
     live: ipc::SharedLiveState,
-    hub: ipc::LiveHub
+    hub: ipc::LiveHub,
+    pie_hub: crate::pie::PieHub
 ) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
 {
     let (tx, rx) = mpsc::channel();
@@ -107,12 +109,29 @@ pub fn spawn_device_worker(
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
-        .spawn(move || run_device_worker(config, &rx, &rpc_rx, &status, &tray, live, hub))
+        .spawn(move || {
+            let telemetry = Telemetry {
+                live,
+                hub,
+                pie_hub
+            };
+            run_device_worker(config, &rx, &rpc_rx, &status, &tray, telemetry);
+        })
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
 
     Ok((tx, rpc_tx, handle))
+}
+
+/// Output sinks a device worker publishes telemetry to.
+pub struct Telemetry {
+    /// Shared daemon-side button state merged into live telemetry.
+    pub live:    ipc::SharedLiveState,
+    /// Live frame fan-out the worker publishes immediate frames on.
+    pub hub:     ipc::LiveHub,
+    /// Pie event fan-out the radial menu publishes on.
+    pub pie_hub: crate::pie::PieHub
 }
 
 fn run_device_worker(
@@ -121,11 +140,16 @@ fn run_device_worker(
     rpc_rx: &mpsc::Receiver<RpcRequest>,
     status: &SharedStatus,
     tray: &TraySlot,
-    live: ipc::SharedLiveState,
-    hub: ipc::LiveHub
+    telemetry: Telemetry
 ) {
+    let Telemetry {
+        live,
+        hub,
+        pie_hub
+    } = telemetry;
     let mut gestures = GestureRuntime::from_config(&config);
     gestures.attach_live(live.clone(), hub.clone());
+    gestures.attach_pie(pie_hub);
     let mut buttons = ButtonRuntime::from_config(&config);
     buttons.attach_live(live, hub);
     let focus = crate::focus::new_shared();
@@ -179,6 +203,9 @@ fn run_device_worker(
         };
 
         pump_notifications(&mut gestures, &mut buttons, &manager);
+        if gestures.is_holding() {
+            gestures.on_pie_tick();
+        }
 
         if should_refresh {
             refresh_and_notify(&mut manager, status, tray, &mut policy);
@@ -303,10 +330,10 @@ fn handle_rpc(
 
 /// Executes one RPC request against the pooled device.
 ///
-/// `WatchLive` connections are answered by the IPC server itself and never
-/// reach this function; the arm exists to keep the protocol exhaustive.
-/// `GetKeybinds` is answered from the desktop, not the device, so it is
-/// resolved before any device routing.
+/// `WatchLive` and `WatchPie` connections are answered by the IPC server
+/// itself and never reach this function; the arms exist to keep the
+/// protocol exhaustive. `GetKeybinds` is answered from the desktop, not
+/// the device, so it is resolved before any device routing.
 fn handle_request(
     manager: &mut DevicePool,
     gestures: &mut GestureRuntime,
@@ -345,6 +372,7 @@ mod tests {
         let (_rpc_tx, rpc_rx) = mpsc::channel::<RpcRequest>();
         drop(tx);
         let (live_hub, _live_sink) = tokio::sync::broadcast::channel(1);
+        let (pie_hub, _pie_sink) = tokio::sync::broadcast::channel(1);
 
         std::thread::Builder::new()
             .name("test-worker".to_string())
@@ -359,8 +387,11 @@ mod tests {
                     &rpc_rx,
                     &Arc::new(Mutex::new(DeviceStatus::default())),
                     &tray,
-                    ipc::SharedLiveState::default(),
-                    live_hub
+                    super::Telemetry {
+                        live: ipc::SharedLiveState::default(),
+                        hub: live_hub,
+                        pie_hub
+                    }
                 );
             })
             .unwrap_or_else(|e| panic!("Failed to spawn test worker: {e}"))

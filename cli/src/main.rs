@@ -694,7 +694,8 @@ fn show_gestures() -> Result<()> {
     let Some(Response::Gestures {
         enabled,
         gestures,
-        profiles
+        profiles,
+        ..
     }) = try_request(&Request::GetGestures)
     else {
         return Err(AppError::internal(

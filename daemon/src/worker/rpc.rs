@@ -14,6 +14,7 @@ use crate::{buttons::ButtonRuntime, gesture::GestureRuntime, ipc};
 fn apply_gestures(manager: &DevicePool, gestures: &mut GestureRuntime) {
     let (enabled, bindings, profiles) = manager.gesture_config();
     gestures.set_config(enabled, bindings, profiles);
+    gestures.set_pie_config(manager.pie_config());
     manager.for_each_cached_mut(|device| gestures.apply(device));
 }
 
@@ -75,7 +76,8 @@ pub(super) fn handle_gesture_request(
             return Some(ipc::Response::Gestures {
                 enabled,
                 gestures: bindings,
-                profiles
+                profiles,
+                pie: manager.pie_config()
             });
         }
         ipc::Request::GetFocusedApp => {
@@ -146,6 +148,9 @@ pub(super) fn handle_gesture_request(
             profiles.remove(app_id);
             manager.set_gestures(enabled, bindings, profiles)
         }
+        ipc::Request::SetPie {
+            ..
+        } => manager.set_pie_request(request),
         _ => return None
     };
 
@@ -328,6 +333,17 @@ pub(super) fn apply_setting(config: &mut Config, request: &ipc::Request) -> bool
         } => {
             device.button_profiles.remove(app_id);
         }
+        ipc::Request::SetPie {
+            enabled,
+            activation_radius,
+            dead_zone
+        } => {
+            device.pie = PieConfig {
+                enabled:           *enabled,
+                activation_radius: *activation_radius,
+                dead_zone:         *dead_zone
+            };
+        }
         _ => return false
     }
     true
@@ -395,7 +411,7 @@ pub(super) fn handle_device_request(
                     crate::notify::host_switched(*host);
                     ipc::Response::Ok
                 }
-                ipc::Request::WatchLive => ipc::Response::Error {
+                ipc::Request::WatchLive | ipc::Request::WatchPie => ipc::Response::Error {
                     message: "live streaming is handled by the IPC server".to_string()
                 },
                 _ => ipc::Response::Error {

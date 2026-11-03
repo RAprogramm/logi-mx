@@ -78,7 +78,49 @@ pub struct DeviceConfig {
     /// for that button while the app is focused; unbound buttons fall through
     /// to the global [`Self::buttons`] map.
     #[serde(default)]
-    pub button_profiles: HashMap<String, HashMap<ButtonId, Action>>
+    pub button_profiles: HashMap<String, HashMap<ButtonId, Action>>,
+
+    /// Radial pie menu tuning for the diverted gesture button.
+    #[serde(default)]
+    pub pie: PieConfig
+}
+
+/// Radial pie menu tuning for the diverted gesture button.
+///
+/// While the gesture button is held, the cursor position around the press
+/// point selects one of eight sectors around the anchor; releasing over a
+/// bound sector fires its action. The daemon-side state machine lives in
+/// `logi-mx-daemon::pie`.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_driver::config::PieConfig;
+///
+/// let pie = PieConfig::default();
+/// assert!(!pie.enabled);
+/// assert_eq!(pie.activation_radius, 40);
+/// assert_eq!(pie.dead_zone, 12);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PieConfig {
+    /// Whether the daemon opens the pie menu on a gesture hold.
+    pub enabled:           bool,
+    /// Cursor travel from the press point that opens the menu, in pixels.
+    pub activation_radius: i32,
+    /// Radius inside which no sector is highlighted, in pixels.
+    pub dead_zone:         i32
+}
+
+impl Default for PieConfig {
+    fn default() -> Self {
+        Self {
+            enabled:           false,
+            activation_radius: 40,
+            dead_zone:         12
+        }
+    }
 }
 
 const fn default_dpi() -> u16 {
@@ -156,7 +198,8 @@ impl Default for DeviceConfig {
             buttons,
             gestures_enabled: false,
             gesture_profiles: HashMap::new(),
-            button_profiles: HashMap::new()
+            button_profiles: HashMap::new(),
+            pie: PieConfig::default()
         }
     }
 }

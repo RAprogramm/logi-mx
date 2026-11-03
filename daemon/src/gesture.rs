@@ -9,6 +9,12 @@
 //! directions by [`SwipeAccumulator`], re-exported from the `swipe`
 //! submodule, and committed directions fire the configured bindings through
 //! the key injector.
+//!
+//! The runtime also hosts the radial pie menu ([`crate::pie::PieRuntime`]):
+//! the press and release edges arm and settle it, and the worker loop drives
+//! [`GestureRuntime::on_pie_tick`] once per poll while the button is held.
+//! When the pie is disabled (the default) it never queries the cursor and
+//! the release path behaves exactly as without the feature.
 
 mod swipe;
 
@@ -28,7 +34,8 @@ use tracing::{debug, info, warn};
 use crate::{
     focus::SharedFocus,
     inject::Injector,
-    ipc::{BTN_BIT_DPI, BTN_BIT_GESTURE, LiveFrame, LiveHub, SharedLiveState}
+    ipc::{BTN_BIT_DPI, BTN_BIT_GESTURE, LiveFrame, LiveHub, SharedLiveState},
+    pie::{PieConfig, PieHub, PieRuntime, merge_effective}
 };
 
 /// Divert bookkeeping for the wheel-mode (DPI shift) button.
@@ -56,6 +63,7 @@ pub struct GestureRuntime {
     smartshift:         SmartShiftConfig,
     live:               SharedLiveState,
     hub:                Option<LiveHub>,
+    pie:                PieRuntime,
     accumulator:        SwipeAccumulator,
     injector:           Injector,
     last_commit:        Option<GestureDirection>,
@@ -85,10 +93,14 @@ impl GestureRuntime {
             ) => (gestures.clone(), device.gesture_profiles.clone()),
             _ => (Vec::new(), HashMap::new())
         };
+        let mut pie = PieRuntime::default();
+        pie.set_config(device.pie.clone());
+        pie.set_bindings(bindings.clone(), profiles.clone());
         Self {
             bindings,
             profiles,
             smartshift: device.smartshift,
+            pie,
             ..Self::default()
         }
     }
@@ -101,7 +113,24 @@ impl GestureRuntime {
 
     /// Attaches the shared focus slot consulted when resolving bindings.
     pub fn attach_focus(&mut self, focus: SharedFocus) {
+        self.pie.attach_focus(focus.clone());
         self.focus = focus;
+    }
+
+    /// Attaches the pie event fan-out the radial menu publishes on.
+    pub fn attach_pie(&mut self, hub: PieHub) {
+        self.pie.attach_hub(hub);
+    }
+
+    /// Replaces the radial pie menu tuning from a configuration change.
+    pub const fn set_pie_config(&mut self, config: PieConfig) {
+        self.pie.set_config(config);
+    }
+
+    /// Advances the pie state machine one poll while the gesture button is
+    /// held; the worker loop calls this beside the notification pump.
+    pub fn on_pie_tick(&mut self) {
+        self.pie.on_tick();
     }
 
     /// The class of the currently focused window, if the desktop reports one.
@@ -143,6 +172,8 @@ impl GestureRuntime {
             self.bindings = Vec::new();
             self.profiles = HashMap::new();
         }
+        self.pie
+            .set_bindings(self.bindings.clone(), self.profiles.clone());
     }
 
     /// The bindings in force right now: the global set with the focused
@@ -150,20 +181,11 @@ impl GestureRuntime {
     /// binding for its direction; directions the profile does not mention
     /// fall through to the global set.
     fn effective_bindings(&self) -> Vec<Gesture> {
-        let focused = self.focused_app();
-        let profile = focused.as_deref().and_then(|app| self.profiles.get(app));
-        self.bindings
-            .iter()
-            .filter(|binding| {
-                profile.is_none_or(|overrides| {
-                    !overrides
-                        .iter()
-                        .any(|entry| entry.direction == binding.direction)
-                })
-            })
-            .chain(profile.into_iter().flatten())
-            .cloned()
-            .collect()
+        merge_effective(
+            &self.bindings,
+            &self.profiles,
+            self.focused_app().as_deref()
+        )
     }
 
     /// Diverts the gesture and wheel-mode buttons after a device attach.
@@ -249,6 +271,7 @@ impl GestureRuntime {
         self.diverted = false;
         self.accumulator = SwipeAccumulator::default();
         self.last_commit = None;
+        self.pie.on_cancel();
         self.set_live_bit(BTN_BIT_GESTURE, false);
         if let Err(e) = device.set_control_divert(control_id::GESTURE_BUTTON, false, false) {
             warn!("failed to undivert the gesture button: {e}");
@@ -282,14 +305,16 @@ impl GestureRuntime {
         }
     }
 
-    /// Tracks the gesture button edge: press opens the swipe accumulator and
-    /// raises the live bit, release settles the hold and lowers it.
+    /// Tracks the gesture button edge: press opens the swipe accumulator,
+    /// arms the pie and raises the live bit; release settles the hold and
+    /// lowers it.
     fn on_gesture_edge(&mut self, held: bool) {
         if held && !self.accumulator.is_holding() {
             debug!("gesture button pressed");
             self.accumulator.begin(Instant::now());
             self.last_commit = None;
             self.set_live_bit(BTN_BIT_GESTURE, true);
+            self.pie.on_press();
         } else if !held && self.accumulator.is_holding() {
             debug!("gesture button released");
             self.set_live_bit(BTN_BIT_GESTURE, false);
@@ -349,12 +374,32 @@ impl GestureRuntime {
         let _ = hub.send(frame);
     }
 
+    /// Settles a released hold.
+    ///
+    /// When the pie was open at release it owns the hold: the committed
+    /// sector (if bound) fires and the swipe `OnRelease` fallback is
+    /// suppressed, so one hold never fires twice. Mid-hold `OnPress` swipe
+    /// commits already fired through [`Self::on_raw_xy`] and are untouched.
+    /// When the pie never opened, the swipe release path is byte-identical
+    /// to the pie-less runtime.
     fn finish_hold(&mut self) {
-        let committed = self.last_commit.take();
-        match self.accumulator.end() {
+        let pie_owned = self.pie.is_open();
+        let pie_commit = self.pie.on_release();
+        let swipe_commit = self.last_commit.take();
+        let settled = self.accumulator.end();
+        if pie_owned {
+            if let Some(dir) = pie_commit {
+                self.fire(dir, None);
+            }
+            return;
+        }
+        match settled {
             Some(dir) => self.fire(dir, None),
-            None if let Some(dir) = committed => self.fire(dir, Some(GestureMode::OnRelease)),
-            None => {}
+            None => {
+                if let Some(dir) = swipe_commit {
+                    self.fire(dir, Some(GestureMode::OnRelease));
+                }
+            }
         }
     }
 

@@ -115,6 +115,14 @@ pub enum GestureDirection {
     Left,
     /// Rightward drag.
     Right,
+    /// Up-left diagonal, recognised by the radial pie menu only.
+    UpLeft,
+    /// Up-right diagonal, recognised by the radial pie menu only.
+    UpRight,
+    /// Down-left diagonal, recognised by the radial pie menu only.
+    DownLeft,
+    /// Down-right diagonal, recognised by the radial pie menu only.
+    DownRight,
     /// Press without directional movement.
     None
 }

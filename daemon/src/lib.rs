@@ -9,6 +9,7 @@ pub mod gesture;
 pub mod hyprbind;
 pub mod inject;
 pub mod ipc;
+pub mod pie;
 pub mod status;
 pub mod systemd;
 pub mod worker;

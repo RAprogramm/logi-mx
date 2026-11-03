@@ -792,7 +792,8 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
     if let Some(Response::Gestures {
         enabled,
         gestures,
-        profiles
+        profiles,
+        ..
     }) = ipc::try_request(&ipc::Request::GetGestures)
     {
         enable_switch.set_active(enabled);

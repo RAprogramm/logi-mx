@@ -78,13 +78,20 @@ pub fn detect_swipe(dx: i32, dy: i32) -> Option<GestureDirection> {
 }
 
 /// Travel continuing `dir` in a raw-XY delta (positive keeps going).
+///
+/// Swipe recognition only ever commits the four cardinal directions, so the
+/// pie-menu diagonals are inert here, like [`GestureDirection::None`].
 const fn along(dir: GestureDirection, dx: i32, dy: i32) -> i32 {
     match dir {
         GestureDirection::Right => dx,
         GestureDirection::Left => dx.saturating_neg(),
         GestureDirection::Down => dy,
         GestureDirection::Up => dy.saturating_neg(),
-        GestureDirection::None => 0
+        GestureDirection::None
+        | GestureDirection::UpLeft
+        | GestureDirection::UpRight
+        | GestureDirection::DownLeft
+        | GestureDirection::DownRight => 0
     }
 }
 
@@ -93,7 +100,11 @@ const fn across(dir: GestureDirection, dx: i32, dy: i32) -> i32 {
     match dir {
         GestureDirection::Right | GestureDirection::Left => dy,
         GestureDirection::Up | GestureDirection::Down => dx,
-        GestureDirection::None => 0
+        GestureDirection::None
+        | GestureDirection::UpLeft
+        | GestureDirection::UpRight
+        | GestureDirection::DownLeft
+        | GestureDirection::DownRight => 0
     }
 }
 
@@ -180,7 +191,11 @@ impl SwipeAccumulator {
                     GestureDirection::Up | GestureDirection::Down => {
                         self.dx = self.dx.saturating_add(dx);
                     }
-                    GestureDirection::None => {}
+                    GestureDirection::None
+                    | GestureDirection::UpLeft
+                    | GestureDirection::UpRight
+                    | GestureDirection::DownLeft
+                    | GestureDirection::DownRight => {}
                 }
             } else {
                 self.repeat = self.repeat.saturating_add(continuing).max(0);

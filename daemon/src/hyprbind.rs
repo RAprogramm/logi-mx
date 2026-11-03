@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: 2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-//! Hyprland keyboard bindings reader for the keybind picker.
+//! Hyprland request-socket reader for the keybind picker and the pie menu.
 //!
-//! Hyprland answers the plain-text `j/binds` request on its request socket
-//! (the same instance directory the focus watcher follows) with the active
-//! bindings as a JSON array. This module turns every replayable
-//! keyboard binding into a `KEY_*` chord the gesture and button runtimes can
-//! inject, so a mouse gesture can follow a keybind the user already defined
-//! instead of capturing a new chord by hand.
+//! Hyprland answers plain-text requests on its request socket (the same
+//! instance directory the focus watcher follows). The `j/binds` request
+//! returns the active bindings as a JSON array, which this module turns into
+//! replayable `KEY_*` chords the gesture and button runtimes can inject, so
+//! a mouse gesture can follow a keybind the user already defined instead of
+//! capturing a new chord by hand. The `cursorpos` request answers with the
+//! pointer position as plain-text `x, y`, which the pie menu uses to anchor
+//! the radial menu at the press point.
 //!
 //! Bindings that cannot be replayed faithfully are skipped: mouse controls,
 //! submap switches, chords carrying the CAPS Lock bit, and chords carrying
@@ -35,6 +37,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 /// Plain-text request asking Hyprland for its bindings as JSON, the same
 /// payload `hyprctl binds -j` sends: the `j/` prefix selects JSON output.
 const BINDINGS_REQUEST: &[u8] = b"j/binds";
+
+/// Plain-text request asking Hyprland for the cursor position; the reply is
+/// plain text `x, y` in screen coordinates, no `j/` prefix needed.
+const CURSOR_REQUEST: &[u8] = b"cursorpos";
 
 /// Maximum number of dispatcher argument characters shown in a label.
 const ARG_DISPLAY_LIMIT: usize = 40;
@@ -232,21 +238,23 @@ pub fn hypr_key_to_keycode(name: &str) -> Option<String> {
     Some(key.to_string())
 }
 
-/// Fetches the active Hyprland keyboard bindings through the request socket.
+/// Sends one plain-text request to the Hyprland request socket and returns
+/// the raw reply.
 ///
 /// Discovers the live instance directory the same way the focus watcher
-/// does, sends `j/binds` and parses the reply.
+/// does, so systemd user services without `HYPRLAND_INSTANCE_SIGNATURE`
+/// still reach the compositor.
 ///
-/// # Returns
+/// # Arguments
 ///
-/// The replayable bindings, in Hyprland report order.
+/// * `request` - Plain-text request bytes, e.g. `b"cursorpos"`.
 ///
 /// # Errors
 ///
 /// Returns [`AppError`] when no Hyprland instance directory is found, the
 /// request socket is unreachable, or the compositor does not answer within
 /// the timeout.
-pub fn fetch_keybinds() -> Result<Vec<KeybindEntry>> {
+fn request_plain_text(request: &[u8]) -> Result<String> {
     let dir = focus::instance_dir()
         .ok_or_else(|| AppError::not_found("No running Hyprland instance was found"))?;
     let socket = dir.join(".socket.sock");
@@ -264,11 +272,9 @@ pub fn fetch_keybinds() -> Result<Vec<KeybindEntry>> {
             AppError::service("Failed to configure the Hyprland request socket").with_source(e)
         })?;
     stream
-        .write_all(BINDINGS_REQUEST)
+        .write_all(request)
         .and_then(|()| stream.flush())
-        .map_err(|e| {
-            AppError::service("Failed to query Hyprland for its bindings").with_source(e)
-        })?;
+        .map_err(|e| AppError::service("Failed to query Hyprland").with_source(e))?;
     let mut reply = String::new();
     if let Err(e) = stream.read_to_string(&mut reply) {
         if matches!(
@@ -276,15 +282,74 @@ pub fn fetch_keybinds() -> Result<Vec<KeybindEntry>> {
             std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
         ) {
             return Err(
-                AppError::timeout("Hyprland did not answer the bindings query in time")
-                    .with_source(e)
+                AppError::timeout("Hyprland did not answer the request in time").with_source(e)
             );
         }
-        return Err(
-            AppError::service("Failed to read the Hyprland bindings reply").with_source(e)
-        );
+        return Err(AppError::service("Failed to read the Hyprland reply").with_source(e));
     }
-    Ok(parse_bindings(&reply))
+    Ok(reply)
+}
+
+/// Fetches the active Hyprland keyboard bindings through the request socket.
+///
+/// Sends `j/binds` and parses the reply.
+///
+/// # Returns
+///
+/// The replayable bindings, in Hyprland report order.
+///
+/// # Errors
+///
+/// Returns [`AppError`] when no Hyprland instance directory is found, the
+/// request socket is unreachable, or the compositor does not answer within
+/// the timeout.
+pub fn fetch_keybinds() -> Result<Vec<KeybindEntry>> {
+    Ok(parse_bindings(&request_plain_text(BINDINGS_REQUEST)?))
+}
+
+/// Parses a `cursorpos` reply into screen coordinates.
+///
+/// # Arguments
+///
+/// * `reply` - Raw text received from the request socket, e.g. `"1912, 480"`.
+///
+/// # Returns
+///
+/// The `(x, y)` pair, or `None` when the text is not two integers.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_daemon::hyprbind::parse_cursor_pos;
+///
+/// assert_eq!(parse_cursor_pos("1912, 480"), Some((1912, 480)));
+/// assert_eq!(parse_cursor_pos(" -5,0 "), Some((-5, 0)));
+/// assert_eq!(parse_cursor_pos("nope"), None);
+/// ```
+#[must_use]
+pub fn parse_cursor_pos(reply: &str) -> Option<(i32, i32)> {
+    let (x, y) = reply.trim().split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
+/// Fetches the pointer position through the Hyprland request socket.
+///
+/// Sends the plain-text `cursorpos` request, answered with `x, y` in screen
+/// coordinates.
+///
+/// # Returns
+///
+/// The cursor `(x, y)` in screen coordinates.
+///
+/// # Errors
+///
+/// Returns [`AppError`] when no Hyprland instance directory is found, the
+/// request socket is unreachable, the compositor does not answer within the
+/// timeout, or the reply is not two integers.
+pub fn fetch_cursor_pos() -> Result<(i32, i32)> {
+    let reply = request_plain_text(CURSOR_REQUEST)?;
+    parse_cursor_pos(&reply)
+        .ok_or_else(|| AppError::service("Hyprland answered the cursor query unreadably"))
 }
 
 /// Converts one raw binding into an entry, rejecting the replayable-impossible
@@ -550,5 +615,21 @@ mod tests {
         let cut = truncate(&long);
         assert_eq!(cut.chars().count(), ARG_DISPLAY_LIMIT + 1);
         assert!(cut.ends_with('…'));
+    }
+
+    #[test]
+    fn parse_cursor_pos_accepts_plain_coordinate_pairs() {
+        assert_eq!(parse_cursor_pos("1912, 480"), Some((1912, 480)));
+        assert_eq!(parse_cursor_pos("0,0"), Some((0, 0)));
+        assert_eq!(parse_cursor_pos(" -5,10\n"), Some((-5, 10)));
+    }
+
+    #[test]
+    fn parse_cursor_pos_rejects_malformed_replies() {
+        assert_eq!(parse_cursor_pos(""), None);
+        assert_eq!(parse_cursor_pos("1912"), None);
+        assert_eq!(parse_cursor_pos("x, y"), None);
+        assert_eq!(parse_cursor_pos("1,2,3"), None);
+        assert_eq!(parse_cursor_pos("99999999999, 0"), None);
     }
 }

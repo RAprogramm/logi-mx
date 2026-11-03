@@ -16,6 +16,7 @@ mod hyprbind;
 mod inject;
 mod ipc;
 mod live;
+mod pie;
 mod status;
 mod systemd;
 mod worker;
@@ -177,6 +178,12 @@ fn new_live_state() -> (ipc::LiveHub, ipc::SharedLiveState) {
     (hub, Arc::new(ipc::LiveState::default()))
 }
 
+/// Creates the pie event fan-out for `WatchPie` subscribers.
+fn new_pie_hub() -> pie::PieHub {
+    let (hub, _sink) = tokio::sync::broadcast::channel::<pie::PieEvent>(64);
+    hub
+}
+
 /// Attaches the evdev tap thread to an existing fan-out.
 fn spawn_live_tap(hub: &ipc::LiveHub, state: &ipc::SharedLiveState) {
     if let Err(e) = std::thread::Builder::new()
@@ -226,20 +233,22 @@ async fn run() -> Result<()> {
     let tray_handle: worker::TraySlot = ();
 
     let (live_hub, live_state) = new_live_state();
+    let pie_hub = new_pie_hub();
 
     let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(
         config,
         Arc::clone(&status),
         tray_handle.clone(),
         Arc::clone(&live_state),
-        live_hub.clone()
+        live_hub.clone(),
+        pie_hub.clone()
     )?;
 
     spawn_live_tap(&live_hub, &live_state);
 
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {
-        if let Err(e) = crate::ipc::run_server(ipc_rpc_tx, live_hub).await {
+        if let Err(e) = crate::ipc::run_server(ipc_rpc_tx, live_hub, pie_hub).await {
             error!("IPC server error: {e}");
         }
     });

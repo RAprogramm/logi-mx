@@ -239,6 +239,43 @@ mod tests {
         assert!(config.devices[0].button_profiles.is_empty());
     }
 
+    #[test]
+    fn test_pie_config_round_trip() {
+        let mut config = Config::default();
+        config.devices[0].pie = PieConfig {
+            enabled:           true,
+            activation_radius: 60,
+            dead_zone:         20
+        };
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let loaded =
+            load_config_from_path(write_temp("pie_round_trip.toml", &toml_str).as_path()).unwrap();
+
+        assert_eq!(loaded.devices[0].pie, config.devices[0].pie);
+    }
+
+    #[test]
+    fn test_pie_config_defaults_when_absent() {
+        let config: Config = toml::from_str("[[devices]]\nname = \"MX Master 3S\"\n").unwrap();
+        let pie = &config.devices[0].pie;
+        assert!(!pie.enabled);
+        assert_eq!(pie.activation_radius, 40);
+        assert_eq!(pie.dead_zone, 12);
+    }
+
+    #[test]
+    fn test_pie_config_partial_section_fills_defaults() {
+        let config: Config = toml::from_str(
+            "[[devices]]\nname = \"MX Master 3S\"\n[devices.pie]\nenabled = true\n"
+        )
+        .unwrap();
+        let pie = &config.devices[0].pie;
+        assert!(pie.enabled);
+        assert_eq!(pie.activation_radius, 40);
+        assert_eq!(pie.dead_zone, 12);
+    }
+
     fn write_temp(name: &str, content: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("logi-mx-schema-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -264,6 +264,37 @@ impl DevicePool {
         save_config(&self.config)
     }
 
+    /// Reads the radial pie menu tuning from the stored configuration,
+    /// falling back to the schema defaults when no device entry exists.
+    pub(super) fn pie_config(&self) -> PieConfig {
+        self.config
+            .devices
+            .first()
+            .map_or_else(PieConfig::default, |device| device.pie.clone())
+    }
+
+    /// Mirrors a pie menu tuning request into the stored configuration and
+    /// persists it, so the tuning survives a daemon restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no device entry exists, the request changes no
+    /// pie configuration, or the file cannot be written.
+    pub(super) fn set_pie_request(
+        &mut self,
+        request: &ipc::Request
+    ) -> std::result::Result<(), masterror::AppError> {
+        if self.config.devices.is_empty() {
+            return Err(masterror::AppError::bad_request("No configured device"));
+        }
+        if !super::rpc::apply_setting(&mut self.config, request) {
+            return Err(masterror::AppError::bad_request(
+                "Request changes no pie configuration"
+            ));
+        }
+        save_config(&self.config)
+    }
+
     /// Mirrors a successful device setting into the stored configuration and
     /// persists it, so DPI, `SmartShift` and hi-res choices survive a daemon
     /// restart instead of being rolled back by the next `apply_config`.

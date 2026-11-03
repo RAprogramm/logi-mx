@@ -11,13 +11,16 @@
 use std::{path::PathBuf, sync::mpsc, time::Duration};
 
 use logi_mx_driver::prelude::{
-    Action, ButtonId, Gesture, GestureDirection, GestureMode, HiResScrollConfig, ReprogControl,
-    SmartShiftConfig
+    Action, ButtonId, Gesture, GestureDirection, GestureMode, HiResScrollConfig, PieConfig,
+    ReprogControl, SmartShiftConfig
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::hyprbind::KeybindEntry;
+use crate::{
+    hyprbind::KeybindEntry,
+    pie::{PieEvent, PieHub}
+};
 
 /// RPC envelope forwarded to the worker thread.
 pub struct RpcRequest {
@@ -215,6 +218,15 @@ pub enum Request {
         /// Hyprland window class.
         app_id: String
     },
+    /// Tune the radial pie menu for the gesture button; persists to config.
+    SetPie {
+        /// Whether the pie menu opens on a gesture hold.
+        enabled:           bool,
+        /// Cursor travel from the press point that opens the menu, in pixels.
+        activation_radius: i32,
+        /// Radius inside which no sector highlights, in pixels.
+        dead_zone:         i32
+    },
     /// Read the software button remaps: global map and per-app profiles.
     GetButtons,
     /// Bind an action to a thumb side button globally; persists to config.
@@ -258,7 +270,10 @@ pub enum Request {
     GetKeybinds,
     /// Subscribe to live input telemetry; the connection becomes a stream of
     /// [`Response::Live`] lines until it is closed.
-    WatchLive
+    WatchLive,
+    /// Subscribe to radial pie menu events; the connection becomes a stream
+    /// of [`Response::Pie`] lines until it is closed.
+    WatchPie
 }
 
 /// Daemon → client response.
@@ -318,7 +333,9 @@ pub enum Response {
         /// Current global bindings.
         gestures: Vec<Gesture>,
         /// Per-application overrides keyed by window class.
-        profiles: std::collections::HashMap<String, Vec<Gesture>>
+        profiles: std::collections::HashMap<String, Vec<Gesture>>,
+        /// Radial pie menu tuning.
+        pie:      PieConfig
     },
     /// `GetButtons` reply.
     ButtonsConfig {
@@ -344,6 +361,11 @@ pub enum Response {
     LiveReady,
     /// Live input telemetry frame on a `WatchLive` connection.
     Live(LiveFrame),
+    /// Acknowledgement that a pie event stream was accepted; further lines
+    /// on this connection are [`Response::Pie`] events.
+    PieReady,
+    /// Radial pie menu event on a `WatchPie` connection.
+    Pie(PieEvent),
     /// Human-readable error.
     Error {
         /// Error message.
@@ -449,13 +471,17 @@ pub fn open_live_stream() -> std::io::Result<std::os::unix::net::UnixStream> {
 /// files are removed. A task is spawned per client. Each request is
 /// forwarded via `rpc_tx` and the worker's reply is written back as a
 /// single JSON line. `WatchLive` connections instead stream frames from
-/// `live`.
+/// `live`, `WatchPie` connections stream events from `pie`.
 ///
 /// # Errors
 ///
 /// Returns an internal error if the socket cannot be created or an
 /// accept fails.
-pub async fn run_server(rpc_tx: RpcSender, live: LiveHub) -> Result<(), masterror::AppError> {
+pub async fn run_server(
+    rpc_tx: RpcSender,
+    live: LiveHub,
+    pie: PieHub
+) -> Result<(), masterror::AppError> {
     use std::os::unix::{fs::PermissionsExt as _, io::FromRawFd as _};
 
     use tokio::net::UnixListener;
@@ -502,8 +528,9 @@ pub async fn run_server(rpc_tx: RpcSender, live: LiveHub) -> Result<(), masterro
 
         let rpc_tx = rpc_tx.clone();
         let live = live.clone();
+        let pie = pie.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, rpc_tx, live).await {
+            if let Err(e) = handle_client(stream, rpc_tx, live, pie).await {
                 error!("IPC client error: {e}");
             }
         });
@@ -569,10 +596,58 @@ async fn stream_live(
     Ok(())
 }
 
+/// Streams pie menu events to a `WatchPie` client until either side closes.
+///
+/// A background reader detects client disconnects even while the device is
+/// idle: any read on the socket (EOF or error) ends the stream.
+async fn stream_pie(
+    stream: tokio::net::UnixStream,
+    hub: PieHub
+) -> Result<(), masterror::AppError> {
+    use tokio::{io::AsyncReadExt as _, sync::oneshot};
+
+    let (mut reader, mut writer) = stream.into_split();
+    let mut events = hub.subscribe();
+
+    write_line(&mut writer, &Response::PieReady)
+        .await
+        .map_err(|e| masterror::AppError::internal("Failed to ack pie stream").with_source(e))?;
+
+    let (gone_tx, gone_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let mut sink = [0u8; 64];
+        loop {
+            let read = reader.read(&mut sink).await.unwrap_or(0);
+            if read == 0 {
+                break;
+            }
+        }
+        let _ = gone_tx.send(());
+    });
+
+    let mut gone_rx = gone_rx;
+    loop {
+        tokio::select! {
+            _ = &mut gone_rx => break,
+            received = events.recv() => match received {
+                Ok(event) => {
+                    if write_line(&mut writer, &Response::Pie(event)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn handle_client(
     mut stream: tokio::net::UnixStream,
     rpc_tx: RpcSender,
-    hub: LiveHub
+    hub: LiveHub,
+    pie: PieHub
 ) -> Result<(), masterror::AppError> {
     use tokio::{
         io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader},
@@ -597,6 +672,11 @@ async fn handle_client(
     if matches!(request, Request::WatchLive) {
         drop(reader);
         return stream_live(stream, hub).await;
+    }
+
+    if matches!(request, Request::WatchPie) {
+        drop(reader);
+        return stream_pie(stream, pie).await;
     }
 
     let (tx, rx) = oneshot::channel();
