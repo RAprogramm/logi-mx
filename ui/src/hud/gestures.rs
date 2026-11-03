@@ -825,8 +825,7 @@ fn radial_menu_group(toast: &Toasts, initial: &PieConfig) -> (PreferencesGroup, 
             _ => None
         };
         let Some((radius, dead)) = tuning else {
-            toast_apply
-                .show("Activation radius and dead zone must be whole pixels between 1 and 4000");
+            toast_apply.show("Pie radius and dead zone: whole pixels, 1–4000");
             return;
         };
         let response = ipc::try_request(&ipc::Request::SetPie {

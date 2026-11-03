@@ -60,8 +60,8 @@ impl Toasts {
 
         let label = Label::new(None);
         label.add_css_class("heading");
-        label.set_wrap(true);
-        label.set_max_width_chars(48);
+        label.set_wrap(false);
+        label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         label.set_xalign(0.0);
 
         let close = Button::from_icon_name("window-close-symbolic");

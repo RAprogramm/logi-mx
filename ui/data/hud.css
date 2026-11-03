@@ -47,8 +47,14 @@ box.hud-toast {
     background-color: alpha(#000000, 0.78);
     border: 1px solid alpha(#ffffff, 0.10);
     border-radius: 999px;
-    padding: 8px 10px 8px 18px;
+    padding: 8px 8px 8px 16px;
     box-shadow: 0 8px 28px alpha(#000000, 0.45);
+}
+
+box.hud-toast button {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px;
 }
 
 /* Segmented page switcher */
