@@ -68,7 +68,8 @@ pub struct GestureRuntime {
     injector:           Injector,
     last_commit:        Option<GestureDirection>,
     injection_warned:   bool,
-    unsupported_warned: bool
+    unsupported_warned: bool,
+    pending_smartshift: Option<SmartShiftConfig>
 }
 
 impl GestureRuntime {
@@ -81,17 +82,16 @@ impl GestureRuntime {
         let Some(device) = config.devices.first() else {
             return Self::default();
         };
-        let (bindings, profiles) = match (
-            device.gestures_enabled,
-            device.buttons.get(&ButtonId::ThumbGesture)
-        ) {
-            (
-                true,
+        let (bindings, profiles) = if device.gestures_enabled {
+            let bindings = match device.buttons.get(&ButtonId::ThumbGesture) {
                 Some(Action::Gestures {
                     gestures
-                })
-            ) => (gestures.clone(), device.gesture_profiles.clone()),
-            _ => (Vec::new(), HashMap::new())
+                }) => gestures.clone(),
+                _ => Vec::new()
+            };
+            (bindings, device.gesture_profiles.clone())
+        } else {
+            (Vec::new(), HashMap::new())
         };
         let mut pie = PieRuntime::default();
         pie.set_config(device.pie.clone());
@@ -268,14 +268,15 @@ impl GestureRuntime {
         if !self.diverted {
             return;
         }
-        self.diverted = false;
         self.accumulator = SwipeAccumulator::default();
         self.last_commit = None;
         self.pie.on_cancel();
         self.set_live_bit(BTN_BIT_GESTURE, false);
         if let Err(e) = device.set_control_divert(control_id::GESTURE_BUTTON, false, false) {
             warn!("failed to undivert the gesture button: {e}");
+            return;
         }
+        self.diverted = false;
     }
 
     /// Whether the runtime needs the reprogrammable-controls notification
@@ -324,7 +325,10 @@ impl GestureRuntime {
 
     /// Tracks the wheel-mode button edge: press toggles `SmartShift` (the
     /// firmware's native job once the control is diverted) and raises the
-    /// live bit so the HUD lights the button up.
+    /// live bit so the HUD lights the button up. The toggle reads the live
+    /// device state first, so an `SetSmartShift` request between presses is
+    /// never overwritten by a stale copy, and a successful toggle is handed
+    /// to [`Self::take_smartshift_persist`] so the caller can persist it.
     fn on_wheel_mode_edge(&mut self, pressed: bool, device: &mut MxMaster3s) {
         if pressed == self.dpi.held {
             return;
@@ -334,21 +338,32 @@ impl GestureRuntime {
         if !pressed {
             return;
         }
-        self.smartshift.enabled = !self.smartshift.enabled;
-        match device.set_smartshift(self.smartshift) {
-            Ok(()) => info!(
-                "wheel-mode button: SmartShift {}",
-                if self.smartshift.enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            ),
-            Err(e) => {
-                self.smartshift.enabled = !self.smartshift.enabled;
-                warn!("failed to toggle SmartShift: {e}");
+        let base = device.smartshift().unwrap_or(self.smartshift);
+        let target = SmartShiftConfig {
+            enabled:   !base.enabled,
+            threshold: base.threshold
+        };
+        match device.set_smartshift(target) {
+            Ok(()) => {
+                self.smartshift = target;
+                self.pending_smartshift = Some(target);
+                info!(
+                    "wheel-mode button: SmartShift {}",
+                    if target.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
             }
+            Err(e) => warn!("failed to toggle SmartShift: {e}")
         }
+    }
+
+    /// Takes the `SmartShift` state a wheel-mode toggle wrote to the device,
+    /// so the caller can mirror it into the stored configuration.
+    pub const fn take_smartshift_persist(&mut self) -> Option<SmartShiftConfig> {
+        self.pending_smartshift.take()
     }
 
     /// Raises or lowers a daemon-side button bit and publishes an immediate

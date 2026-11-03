@@ -6,14 +6,16 @@
 //! Hyprland pushes every focus change over its event socket as
 //! `activewindow>>class,title`; the watcher thread follows that stream and
 //! keeps the focused window class in a shared slot the gesture runtime reads
-//! when resolving bindings. The initial window is queried once through the
-//! request socket so profiles apply without waiting for the first switch.
-//! Outside Hyprland the watcher stays inactive and the slot stays `None`,
-//! which means "no app focused" and keeps the global bindings in charge.
+//! when resolving bindings. The active window is queried through the request
+//! socket on start and after every reconnect, so profiles apply without
+//! waiting for the first switch.
+//! Outside Hyprland the watcher keeps retrying discovery and the slot stays
+//! `None`, which means "no app focused" and keeps the global bindings in
+//! charge.
 
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    os::unix::net::UnixStream,
+    os::unix::{fs::FileTypeExt as _, net::UnixStream},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -66,9 +68,17 @@ fn discover_dir(runtime: &str) -> Option<PathBuf> {
     let entries = std::fs::read_dir(root).ok()?;
     entries
         .flatten()
-        .filter(|entry| entry.path().join(".socket2.sock").is_file())
+        .filter(|entry| socket_present(&entry.path().join(".socket2.sock")))
         .max_by_key(|entry| entry.metadata().ok().and_then(|m| m.modified().ok()))
         .map(|entry| entry.path())
+}
+
+/// Whether `path` is a live socket (or a regular file standing in for one in
+/// tests); `Path::is_file` rejects Unix sockets, so the metadata file type is
+/// checked explicitly.
+fn socket_present(path: &Path) -> bool {
+    path.metadata()
+        .is_ok_and(|meta| meta.file_type().is_socket() || meta.file_type().is_file())
 }
 
 /// Extracts the `class:` field from an `activewindow` text reply.
@@ -80,11 +90,26 @@ fn text_class(reply: &str) -> Option<&str> {
         .filter(|class| !class.is_empty())
 }
 
-/// Parses one event-socket line, returning the class of an `activewindow`
-/// event.
-fn event_class(line: &str) -> Option<&str> {
+/// The focus change reported by one `activewindow` event-socket line.
+#[derive(Debug, PartialEq)]
+enum FocusEvent<'a> {
+    /// The event names the class of the newly focused window.
+    Focused(&'a str),
+    /// The event reports no class, so focus left every window.
+    Unfocused
+}
+
+/// Parses one event-socket line into the focus change of an `activewindow`
+/// event, or `None` for every other event.
+fn event_focus(line: &str) -> Option<FocusEvent<'_>> {
     let payload = line.strip_prefix("activewindow>>")?;
-    payload.split(',').next().filter(|class| !class.is_empty())
+    Some(
+        payload
+            .split(',')
+            .next()
+            .filter(|class| !class.is_empty())
+            .map_or(FocusEvent::Unfocused, FocusEvent::Focused)
+    )
 }
 
 /// Queries the currently active window class through the request socket.
@@ -119,27 +144,37 @@ fn follow(stream: &UnixStream, shared: &SharedFocus) -> std::io::Result<()> {
             ));
         }
         let trimmed = line.trim_end();
-        if let Some(class) = event_class(trimmed) {
-            store(shared, Some(class));
+        if let Some(event) = event_focus(trimmed) {
+            match event {
+                FocusEvent::Focused(class) => store(shared, Some(class)),
+                FocusEvent::Unfocused => store(shared, None)
+            }
         }
     }
 }
 
-/// Spawns the watcher thread; outside Hyprland it logs and exits.
+/// Spawns the watcher thread; outside Hyprland it retries discovery until the
+/// compositor's sockets appear, and re-queries the active window after every
+/// event-stream reconnect.
 pub fn spawn_watcher(shared: SharedFocus) {
     if let Err(e) = thread::Builder::new()
         .name("hypr-focus".to_string())
         .spawn(move || {
-            let Some(dir) = instance_dir() else {
-                debug!("focus watcher: no Hyprland sockets; per-app profiles stay inactive");
-                return;
-            };
-            info!("focus watcher: following {}", dir.display());
-            if let Some(class) = initial_class(&dir) {
-                info!("focus watcher: active window class {class:?}");
-                store(&shared, Some(&class));
-            }
             loop {
+                let Some(dir) = instance_dir() else {
+                    debug!("focus watcher: no Hyprland sockets; per-app profiles stay inactive");
+                    store(&shared, None);
+                    thread::sleep(RECONNECT_DELAY);
+                    continue;
+                };
+                info!("focus watcher: following {}", dir.display());
+                match initial_class(&dir) {
+                    Some(class) => {
+                        info!("focus watcher: active window class {class:?}");
+                        store(&shared, Some(&class));
+                    }
+                    None => store(&shared, None)
+                }
                 match UnixStream::connect(dir.join(".socket2.sock"))
                     .and_then(|stream| follow(&stream, &shared))
                 {
@@ -160,26 +195,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn event_class_extracts_the_class_field() {
+    fn event_focus_extracts_the_class_field() {
         assert_eq!(
-            event_class("activewindow>>firefox,Some Page"),
-            Some("firefox")
+            event_focus("activewindow>>firefox,Some Page"),
+            Some(FocusEvent::Focused("firefox"))
         );
     }
 
     #[test]
-    fn event_class_keeps_commas_in_the_title() {
+    fn event_focus_keeps_commas_in_the_title() {
         assert_eq!(
-            event_class("activewindow>>org.wezfurlong.wezterm[a],b, c"),
-            Some("org.wezfurlong.wezterm[a]")
+            event_focus("activewindow>>org.wezfurlong.wezterm[a],b, c"),
+            Some(FocusEvent::Focused("org.wezfurlong.wezterm[a]"))
         );
     }
 
     #[test]
-    fn event_class_rejects_other_events_and_empty_classes() {
-        assert_eq!(event_class("workspace>>2,web"), None);
-        assert_eq!(event_class("activewindow>>"), None);
-        assert_eq!(event_class("activewindow>>,title"), None);
+    fn event_focus_clears_on_empty_class_and_ignores_other_events() {
+        assert_eq!(event_focus("workspace>>2,web"), None);
+        assert_eq!(event_focus("activewindow>>"), Some(FocusEvent::Unfocused));
+        assert_eq!(
+            event_focus("activewindow>>,title"),
+            Some(FocusEvent::Unfocused)
+        );
     }
 
     #[test]
@@ -231,6 +269,22 @@ mod tests {
         std::fs::write(live.join(".socket2.sock"), b"").unwrap();
         assert_eq!(discover_dir(&root.display().to_string()), Some(live));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn socket_present_accepts_unix_sockets_and_regular_files() {
+        let dir = std::env::temp_dir().join(format!("logi-mx-focus-sock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join(".socket2.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(socket_present(&sock));
+        let regular = dir.join("plain");
+        std::fs::write(&regular, b"").unwrap();
+        assert!(socket_present(&regular));
+        assert!(!socket_present(&dir.join("missing")));
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

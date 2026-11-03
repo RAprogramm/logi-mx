@@ -66,6 +66,24 @@ fn test_multiple_pressed_controls_reported_in_order() {
 }
 
 #[test]
+fn test_decodes_only_four_control_slots() {
+    let packet = long_notification(
+        0x09,
+        0x00,
+        &[
+            0x00, 0xC3, 0x00, 0xC4, 0x00, 0xC5, 0x00, 0xC6, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+            0x01, 0x01
+        ]
+    );
+    assert_eq!(
+        decode_reprog_notification(0x09, &packet),
+        Some(ReprogNotification::DivertedButtons {
+            pressed: vec![0x00C3, 0x00C4, 0x00C5, 0x00C6]
+        })
+    );
+}
+
+#[test]
 fn test_rejects_short_reports() {
     let short = HidppPacket::new_short(0xFF, 0x09, 0x00, 0x00, [0; 3]);
     assert_eq!(decode_reprog_notification(0x09, &short), None);

@@ -140,14 +140,24 @@ impl Injector {
     pub fn press_sequence(&mut self, keys: &[String]) -> Result<()> {
         let codes = resolve_sequence(keys)?;
         let device = self.ensure_device()?;
+        let mut pressed = Vec::with_capacity(codes.len());
         for code in &codes {
-            emit_key(device, *code, 1)?;
+            if let Err(error) = emit_key(device, *code, 1) {
+                for held in pressed.iter().rev() {
+                    let _ = emit_key(device, *held, 0);
+                }
+                return Err(error);
+            }
+            pressed.push(*code);
         }
         sleep(KEY_HOLD);
-        for code in codes.iter().rev() {
-            emit_key(device, *code, 0)?;
+        let mut failure = None;
+        for code in pressed.iter().rev() {
+            if let Err(error) = emit_key(device, *code, 0) {
+                failure.get_or_insert(error);
+            }
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     fn ensure_device(&mut self) -> Result<&mut VirtualDevice> {

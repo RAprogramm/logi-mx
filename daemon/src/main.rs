@@ -185,13 +185,14 @@ fn new_pie_hub() -> pie::PieHub {
 }
 
 /// Attaches the evdev tap thread to an existing fan-out.
-fn spawn_live_tap(hub: &ipc::LiveHub, state: &ipc::SharedLiveState) {
+fn spawn_live_tap(hub: &ipc::LiveHub, state: &ipc::SharedLiveState, anchor: &live::SharedAnchor) {
     if let Err(e) = std::thread::Builder::new()
         .name("logi-mx-live".to_string())
         .spawn({
             let hub = hub.clone();
             let state = Arc::clone(state);
-            move || live::run(&hub, &state)
+            let anchor = Arc::clone(anchor);
+            move || live::run(&hub, &state, &anchor)
         })
     {
         warn!("Failed to spawn live telemetry thread: {e}. Live HUD disabled.");
@@ -204,6 +205,26 @@ fn init_tracing() {
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
+}
+
+/// Starts the tray when a desktop session is present and reopens the UI a
+/// full restart found open.
+#[cfg(feature = "tray")]
+async fn init_tray(status: &SharedStatus, tray_handle: &worker::TraySlot) {
+    if !has_desktop_session() {
+        info!("No desktop session detected, skipping tray");
+        return;
+    }
+    match spawn_tray(Arc::clone(status)).await {
+        Ok(handle) => {
+            *tray_handle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
+            info!("System tray initialized");
+        }
+        Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
+    }
+    tray::restore_ui_after_restart();
 }
 
 async fn run() -> Result<()> {
@@ -233,6 +254,7 @@ async fn run() -> Result<()> {
     let tray_handle: worker::TraySlot = ();
 
     let (live_hub, live_state) = new_live_state();
+    let live_anchor = live::new_anchor();
     let pie_hub = new_pie_hub();
 
     let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(
@@ -241,10 +263,11 @@ async fn run() -> Result<()> {
         tray_handle.clone(),
         Arc::clone(&live_state),
         live_hub.clone(),
-        pie_hub.clone()
+        pie_hub.clone(),
+        Arc::clone(&live_anchor)
     )?;
 
-    spawn_live_tap(&live_hub, &live_state);
+    spawn_live_tap(&live_hub, &live_state, &live_anchor);
 
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {
@@ -254,20 +277,7 @@ async fn run() -> Result<()> {
     });
 
     #[cfg(feature = "tray")]
-    if has_desktop_session() {
-        match spawn_tray(Arc::clone(&status)).await {
-            Ok(handle) => {
-                *tray_handle
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
-                info!("System tray initialized");
-            }
-            Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
-        }
-        tray::restore_ui_after_restart();
-    } else {
-        info!("No desktop session detected, skipping tray");
-    }
+    init_tray(&status, &tray_handle).await;
 
     let (tx, mut rx) = mpsc::channel::<UdevEvent>(32);
 

@@ -12,6 +12,8 @@
 
 use std::{
     collections::HashSet,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant}
 };
@@ -26,6 +28,30 @@ use crate::ipc::{
 
 /// Delay before the next scan after the device vanished or could not open.
 const RESCAN_DELAY: Duration = Duration::from_secs(2);
+
+/// Shared slot holding the hidraw path of the device tracked by the worker.
+///
+/// The tap prefers the evdev node belonging to the same physical device, so
+/// a second Logitech pointer can never hijack the telemetry.
+pub type SharedAnchor = Arc<Mutex<Option<PathBuf>>>;
+
+/// Creates an empty anchor slot.
+#[must_use]
+pub fn new_anchor() -> SharedAnchor {
+    Arc::new(Mutex::new(None))
+}
+
+/// Canonical sysfs device directory behind a `/dev/hidrawN` path.
+fn hidraw_device_dir(hidraw: &Path) -> Option<PathBuf> {
+    let name = hidraw.file_name()?;
+    std::fs::canonicalize(Path::new("/sys/class/hidraw").join(name).join("device")).ok()
+}
+
+/// Canonical sysfs device directory behind a `/dev/input/eventN` path.
+fn evdev_device_dir(node: &Path) -> Option<PathBuf> {
+    let name = node.file_name()?;
+    std::fs::canonicalize(Path::new("/sys/class/input").join(name).join("device")).ok()
+}
 
 const SYN_REPORT: u16 = 0;
 const REL_X: u16 = 0;
@@ -170,13 +196,21 @@ impl TelemetryAccumulator {
 
 /// Finds the pointer event node belonging to the MX Master 3S.
 ///
-/// Prefers a node whose name mentions the mouse (direct Bluetooth pairing);
-/// falls back to any Logitech node with a relative X axis, which is the
-/// "Logitech USB Receiver Mouse" node the Bolt receiver exposes. That node
-/// carries motion, both wheels and every thumb button, so exactly one node
-/// is tapped and tilt events are never double-counted through the Consumer
-/// Control node.
-fn find_mouse() -> Option<(std::path::PathBuf, String)> {
+/// Prefers the evdev node whose sysfs device directory matches the tracked
+/// hidraw device (the anchor published by the worker); falls back to a node
+/// whose name mentions the mouse (direct Bluetooth pairing), then to any
+/// Logitech node with a relative X axis, which is the "Logitech USB Receiver
+/// Mouse" node the Bolt receiver exposes. That node carries motion, both
+/// wheels and every thumb button, so exactly one node is tapped and tilt
+/// events are never double-counted through the Consumer Control node.
+fn find_mouse(anchor: &SharedAnchor) -> Option<(std::path::PathBuf, String)> {
+    let expected = anchor
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_deref()
+        .and_then(hidraw_device_dir);
+    let mut anchored = None;
+    let mut named = None;
     let mut fallback = None;
     for (path, device) in evdev::enumerate() {
         let name = device.name().unwrap_or_default().to_lowercase();
@@ -189,14 +223,22 @@ fn find_mouse() -> Option<(std::path::PathBuf, String)> {
         if !is_pointer {
             continue;
         }
-        if name.contains("mx master") {
-            return Some((path, name));
+        if expected
+            .as_ref()
+            .is_some_and(|dir| evdev_device_dir(&path).as_ref() == Some(dir))
+        {
+            anchored = Some((path, name));
+            break;
         }
-        if name.contains("logitech") && fallback.is_none() {
+        if name.contains("mx master") {
+            if named.is_none() {
+                named = Some((path, name));
+            }
+        } else if name.contains("logitech") && fallback.is_none() {
             fallback = Some((path, name));
         }
     }
-    fallback
+    anchored.or(named).or(fallback)
 }
 
 /// Streams event batches until the device stops answering.
@@ -227,8 +269,8 @@ fn stream(
 }
 
 /// Attaches to the mouse and streams frames until the device detaches.
-fn pump(hub: &LiveHub, state: &crate::ipc::SharedLiveState) {
-    let Some((path, name)) = find_mouse() else {
+fn pump(hub: &LiveHub, state: &crate::ipc::SharedLiveState, anchor: &SharedAnchor) {
+    let Some((path, name)) = find_mouse(anchor) else {
         debug!("live telemetry: MX Master event node not found");
         thread::sleep(RESCAN_DELAY);
         return;
@@ -245,12 +287,15 @@ fn pump(hub: &LiveHub, state: &crate::ipc::SharedLiveState) {
     if let Err(e) = stream(&mut device, &mut accumulator, hub, state) {
         info!("live telemetry detached from {name}: {e}");
     }
+    state
+        .last_buttons
+        .store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Runs the evdev tap until the process exits.
-pub fn run(hub: &LiveHub, state: &crate::ipc::SharedLiveState) {
+pub fn run(hub: &LiveHub, state: &crate::ipc::SharedLiveState, anchor: &SharedAnchor) {
     loop {
-        pump(hub, state);
+        pump(hub, state, anchor);
     }
 }
 

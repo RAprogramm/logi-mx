@@ -306,6 +306,19 @@ impl DevicePool {
         }
     }
 
+    /// The hidraw path of the tracked device, when a real path is cached.
+    /// The synthetic discovery key is not a path and is never reported.
+    pub(super) fn tracked_path(&self) -> Option<String> {
+        let guard = self
+            .devices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard
+            .keys()
+            .find(|key| key.as_str() != DISCOVERED_KEY)
+            .cloned()
+    }
+
     /// Drops the stored device handle for a removed hidraw path.
     ///
     /// The cached handles are keyed by hidraw path, but RPC discovery stores

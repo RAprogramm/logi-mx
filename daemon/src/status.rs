@@ -93,6 +93,8 @@ pub fn refresh(status: &SharedStatus, readings: Option<DeviceReadings>) {
             if let Some(battery) = readings.battery {
                 guard.battery_level = battery.level;
                 guard.battery_status = format!("{:?}", battery.status);
+            } else {
+                guard.battery_status = "Unknown".to_string();
             }
             if let Some(current_dpi) = readings.dpi {
                 guard.dpi = current_dpi;

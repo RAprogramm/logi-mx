@@ -579,6 +579,8 @@ impl MxMaster3s {
             flags |= 0x30;
         }
 
+        let (_, remap_to) = self.control_divert(control_id).unwrap_or((0, 0x0000));
+
         self.hidpp.send_command(
             feature_index,
             ReprogControlsFunction::SetControlReporting as u8,
@@ -586,8 +588,8 @@ impl MxMaster3s {
                 (control_id >> 8) as u8,
                 (control_id & 0xFF) as u8,
                 flags,
-                0x00,
-                0x00
+                (remap_to >> 8) as u8,
+                (remap_to & 0xFF) as u8
             ]
         )?;
 

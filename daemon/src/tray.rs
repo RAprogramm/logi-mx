@@ -11,7 +11,7 @@ use std::{
     env::current_exe,
     fs,
     os::unix::ffi::OsStrExt as _,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, exit},
     sync::{Arc, Mutex},
     thread
@@ -82,6 +82,11 @@ where
 fn ui_restart_marker() -> PathBuf {
     let runtime_dir =
         std::env::var("XDG_RUNTIME_DIR").map_or_else(|_| std::env::temp_dir(), PathBuf::from);
+    ui_restart_marker_in(&runtime_dir)
+}
+
+/// Marker path inside the given runtime directory.
+fn ui_restart_marker_in(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join("logi-mx-ui-restart")
 }
 
@@ -140,8 +145,10 @@ fn terminate_configuration_ui() -> bool {
 fn restart_everything() {
     info!("Full restart requested from the tray");
 
-    if terminate_configuration_ui() {
-        let _ = fs::write(ui_restart_marker(), "");
+    if terminate_configuration_ui()
+        && let Err(e) = fs::write(ui_restart_marker(), "")
+    {
+        error!("Failed to record UI restart marker: {e}");
     }
 
     if std::env::var("INVOCATION_ID").is_err() {
@@ -165,8 +172,13 @@ fn restart_everything() {
 /// Reopens the configuration UI when a full restart found it open.
 pub fn restore_ui_after_restart() {
     let marker = ui_restart_marker();
+    restore_ui_after_restart_at(&marker);
+}
+
+/// Consumes `marker` and relaunches the UI when it exists.
+fn restore_ui_after_restart_at(marker: &Path) {
     if marker.is_file() {
-        let _ = fs::remove_file(&marker);
+        let _ = fs::remove_file(marker);
         info!("Restoring configuration UI after restart");
         spawn_tray_task("tray-restore-ui", launch_configuration_ui);
     }
@@ -367,7 +379,9 @@ fn launch_configuration_ui() {
         "XDG_SESSION_TYPE",
         "XDG_CURRENT_DESKTOP",
         "DBUS_SESSION_BUS_ADDRESS",
-        "PATH"
+        "PATH",
+        "HYPRLAND_INSTANCE_SIGNATURE",
+        "XDG_CONFIG_HOME"
     ] {
         if let Ok(val) = std::env::var(var) {
             cmd.env(var, val);
@@ -596,10 +610,13 @@ mod tests {
 
     #[test]
     fn test_restore_ui_without_marker_is_noop() {
-        let marker = ui_restart_marker();
-        let _ = fs::remove_file(&marker);
-        restore_ui_after_restart();
+        let dir = std::env::temp_dir().join(format!("logi-mx-tray-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let marker = ui_restart_marker_in(&dir);
         assert!(!marker.exists());
+        restore_ui_after_restart_at(&marker);
+        assert!(!marker.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -89,11 +89,11 @@ const COLOR_ERROR: Rgb = Rgb {
 /// ```
 #[must_use]
 pub fn color_for(status: &DeviceStatus) -> Rgb {
-    if status.error.is_some() {
-        return COLOR_ERROR;
-    }
     if !status.connected {
         return COLOR_DISCONNECTED;
+    }
+    if status.error.is_some() {
+        return COLOR_ERROR;
     }
     if status.battery_status == BATTERY_DISCHARGING {
         if status.battery_level <= BATTERY_CRITICAL_PERCENT {
@@ -168,16 +168,19 @@ fn render_size(tree: &usvg::Tree, size: u32, color: Rgb) -> Option<Icon> {
     })
 }
 
-/// Replaces premultiplied RGBA pixels with a BGRA silhouette in `color`.
+/// Replaces premultiplied RGBA pixels with a silhouette in `color`, stored as
+/// ARGB32 in network byte order (A, R, G, B) as the `StatusNotifierItem` spec
+/// requires.
 ///
 /// Only the source alpha is meaningful: the silhouette shape. RGB channels are
 /// rebuilt from the state color and premultiplied by that alpha.
 fn tint(data: &mut [u8], color: Rgb) {
     for pixel in data.as_chunks_mut::<4>().0 {
         let alpha = pixel[3];
-        pixel[0] = premultiply(color.b, alpha);
-        pixel[1] = premultiply(color.g, alpha);
-        pixel[2] = premultiply(color.r, alpha);
+        pixel[0] = alpha;
+        pixel[1] = premultiply(color.r, alpha);
+        pixel[2] = premultiply(color.g, alpha);
+        pixel[3] = premultiply(color.b, alpha);
     }
 }
 
@@ -223,6 +226,12 @@ mod tests {
     }
 
     #[test]
+    fn unreachable_is_dim_not_error() {
+        let status = status(false, 0, "Unknown", Some("device not reachable"));
+        assert_eq!(color_for(&status), COLOR_DISCONNECTED);
+    }
+
+    #[test]
     fn healthy_connected_is_light() {
         let status = status(true, 90, "Discharging", None);
         assert_eq!(color_for(&status), COLOR_CONNECTED);
@@ -261,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn tint_maps_alpha_to_premultiplied_bgra() {
+    fn tint_maps_alpha_to_argb_network_order() {
         let color = Rgb {
             r: 10,
             g: 20,
@@ -275,8 +284,8 @@ mod tests {
         tint(&mut data, color);
 
         assert_eq!(&data[0..4], &[0, 0, 0, 0]);
-        assert_eq!(&data[4..8], &[30, 20, 10, 255]);
-        assert_eq!(&data[8..12], &[15, 10, 5, 128]);
+        assert_eq!(&data[4..8], &[255, 10, 20, 30]);
+        assert_eq!(&data[8..12], &[128, 5, 10, 15]);
     }
 
     #[test]
@@ -301,7 +310,7 @@ mod tests {
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .filter(|px| px[3] == 255)
+                .filter(|px| px[0] == 255)
                 .count();
             assert!(opaque > 0);
 

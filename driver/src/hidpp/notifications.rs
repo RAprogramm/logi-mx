@@ -95,6 +95,7 @@ fn parse_pressed(parameters: &[u8; 16]) -> Vec<u16> {
         .as_chunks::<2>()
         .0
         .iter()
+        .take(4)
         .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
         .filter(|cid| *cid != 0)
         .collect()

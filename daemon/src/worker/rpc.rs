@@ -227,7 +227,6 @@ fn handle_device_read(
     request: &ipc::Request
 ) -> std::result::Result<Option<ipc::Response>, masterror::AppError> {
     Ok(Some(match request {
-        ipc::Request::Ping => ipc::Response::Pong,
         ipc::Request::Info => handle_info(device),
         ipc::Request::Battery => handle_battery(device),
         ipc::Request::Hosts => {

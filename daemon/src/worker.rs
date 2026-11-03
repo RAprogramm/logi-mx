@@ -97,7 +97,8 @@ pub fn spawn_device_worker(
     tray: TraySlot,
     live: ipc::SharedLiveState,
     hub: ipc::LiveHub,
-    pie_hub: crate::pie::PieHub
+    pie_hub: crate::pie::PieHub,
+    anchor: crate::live::SharedAnchor
 ) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
 {
     let (tx, rx) = mpsc::channel();
@@ -109,7 +110,8 @@ pub fn spawn_device_worker(
             let telemetry = Telemetry {
                 live,
                 hub,
-                pie_hub
+                pie_hub,
+                anchor
             };
             run_device_worker(config, &rx, &rpc_rx, &status, &tray, telemetry);
         })
@@ -127,7 +129,9 @@ pub struct Telemetry {
     /// Live frame fan-out the worker publishes immediate frames on.
     pub hub:     ipc::LiveHub,
     /// Pie event fan-out the radial menu publishes on.
-    pub pie_hub: crate::pie::PieHub
+    pub pie_hub: crate::pie::PieHub,
+    /// Hidraw path slot the live tap uses to pick the matching event node.
+    pub anchor:  crate::live::SharedAnchor
 }
 
 fn run_device_worker(
@@ -141,7 +145,8 @@ fn run_device_worker(
     let Telemetry {
         live,
         hub,
-        pie_hub
+        pie_hub,
+        anchor
     } = telemetry;
     let mut gestures = GestureRuntime::from_config(&config);
     gestures.attach_live(live.clone(), hub.clone());
@@ -160,9 +165,7 @@ fn run_device_worker(
     refresh_and_notify(&mut manager, status, tray, &mut policy);
     #[cfg(not(feature = "notify"))]
     refresh_and_notify(&mut manager, status, tray);
-    if gestures.should_divert() {
-        manager.for_each_cached_mut(|device| gestures.apply(device));
-    }
+    manager.for_each_cached_mut(|device| gestures.apply(device));
     if buttons.should_divert() {
         manager.for_each_cached_mut(|device| buttons.apply(device));
     }
@@ -202,6 +205,13 @@ fn run_device_worker(
         };
 
         pump_notifications(&mut gestures, &mut buttons, &manager);
+        sync_anchor(&anchor, &manager);
+        if let Some(smartshift) = gestures.take_smartshift_persist() {
+            manager.persist_setting(&ipc::Request::SetSmartShift {
+                enabled:   smartshift.enabled,
+                threshold: smartshift.threshold
+            });
+        }
         if gestures.is_holding() {
             gestures.on_pie_tick();
         }
@@ -211,9 +221,7 @@ fn run_device_worker(
             refresh_and_notify(&mut manager, status, tray, &mut policy);
             #[cfg(not(feature = "notify"))]
             refresh_and_notify(&mut manager, status, tray);
-            if gestures.should_divert() {
-                manager.for_each_cached_mut(|device| gestures.apply(device));
-            }
+            manager.for_each_cached_mut(|device| gestures.apply(device));
             if buttons.should_divert() {
                 manager.for_each_cached_mut(|device| buttons.apply(device));
             }
@@ -255,6 +263,16 @@ fn pump_notifications(
             }
         }
     });
+}
+
+/// Publishes the tracked device's hidraw path so the live tap can prefer the
+/// evdev node of the same physical device over any other Logitech pointer.
+fn sync_anchor(anchor: &crate::live::SharedAnchor, manager: &DevicePool) {
+    let path = manager.tracked_path().map(std::path::PathBuf::from);
+    let mut guard = anchor
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = path;
 }
 
 /// Refreshes the shared status, publishes user notices and updates the tray.
@@ -335,8 +353,9 @@ fn handle_rpc(
 ///
 /// `WatchLive` and `WatchPie` connections are answered by the IPC server
 /// itself and never reach this function; the arms exist to keep the
-/// protocol exhaustive. `GetKeybinds` is answered from the desktop, not
-/// the device, so it is resolved before any device routing.
+/// protocol exhaustive. `GetKeybinds` and `Ping` are answered without the
+/// device, so they are resolved before any device routing and keep working
+/// while no receiver is present.
 fn handle_request(
     manager: &mut DevicePool,
     gestures: &mut GestureRuntime,
@@ -352,6 +371,9 @@ fn handle_request(
                 message: error.to_string()
             }
         };
+    }
+    if matches!(request, ipc::Request::Ping) {
+        return ipc::Response::Pong;
     }
     if let Some(response) = handle_gesture_request(manager, gestures, request) {
         return response;
@@ -393,7 +415,8 @@ mod tests {
                     super::Telemetry {
                         live: ipc::SharedLiveState::default(),
                         hub: live_hub,
-                        pie_hub
+                        pie_hub,
+                        anchor: crate::live::new_anchor()
                     }
                 );
             })

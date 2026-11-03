@@ -132,7 +132,9 @@ pub enum GestureDirection {
 pub enum GestureMode {
     /// Fires when the button is released.
     OnRelease,
-    /// Fires as soon as the button is pressed.
+    /// Fires as soon as the swipe direction is recognised: mid-hold for a
+    /// deliberate swipe, at release for a quick flick or a directionless
+    /// click.
     OnPress
 }
 
