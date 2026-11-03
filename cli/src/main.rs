@@ -84,6 +84,15 @@ enum GestureCommands {
     Disable
 }
 
+/// Parses a control ID written in decimal or with a `0x` hexadecimal prefix.
+fn parse_control_id(value: &str) -> std::result::Result<u16, String> {
+    let (radix, digits) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .map_or((10, value), |digits| (16, digits));
+    u16::from_str_radix(digits, radix).map_err(|e| format!("invalid control ID {value:?}: {e}"))
+}
+
 #[derive(Subcommand, Clone, Copy)]
 enum SetCommands {
     Dpi {
@@ -108,6 +117,7 @@ enum SetCommands {
 
     Button {
         /// Control ID, e.g. 0x00C3 for the gesture button
+        #[arg(value_parser = parse_control_id)]
         control_id: u16,
 
         #[arg(long)]
@@ -119,9 +129,11 @@ enum SetCommands {
 
     Remap {
         /// Control ID to remap, e.g. 0x00C3 for the gesture button
+        #[arg(value_parser = parse_control_id)]
         control_id: u16,
 
         /// Target control ID, or 0 to restore native behaviour
+        #[arg(value_parser = parse_control_id)]
         target_cid: u16
     },
 
@@ -178,7 +190,9 @@ impl Out {
     }
 }
 
-/// Applies a setting through the daemon, falling back to direct device access.
+/// Applies a setting through the daemon, falling back to direct device
+/// access. Returns whether the direct fallback was used: a diverted control
+/// only stays functional while a daemon pumps its notifications.
 ///
 /// # Arguments
 ///
@@ -189,9 +203,9 @@ fn apply_setting(
     request: &Request,
     direct: impl FnOnce(&mut MxMaster3s) -> Result<()>,
     message: std::fmt::Arguments<'_>
-) -> Result<()> {
-    match try_request(request) {
-        Some(Response::Ok) => {}
+) -> Result<bool> {
+    let fallback = match try_request(request) {
+        Some(Response::Ok) => false,
         Some(Response::Error {
             message
         }) => return Err(AppError::internal(message)),
@@ -199,12 +213,14 @@ fn apply_setting(
             warn!("Daemon unavailable, falling back to direct device access");
             let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
             direct(&mut device)?;
+            true
         }
-    }
+    };
 
     let mut out = Out::new();
     out.line(message)?;
-    out.finish()
+    out.finish()?;
+    Ok(fallback)
 }
 
 fn main() -> Result<()> {
@@ -435,7 +451,8 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 },
                 |device| device.set_dpi(value),
                 format_args!("DPI set to {value}")
-            )
+            )?;
+            Ok(())
         }
         SetCommands::Smartshift {
             enabled,
@@ -451,7 +468,7 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
             raw_xy
         } => {
             info!("Configuring button {control_id:#06x}: divert={divert}, raw_xy={raw_xy}");
-            apply_setting(
+            let direct = apply_setting(
                 &Request::SetButtonDivert {
                     control_id,
                     divert,
@@ -459,7 +476,15 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 },
                 |device| device.set_control_divert(control_id, divert, raw_xy),
                 format_args!("Button {control_id:#06x} divert: {divert}")
-            )
+            )?;
+            if divert && direct {
+                warn!(
+                    "the divert was written without a running daemon; the control stays diverted \
+                     and produces no events until a daemon pumps it or `logi-mx set button \
+                     {control_id:#06x} --divert false` clears it"
+                );
+            }
+            Ok(())
         }
         SetCommands::Remap {
             control_id,
@@ -473,7 +498,8 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 },
                 |device| device.set_control_remap(control_id, target_cid),
                 format_args!("Control {control_id:#06x} remapped to {target_cid:#06x}")
-            )
+            )?;
+            Ok(())
         }
         SetCommands::Host {
             index
@@ -485,7 +511,8 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 },
                 |device| device.set_host(index),
                 format_args!("Switched to host {index}")
-            )
+            )?;
+            Ok(())
         }
     }
 }
@@ -508,7 +535,8 @@ fn set_smartshift(enabled: bool, threshold: u8) -> Result<()> {
             "SmartShift configured: {} (threshold: {threshold})",
             if enabled { "enabled" } else { "disabled" }
         )
-    )
+    )?;
+    Ok(())
 }
 
 /// Applies a hi-res scroll configuration through the daemon or the device.
@@ -530,7 +558,8 @@ fn set_hires(enabled: bool, inverted: bool) -> Result<()> {
             if enabled { "enabled" } else { "disabled" },
             if inverted { "yes" } else { "no" }
         )
-    )
+    )?;
+    Ok(())
 }
 
 fn cmd_config(action: ConfigCommands) -> Result<()> {
@@ -586,7 +615,11 @@ fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
         .join(".config")
         .join("systemd")
         .join("user");
-    let units: [(&str, &str); 2] = [
+    let units: [(&str, &str); 3] = [
+        (
+            "logi-mx-daemon.socket",
+            include_str!("../../logi-mx-daemon.socket")
+        ),
         (
             "logi-mx-daemon.service",
             include_str!("../../logi-mx-daemon.service")
@@ -609,6 +642,10 @@ fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
             }
 
             let _ = systemctl(&["daemon-reload"]);
+            let socket = systemctl(&["enable", "--now", "logi-mx-daemon.socket"])?;
+            if !socket.success() {
+                return Err(AppError::internal("Failed to enable daemon socket"));
+            }
             let status = systemctl(&["enable", "--now", "logi-mx-daemon.service"])?;
             if !status.success() {
                 return Err(AppError::internal("Failed to enable daemon service"));
@@ -624,9 +661,22 @@ fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
             }
         }
         AutostartCommands::Uninstall => {
-            for (name, _) in units {
-                let _ = systemctl(&["disable", "--now", name]);
-                let _ = std::fs::remove_file(service_dir.join(name));
+            for (name, _) in units.iter().rev() {
+                if service_dir.join(name).is_file() {
+                    let status = systemctl(&["disable", "--now", name])?;
+                    if !status.success() {
+                        return Err(AppError::internal(format!("Failed to disable {name}")));
+                    }
+                }
+                match std::fs::remove_file(service_dir.join(name)) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(
+                            AppError::internal("Failed to remove unit file").with_source(e)
+                        );
+                    }
+                }
             }
             let _ = systemctl(&["daemon-reload"]);
             println!("Autostart removed.");
@@ -661,7 +711,7 @@ fn cmd_daemon(action: &DaemonCommands) -> Result<()> {
             }
         }
         DaemonCommands::Ping => {
-            if try_request(&Request::Ping).is_some() {
+            if matches!(try_request(&Request::Ping), Some(Response::Pong)) {
                 out.line(format_args!("pong"))?;
             } else {
                 out.line(format_args!("no daemon"))?;
