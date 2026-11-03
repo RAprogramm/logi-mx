@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 logi-mx-driver.workspace = true
-logi-mx-daemon = { path = "../daemon", version = "0.5.0", default-features = false }
+logi-mx-daemon = { path = "../daemon", default-features = false }
 gtk4.workspace = true
 gtk4-layer-shell = "0.8"
 serde_json.workspace = true
