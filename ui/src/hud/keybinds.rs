@@ -17,7 +17,8 @@ use gtk4::{
     Box as GtkBox, EventControllerKey, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow,
     SearchEntry, SelectionMode, Window, glib
 };
-use libadwaita::{ApplicationWindow, Toast, ToastOverlay, prelude::*};
+use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
+use libadwaita::{Toast, ToastOverlay, prelude::*};
 use logi_mx_daemon::{
     hyprbind::KeybindEntry,
     ipc::{self, Response}
@@ -27,7 +28,8 @@ use logi_mx_daemon::{
 /// freezing the list build.
 const MAX_ROWS: usize = 300;
 
-/// Opens the keybind chooser, transient to the HUD window.
+/// Opens the keybind chooser as a layer-shell overlay so it maps above the
+/// HUD, grabbing the keyboard for the search entry.
 ///
 /// The list is populated on open through a single daemon round-trip; a
 /// daemon or Hyprland failure is reported on the status line and as a toast.
@@ -36,18 +38,19 @@ const MAX_ROWS: usize = 300;
 ///
 /// # Arguments
 ///
-/// * `parent` - HUD window the chooser is modal against.
 /// * `toast` - Overlay receiving the error notices.
 /// * `on_pick` - Callback receiving the chosen chord.
-pub(super) fn open_keybind_picker<F>(parent: &ApplicationWindow, toast: &ToastOverlay, on_pick: F)
+pub(super) fn open_keybind_picker<F>(toast: &ToastOverlay, on_pick: F)
 where
     F: Fn(Vec<String>) + 'static
 {
     let window = Window::new();
-    window.set_transient_for(Some(parent));
-    window.set_modal(true);
     window.set_title(Some("Hyprland keybinds"));
     window.set_default_size(520, 480);
+    window.set_decorated(false);
+    window.init_layer_shell();
+    window.set_layer(Layer::Overlay);
+    window.set_keyboard_mode(KeyboardMode::Exclusive);
 
     let root = GtkBox::new(Orientation::Vertical, 8);
     root.set_margin_top(12);

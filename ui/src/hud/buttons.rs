@@ -637,7 +637,6 @@ fn remap_tile(
     button: ButtonId,
     label: &str,
     toast: &ToastOverlay,
-    window: &ApplicationWindow,
     capture: &RemapCapture,
     tiles: &RemapTiles,
     store: &StoreCell,
@@ -699,14 +698,13 @@ fn remap_tile(
     let store_hypr = Rc::clone(store);
     let loading_hypr = Rc::clone(loading);
     let toast_hypr = toast.clone();
-    let window_hypr = window.clone();
     hypr_btn.connect_clicked(move |_| {
         let tiles_cb = Rc::clone(&tiles_hypr);
         let store_cb = Rc::clone(&store_hypr);
         let loading_cb = Rc::clone(&loading_hypr);
         let toast_pick = toast_hypr.clone();
         let toast_cb = toast_hypr.clone();
-        open_keybind_picker(&window_hypr, &toast_pick, move |keys| {
+        open_keybind_picker(&toast_pick, move |keys| {
             commit_remap_keys(button, &tiles_cb, &store_cb, &loading_cb, &toast_cb, &keys);
         });
     });
@@ -1018,9 +1016,7 @@ fn thumb_remap_section(toast: &ToastOverlay, window: &ApplicationWindow) -> GtkB
     flow.set_max_children_per_line(1);
     flow.set_row_spacing(12);
     for (button, label) in REMAP_BUTTONS {
-        let tile = remap_tile(
-            button, label, toast, window, &capture, &tiles, &store, &loading
-        );
+        let tile = remap_tile(button, label, toast, &capture, &tiles, &store, &loading);
         tiles.borrow_mut().insert(button, tile.clone());
         flow.append(&tile.child);
     }

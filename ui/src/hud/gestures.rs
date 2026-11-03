@@ -349,7 +349,6 @@ fn gesture_tile(
     direction: GestureDirection,
     label: &str,
     toast: &ToastOverlay,
-    window: &ApplicationWindow,
     capture: &GestureCapture,
     tiles: &GestureTiles,
     store: &StoreCell,
@@ -441,7 +440,7 @@ fn gesture_tile(
         }
     });
 
-    wire_gesture_hypr(&hypr_btn, direction, toast, window, tiles, store);
+    wire_gesture_hypr(&hypr_btn, direction, toast, tiles, store);
 
     let gesture = GestureTile {
         child,
@@ -464,20 +463,18 @@ fn wire_gesture_hypr(
     button: &Button,
     direction: GestureDirection,
     toast: &ToastOverlay,
-    window: &ApplicationWindow,
     tiles: &GestureTiles,
     store: &StoreCell
 ) {
     let tiles_hypr = Rc::clone(tiles);
     let store_hypr = Rc::clone(store);
     let toast_hypr = toast.clone();
-    let window_hypr = window.clone();
     button.connect_clicked(move |_| {
         let tiles_cb = Rc::clone(&tiles_hypr);
         let store_cb = Rc::clone(&store_hypr);
         let toast_pick = toast_hypr.clone();
         let toast_cb = toast_hypr.clone();
-        open_keybind_picker(&window_hypr, &toast_pick, move |keys| {
+        open_keybind_picker(&toast_pick, move |keys| {
             commit_gesture_keys(direction, &tiles_cb, &store_cb, &toast_cb, keys);
         });
     });
@@ -893,9 +890,7 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
     flow.set_max_children_per_line(1);
     flow.set_row_spacing(12);
     for (direction, label) in GESTURE_TILES {
-        let tile = gesture_tile(
-            direction, label, toast, window, &capture, &tiles, &store, &loading
-        );
+        let tile = gesture_tile(direction, label, toast, &capture, &tiles, &store, &loading);
         tiles.borrow_mut().insert(direction, tile.clone());
         flow.append(&tile.child);
     }
