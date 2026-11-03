@@ -99,7 +99,9 @@ const SOCKET_NAME: &str = "logi-mx.sock";
 
 /// Returns the Unix socket path used for daemon IPC.
 ///
-/// Mirrors [`crate::lock_file_path`] directory resolution.
+/// Resolves the directory the same way the daemon's instance lock does:
+/// `XDG_RUNTIME_DIR`, falling back to `TMPDIR` and then the system temp
+/// directory.
 #[must_use]
 pub fn socket_path() -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")

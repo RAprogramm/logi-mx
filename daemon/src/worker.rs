@@ -437,6 +437,41 @@ fn handle_device_read(
 }
 
 /// Executes a device-bound RPC request against the pooled device.
+/// Copies one successful device setting from its request into the stored
+/// configuration, returning whether the configuration changed.
+///
+/// Pure so the mapping can be tested without touching the config file.
+fn apply_setting(config: &mut Config, request: &ipc::Request) -> bool {
+    let Some(device) = config.devices.first_mut() else {
+        return false;
+    };
+    match request {
+        ipc::Request::SetDpi {
+            value
+        } => device.dpi = *value,
+        ipc::Request::SetSmartShift {
+            enabled,
+            threshold
+        } => {
+            device.smartshift = SmartShiftConfig {
+                enabled:   *enabled,
+                threshold: *threshold
+            }
+        }
+        ipc::Request::SetHires {
+            enabled,
+            inverted
+        } => {
+            device.hiresscroll = HiResScrollConfig {
+                enabled:  *enabled,
+                inverted: *inverted
+            }
+        }
+        _ => return false
+    }
+    true
+}
+
 fn handle_device_request(manager: &mut DevicePool, request: &ipc::Request) -> ipc::Response {
     match manager.with_device(
         |device| -> std::result::Result<ipc::Response, masterror::AppError> {
@@ -504,7 +539,12 @@ fn handle_device_request(manager: &mut DevicePool, request: &ipc::Request) -> ip
             })
         }
     ) {
-        Ok(response) => response,
+        Ok(response) => {
+            if matches!(response, ipc::Response::Ok) {
+                manager.persist_setting(request);
+            }
+            response
+        }
         Err(e) => ipc::Response::Error {
             message: e.to_string()
         }
@@ -732,6 +772,17 @@ impl DevicePool {
         save_config(&self.config)
     }
 
+    /// Mirrors a successful device setting into the stored configuration and
+    /// persists it, so DPI, `SmartShift` and hi-res choices survive a daemon
+    /// restart instead of being rolled back by the next `apply_config`.
+    fn persist_setting(&mut self, request: &ipc::Request) {
+        if apply_setting(&mut self.config, request)
+            && let Err(e) = save_config(&self.config)
+        {
+            warn!("Failed to persist configuration: {e}");
+        }
+    }
+
     /// Drops the stored device handle for a removed hidraw path.
     ///
     /// The cached handles are keyed by hidraw path, but RPC discovery stores
@@ -844,6 +895,62 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_apply_setting_mirrors_device_writes_into_config() {
+        let mut config = Config::default();
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetHires {
+                enabled:  true,
+                inverted: true
+            }
+        ));
+        assert!(config.devices[0].hiresscroll.enabled);
+        assert!(config.devices[0].hiresscroll.inverted);
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetDpi {
+                value: 1600
+            }
+        ));
+        assert_eq!(config.devices[0].dpi, 1600);
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetSmartShift {
+                enabled:   false,
+                threshold: 13
+            }
+        ));
+        assert!(!config.devices[0].smartshift.enabled);
+        assert_eq!(config.devices[0].smartshift.threshold, 13);
+    }
+
+    #[test]
+    fn test_apply_setting_ignores_non_config_requests() {
+        let mut config = Config::default();
+        let before_dpi = config.devices[0].dpi;
+        assert!(
+            !apply_setting(&mut config, &ipc::Request::Ping),
+            "reads must not touch the configuration"
+        );
+        assert_eq!(config.devices[0].dpi, before_dpi);
+
+        let mut empty = Config {
+            devices: Vec::new()
+        };
+        assert!(
+            !apply_setting(
+                &mut empty,
+                &ipc::Request::SetDpi {
+                    value: 800
+                }
+            ),
+            "without a device entry there is nothing to mirror into"
         );
     }
 }
