@@ -255,38 +255,30 @@ impl GestureRuntime {
         }
     }
 
-    /// Drains pending reprogrammable-controls notifications and fires the
-    /// actions they complete.
-    pub fn pump(&mut self, device: &mut MxMaster3s) {
-        if !self.diverted && !self.dpi.diverted {
-            return;
-        }
-        while let Some(note) = device.read_reprog_notification(0) {
-            self.on_notification(note, device);
-        }
+    /// Whether the runtime needs the reprogrammable-controls notification
+    /// stream; callers skip the device read while this is false.
+    #[must_use]
+    pub const fn wants_pump(&self) -> bool {
+        self.diverted || self.dpi.diverted
     }
 
-    fn on_notification(&mut self, note: ReprogNotification, device: &mut MxMaster3s) {
-        match note {
-            ReprogNotification::DivertedButtons {
-                pressed
-            } => {
-                self.on_gesture_edge(pressed.contains(&control_id::GESTURE_BUTTON));
-                self.on_wheel_mode_edge(pressed.contains(&control_id::SMARTSHIFT_TOGGLE), device);
-            }
-            ReprogNotification::RawXy {
-                dx,
-                dy
-            } => {
-                if let Some(dir) =
-                    self.accumulator
-                        .accumulate(i32::from(dx), i32::from(dy), Instant::now())
-                {
-                    debug!("swipe committed: {dir:?}");
-                    self.last_commit = Some(dir);
-                    self.fire(dir, Some(GestureMode::OnPress));
-                }
-            }
+    /// Handles one diverted-buttons report: the gesture hold opens and
+    /// settles on its edge, the wheel-mode button toggles on its press.
+    pub fn on_diverted_buttons(&mut self, pressed: &[u16], device: &mut MxMaster3s) {
+        self.on_gesture_edge(pressed.contains(&control_id::GESTURE_BUTTON));
+        self.on_wheel_mode_edge(pressed.contains(&control_id::SMARTSHIFT_TOGGLE), device);
+    }
+
+    /// Folds one raw-XY report into the swipe accumulator and fires the
+    /// direction it commits, if any.
+    pub fn on_raw_xy(&mut self, dx: i16, dy: i16) {
+        if let Some(dir) =
+            self.accumulator
+                .accumulate(i32::from(dx), i32::from(dy), Instant::now())
+        {
+            debug!("swipe committed: {dir:?}");
+            self.last_commit = Some(dir);
+            self.fire(dir, Some(GestureMode::OnPress));
         }
     }
 
@@ -392,7 +384,7 @@ impl GestureRuntime {
                     command
                 } => {
                     info!("gesture fired {direction:?} -> command {command:?}");
-                    spawn_detached(command);
+                    spawn_detached("gesture-command", command);
                 }
                 _ => {
                     if !self.unsupported_warned {
@@ -405,16 +397,29 @@ impl GestureRuntime {
     }
 }
 
-/// Runs a bound shell command detached from the daemon.
+/// Runs a bound shell command detached from the daemon on a named thread.
 ///
 /// A waiter thread reaps the child so the daemon never accumulates zombies,
-/// and a long-running command can never block the gesture pump. The command
+/// and a long-running command can never block the event pump. The command
 /// comes from the user-owned config file, the same trust level as any
 /// autostart entry.
-fn spawn_detached(command: &str) {
+///
+/// # Arguments
+///
+/// * `name` - Thread name used to label the completion log line.
+/// * `command` - Shell command handed to `/bin/sh -c`.
+///
+/// # Examples
+///
+/// ```
+/// logi_mx_daemon::gesture::spawn_detached("demo", "true");
+/// ```
+pub fn spawn_detached(name: &str, command: &str) {
     let command = command.to_string();
+    let thread_name = name.to_string();
+    let log_name = name.to_string();
     let spawn = std::thread::Builder::new()
-        .name("gesture-command".to_string())
+        .name(thread_name)
         .spawn(move || {
             let child = std::process::Command::new("/bin/sh")
                 .arg("-c")
@@ -425,14 +430,14 @@ fn spawn_detached(command: &str) {
                 .spawn();
             match child {
                 Ok(mut child) => match child.wait() {
-                    Ok(status) => debug!("gesture command finished: {status}"),
-                    Err(e) => warn!("failed to wait for gesture command: {e}")
+                    Ok(status) => debug!("{log_name} command finished: {status}"),
+                    Err(e) => warn!("failed to wait for {log_name} command: {e}")
                 },
-                Err(e) => warn!("failed to spawn gesture command: {e}")
+                Err(e) => warn!("failed to spawn {log_name} command: {e}")
             }
         });
     if spawn.is_err() {
-        warn!("failed to start the gesture command thread");
+        warn!("failed to start the {name} command thread");
     }
 }
 

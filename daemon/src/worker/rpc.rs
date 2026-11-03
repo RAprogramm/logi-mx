@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-//! RPC handlers executed on the device worker thread: gesture configuration
-//! requests, read-only device queries and device-bound writes.
+//! RPC handlers executed on the device worker thread: gesture and button
+//! configuration requests, read-only device queries and device-bound writes.
 
 use logi_mx_driver::prelude::*;
 
 use super::pool::DevicePool;
-use crate::{gesture::GestureRuntime, ipc};
+use crate::{buttons::ButtonRuntime, gesture::GestureRuntime, ipc};
 
 /// Pushes the stored gesture configuration into the runtime and applies the
 /// divert state to every connected device.
@@ -17,8 +17,16 @@ fn apply_gestures(manager: &DevicePool, gestures: &mut GestureRuntime) {
     manager.for_each_cached_mut(|device| gestures.apply(device));
 }
 
-/// Validates a gesture action, returning the rejection reason if invalid.
-fn gesture_action_rejection(action: &Action) -> Option<String> {
+/// Pushes the stored thumb button remaps into the runtime and reconciles the
+/// divert state of every connected device.
+fn apply_buttons(manager: &DevicePool, buttons: &mut ButtonRuntime) {
+    let (global, profiles) = manager.button_config();
+    buttons.set_config(global, profiles);
+    manager.for_each_cached_mut(|device| buttons.apply(device));
+}
+
+/// Validates a remap action, returning the rejection reason if invalid.
+fn action_rejection(action: &Action) -> Option<String> {
     match action {
         Action::Keypress {
             keys
@@ -27,9 +35,16 @@ fn gesture_action_rejection(action: &Action) -> Option<String> {
             .err(),
         Action::Command {
             command
-        } => (command.trim().is_empty()).then(|| "gesture command must not be empty".to_string()),
-        _ => Some("gesture action must be a key sequence or a command".to_string())
+        } => (command.trim().is_empty()).then(|| "command must not be empty".to_string()),
+        _ => Some("action must be a key sequence or a command".to_string())
     }
+}
+
+/// Rejects everything but the two thumb side buttons: the firmware buttons
+/// and the gesture control belong to other runtimes.
+fn thumb_button_rejection(button: ButtonId) -> Option<String> {
+    (!matches!(button, ButtonId::Back | ButtonId::Forward))
+        .then(|| "only the Back and Forward buttons can be remapped".to_string())
 }
 
 /// Replaces or inserts one binding in a per-app profile list.
@@ -79,7 +94,7 @@ pub(super) fn handle_gesture_request(
             mode,
             action
         } => {
-            if let Some(message) = gesture_action_rejection(action) {
+            if let Some(message) = action_rejection(action) {
                 return Some(ipc::Response::Error {
                     message
                 });
@@ -101,7 +116,7 @@ pub(super) fn handle_gesture_request(
             mode,
             action
         } => {
-            if let Some(message) = gesture_action_rejection(action) {
+            if let Some(message) = action_rejection(action) {
                 return Some(ipc::Response::Error {
                     message
                 });
@@ -137,6 +152,62 @@ pub(super) fn handle_gesture_request(
     Some(match stored {
         Ok(()) => {
             apply_gestures(manager, gestures);
+            ipc::Response::Ok
+        }
+        Err(e) => ipc::Response::Error {
+            message: e.to_string()
+        }
+    })
+}
+
+/// Handles the configuration-only thumb button remap requests that never
+/// touch the device directly; returns `None` for every other request.
+pub(super) fn handle_button_request(
+    manager: &mut DevicePool,
+    buttons: &mut ButtonRuntime,
+    request: &ipc::Request
+) -> Option<ipc::Response> {
+    let stored: std::result::Result<(), masterror::AppError> = match request {
+        ipc::Request::GetButtons => {
+            let (global, profiles) = manager.button_config();
+            return Some(ipc::Response::ButtonsConfig {
+                buttons: global,
+                profiles
+            });
+        }
+        ipc::Request::SetButton {
+            button,
+            action
+        }
+        | ipc::Request::SetAppButton {
+            button,
+            action,
+            ..
+        } => {
+            if let Some(message) =
+                thumb_button_rejection(*button).or_else(|| action_rejection(action))
+            {
+                return Some(ipc::Response::Error {
+                    message
+                });
+            }
+            manager.set_button_request(request)
+        }
+        ipc::Request::ClearButton {
+            ..
+        }
+        | ipc::Request::ClearAppButton {
+            ..
+        }
+        | ipc::Request::RemoveAppButtonProfile {
+            ..
+        } => manager.set_button_request(request),
+        _ => return None
+    };
+
+    Some(match stored {
+        Ok(()) => {
+            apply_buttons(manager, buttons);
             ipc::Response::Ok
         }
         Err(e) => ipc::Response::Error {
@@ -218,6 +289,44 @@ pub(super) fn apply_setting(config: &mut Config, request: &ipc::Request) -> bool
                 enabled:  *enabled,
                 inverted: *inverted
             }
+        }
+        ipc::Request::SetButton {
+            button,
+            action
+        } => {
+            device.buttons.insert(*button, *action.clone());
+        }
+        ipc::Request::ClearButton {
+            button
+        } => {
+            device.buttons.remove(button);
+        }
+        ipc::Request::SetAppButton {
+            app_id,
+            button,
+            action
+        } => {
+            device
+                .button_profiles
+                .entry(app_id.clone())
+                .or_default()
+                .insert(*button, *action.clone());
+        }
+        ipc::Request::ClearAppButton {
+            app_id,
+            button
+        } => {
+            if let Some(profile) = device.button_profiles.get_mut(app_id) {
+                profile.remove(button);
+                if profile.is_empty() {
+                    device.button_profiles.remove(app_id);
+                }
+            }
+        }
+        ipc::Request::RemoveAppButtonProfile {
+            app_id
+        } => {
+            device.button_profiles.remove(app_id);
         }
         _ => return false
     }
@@ -388,5 +497,152 @@ mod tests {
             ),
             "without a device entry there is nothing to mirror into"
         );
+    }
+
+    fn chord(keys: &[&str]) -> Action {
+        Action::Keypress {
+            keys: keys.iter().map(|key| (*key).to_string()).collect()
+        }
+    }
+
+    #[test]
+    fn action_rejection_accepts_valid_and_rejects_broken() {
+        assert!(
+            action_rejection(&Action::Keypress {
+                keys: vec!["KEY_LEFTCTRL".to_string(), "KEY_C".to_string()]
+            })
+            .is_none()
+        );
+        assert!(
+            action_rejection(&Action::Command {
+                command: "x".to_string()
+            })
+            .is_none()
+        );
+        assert!(action_rejection(&Action::None).is_some());
+        assert!(
+            action_rejection(&Action::Keypress {
+                keys: Vec::new()
+            })
+            .is_some()
+        );
+        assert!(
+            action_rejection(&Action::Keypress {
+                keys: vec!["NOT_A_KEY".to_string()]
+            })
+            .is_some()
+        );
+        assert!(
+            action_rejection(&Action::Command {
+                command: "   ".to_string()
+            })
+            .is_some()
+        );
+        assert!(action_rejection(&Action::ToggleSmartShift).is_some());
+    }
+
+    #[test]
+    fn thumb_button_rejection_accepts_only_thumb_buttons() {
+        assert!(thumb_button_rejection(ButtonId::Back).is_none());
+        assert!(thumb_button_rejection(ButtonId::Forward).is_none());
+        assert!(thumb_button_rejection(ButtonId::LeftClick).is_some());
+        assert!(thumb_button_rejection(ButtonId::ThumbGesture).is_some());
+    }
+
+    #[test]
+    fn apply_setting_writes_button_fields() {
+        let mut config = Config::default();
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetButton {
+                button: ButtonId::Back,
+                action: Box::new(chord(&["KEY_LEFTALT"]))
+            }
+        ));
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetAppButton {
+                app_id: "firefox".to_string(),
+                button: ButtonId::Forward,
+                action: Box::new(chord(&["KEY_LEFTALT"]))
+            }
+        ));
+
+        let device = &config.devices[0];
+        assert!(device.buttons.contains_key(&ButtonId::Back));
+        assert_eq!(
+            device
+                .button_profiles
+                .get("firefox")
+                .and_then(|profile| profile.get(&ButtonId::Forward)),
+            Some(&Action::Keypress {
+                keys: vec!["KEY_LEFTALT".to_string()]
+            })
+        );
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::ClearButton {
+                button: ButtonId::Back
+            }
+        ));
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::ClearAppButton {
+                app_id: "firefox".to_string(),
+                button: ButtonId::Forward
+            }
+        ));
+
+        let device = &config.devices[0];
+        assert!(!device.buttons.contains_key(&ButtonId::Back));
+        assert!(
+            !device.button_profiles.contains_key("firefox"),
+            "an emptied profile must not linger in the configuration"
+        );
+    }
+
+    #[test]
+    fn apply_setting_removes_whole_button_profile() {
+        let mut config = Config::default();
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetAppButton {
+                app_id: "org.gnome.Nautilus".to_string(),
+                button: ButtonId::Back,
+                action: Box::new(Action::Command {
+                    command: "thunar".to_string()
+                })
+            }
+        ));
+        assert!(
+            config.devices[0]
+                .button_profiles
+                .contains_key("org.gnome.Nautilus")
+        );
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::RemoveAppButtonProfile {
+                app_id: "org.gnome.Nautilus".to_string()
+            }
+        ));
+        assert!(
+            !config.devices[0]
+                .button_profiles
+                .contains_key("org.gnome.Nautilus")
+        );
+    }
+
+    #[test]
+    fn apply_setting_ignores_button_reads() {
+        let mut config = Config::default();
+        assert!(
+            !apply_setting(&mut config, &ipc::Request::GetButtons),
+            "reads must not touch the configuration"
+        );
+        assert!(!config.devices[0].buttons.contains_key(&ButtonId::Back));
+        assert!(config.devices[0].button_profiles.is_empty());
     }
 }

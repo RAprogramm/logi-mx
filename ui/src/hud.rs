@@ -761,7 +761,7 @@ fn create_panel(
     let stack = ViewStack::new();
     let pages = [
         (
-            buttons_page(state, drawing, &toast),
+            buttons_page(state, drawing, window, &toast),
             "buttons",
             "Buttons",
             "input-mouse-symbolic"

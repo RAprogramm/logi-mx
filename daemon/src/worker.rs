@@ -28,9 +28,10 @@ use tracing::debug;
 
 use self::{
     pool::DevicePool,
-    rpc::{handle_device_request, handle_gesture_request}
+    rpc::{handle_button_request, handle_device_request, handle_gesture_request}
 };
 use crate::{
+    buttons::ButtonRuntime,
     gesture::GestureRuntime,
     ipc::{self, RpcRequest, RpcSender},
     status::SharedStatus
@@ -124,10 +125,13 @@ fn run_device_worker(
     hub: ipc::LiveHub
 ) {
     let mut gestures = GestureRuntime::from_config(&config);
-    gestures.attach_live(live, hub);
+    gestures.attach_live(live.clone(), hub.clone());
+    let mut buttons = ButtonRuntime::from_config(&config);
+    buttons.attach_live(live, hub);
     let focus = crate::focus::new_shared();
     crate::focus::spawn_watcher(crate::focus::SharedFocus::clone(&focus));
-    gestures.attach_focus(focus);
+    gestures.attach_focus(focus.clone());
+    buttons.attach_focus(focus);
     let mut manager = DevicePool::new(config);
     #[cfg(feature = "notify")]
     let mut policy = crate::notify::NoticePolicy::new();
@@ -136,13 +140,16 @@ fn run_device_worker(
     if gestures.should_divert() {
         manager.for_each_cached_mut(|device| gestures.apply(device));
     }
+    if buttons.should_divert() {
+        manager.for_each_cached_mut(|device| buttons.apply(device));
+    }
     let mut last_refresh = std::time::Instant::now();
 
     loop {
         crate::systemd::mark_worker_beat();
 
         while let Ok(req) = rpc_rx.try_recv() {
-            handle_rpc(req, &mut manager, &mut gestures);
+            handle_rpc(req, &mut manager, &mut gestures, &mut buttons);
         }
 
         let poll = if gestures.is_holding() {
@@ -153,11 +160,17 @@ fn run_device_worker(
         let should_refresh = match rx.recv_timeout(poll) {
             Ok(DeviceEvent::Added(path)) => {
                 manager.handle_device_added(path);
-                manager.for_each_cached_mut(|device| gestures.apply(device));
+                manager.for_each_cached_mut(|device| {
+                    gestures.apply(device);
+                    buttons.apply(device);
+                });
                 true
             }
             Ok(DeviceEvent::Removed(path)) => {
-                manager.for_each_cached_mut(|device| gestures.detach(device));
+                manager.for_each_cached_mut(|device| {
+                    gestures.detach(device);
+                    buttons.detach(device);
+                });
                 manager.handle_device_removed(&path);
                 true
             }
@@ -165,19 +178,54 @@ fn run_device_worker(
             Err(mpsc::RecvTimeoutError::Disconnected) => break
         };
 
-        manager.for_each_cached_mut(|device| gestures.pump(device));
+        pump_notifications(&mut gestures, &mut buttons, &manager);
 
         if should_refresh {
             refresh_and_notify(&mut manager, status, tray, &mut policy);
             if gestures.should_divert() {
                 manager.for_each_cached_mut(|device| gestures.apply(device));
             }
+            if buttons.should_divert() {
+                manager.for_each_cached_mut(|device| buttons.apply(device));
+            }
             last_refresh = std::time::Instant::now();
         }
     }
 
-    manager.for_each_cached_mut(|device| gestures.detach(device));
+    manager.for_each_cached_mut(|device| {
+        gestures.detach(device);
+        buttons.detach(device);
+    });
     debug!("Device worker stopped");
+}
+
+/// Drains pending reprogrammable-controls notifications once and dispatches
+/// them to both runtimes; the device is read a single time per tick, so the
+/// two runtimes never compete for the same report.
+fn pump_notifications(
+    gestures: &mut GestureRuntime,
+    buttons: &mut ButtonRuntime,
+    manager: &DevicePool
+) {
+    if !gestures.wants_pump() && !buttons.wants_pump() {
+        return;
+    }
+    manager.for_each_cached_mut(|device| {
+        while let Some(note) = device.read_reprog_notification(0) {
+            match note {
+                ReprogNotification::DivertedButtons {
+                    pressed
+                } => {
+                    gestures.on_diverted_buttons(&pressed, device);
+                    buttons.on_diverted_buttons(&pressed);
+                }
+                ReprogNotification::RawXy {
+                    dx,
+                    dy
+                } => gestures.on_raw_xy(dx, dy)
+            }
+        }
+    });
 }
 
 /// Refreshes the shared status, publishes user notices and updates the tray.
@@ -243,8 +291,13 @@ fn refresh_and_notify(
     }
 }
 
-fn handle_rpc(request: RpcRequest, manager: &mut DevicePool, gestures: &mut GestureRuntime) {
-    let response = handle_request(manager, gestures, &request.request);
+fn handle_rpc(
+    request: RpcRequest,
+    manager: &mut DevicePool,
+    gestures: &mut GestureRuntime,
+    buttons: &mut ButtonRuntime
+) {
+    let response = handle_request(manager, gestures, buttons, &request.request);
     let _ = request.responder.send(response);
 }
 
@@ -255,9 +308,13 @@ fn handle_rpc(request: RpcRequest, manager: &mut DevicePool, gestures: &mut Gest
 fn handle_request(
     manager: &mut DevicePool,
     gestures: &mut GestureRuntime,
+    buttons: &mut ButtonRuntime,
     request: &ipc::Request
 ) -> ipc::Response {
     if let Some(response) = handle_gesture_request(manager, gestures, request) {
+        return response;
+    }
+    if let Some(response) = handle_button_request(manager, buttons, request) {
         return response;
     }
     handle_device_request(manager, request)

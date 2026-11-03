@@ -3,6 +3,7 @@
 
 //! Daemon library exports used by CLI and UI IPC clients.
 
+pub mod buttons;
 pub mod focus;
 pub mod gesture;
 pub mod inject;

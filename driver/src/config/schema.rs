@@ -71,7 +71,14 @@ pub struct DeviceConfig {
     /// direction while the app is focused; unbound directions fall through
     /// to the global set.
     #[serde(default)]
-    pub gesture_profiles: HashMap<String, Vec<Gesture>>
+    pub gesture_profiles: HashMap<String, Vec<Gesture>>,
+
+    /// Per-application remaps of the thumb side buttons keyed by the Hyprland
+    /// window class. A button bound in a profile replaces the global mapping
+    /// for that button while the app is focused; unbound buttons fall through
+    /// to the global [`Self::buttons`] map.
+    #[serde(default)]
+    pub button_profiles: HashMap<String, HashMap<ButtonId, Action>>
 }
 
 const fn default_dpi() -> u16 {
@@ -148,7 +155,8 @@ impl Default for DeviceConfig {
             },
             buttons,
             gestures_enabled: false,
-            gesture_profiles: HashMap::new()
+            gesture_profiles: HashMap::new(),
+            button_profiles: HashMap::new()
         }
     }
 }

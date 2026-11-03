@@ -174,9 +174,10 @@ pub fn save_config(config: &Config) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use std::{collections::HashMap, env};
 
     use super::*;
+    use crate::devices::{Action, ButtonId};
 
     #[test]
     fn test_default_config() {
@@ -190,6 +191,60 @@ mod tests {
         let toml_str = toml::to_string(&config).unwrap();
         let deserialized: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(config.devices.len(), deserialized.devices.len());
+    }
+
+    #[test]
+    fn test_button_profiles_round_trip() {
+        let mut config = Config::default();
+        let mut profile = HashMap::new();
+        profile.insert(
+            ButtonId::Back,
+            Action::Keypress {
+                keys: vec!["KEY_LEFTALT".to_string(), "KEY_LEFT".to_string()]
+            }
+        );
+        profile.insert(
+            ButtonId::Forward,
+            Action::Command {
+                command: "xdg-forward".to_string()
+            }
+        );
+        config.devices[0]
+            .button_profiles
+            .insert("firefox".to_string(), profile);
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let loaded =
+            load_config_from_path(write_temp("button_profiles.toml", &toml_str).as_path())
+                .unwrap();
+
+        let restored = loaded.devices[0].button_profiles.get("firefox").unwrap();
+        assert_eq!(
+            restored.get(&ButtonId::Back),
+            Some(&Action::Keypress {
+                keys: vec!["KEY_LEFTALT".to_string(), "KEY_LEFT".to_string()]
+            })
+        );
+        assert_eq!(
+            restored.get(&ButtonId::Forward),
+            Some(&Action::Command {
+                command: "xdg-forward".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn test_button_profiles_default_absent() {
+        let config: Config = toml::from_str("[[devices]]\nname = \"MX Master 3S\"\n").unwrap();
+        assert!(config.devices[0].button_profiles.is_empty());
+    }
+
+    fn write_temp(name: &str, content: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("logi-mx-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
     }
 
     #[test]

@@ -11,7 +11,7 @@
 use std::{path::PathBuf, sync::mpsc, time::Duration};
 
 use logi_mx_driver::prelude::{
-    Action, Gesture, GestureDirection, GestureMode, HiResScrollConfig, ReprogControl,
+    Action, ButtonId, Gesture, GestureDirection, GestureMode, HiResScrollConfig, ReprogControl,
     SmartShiftConfig
 };
 use serde::{Deserialize, Serialize};
@@ -213,6 +213,42 @@ pub enum Request {
         /// Hyprland window class.
         app_id: String
     },
+    /// Read the software button remaps: global map and per-app profiles.
+    GetButtons,
+    /// Bind an action to a thumb side button globally; persists to config.
+    SetButton {
+        /// `ButtonId::Back` or `ButtonId::Forward`.
+        button: ButtonId,
+        /// Action to run: a validated `KEY_*` sequence or a shell command.
+        action: Box<Action>
+    },
+    /// Restore a thumb side button to its native behaviour globally; persists.
+    ClearButton {
+        /// `ButtonId::Back` or `ButtonId::Forward`.
+        button: ButtonId
+    },
+    /// Bind an action to a thumb side button inside a per-application
+    /// profile; persists to config.
+    SetAppButton {
+        /// Hyprland window class the profile applies to.
+        app_id: String,
+        /// `ButtonId::Back` or `ButtonId::Forward`.
+        button: ButtonId,
+        /// Action to run: a validated `KEY_*` sequence or a shell command.
+        action: Box<Action>
+    },
+    /// Remove one thumb button from a per-application profile; persists.
+    ClearAppButton {
+        /// Hyprland window class.
+        app_id: String,
+        /// `ButtonId::Back` or `ButtonId::Forward`.
+        button: ButtonId
+    },
+    /// Delete a per-application button profile entirely; persists.
+    RemoveAppButtonProfile {
+        /// Hyprland window class.
+        app_id: String
+    },
     /// Report the currently focused Hyprland window class, if any.
     GetFocusedApp,
     /// Subscribe to live input telemetry; the connection becomes a stream of
@@ -278,6 +314,13 @@ pub enum Response {
         gestures: Vec<Gesture>,
         /// Per-application overrides keyed by window class.
         profiles: std::collections::HashMap<String, Vec<Gesture>>
+    },
+    /// `GetButtons` reply.
+    ButtonsConfig {
+        /// Global thumb button remaps, Back and Forward only.
+        buttons:  std::collections::HashMap<ButtonId, Action>,
+        /// Per-application overrides keyed by window class.
+        profiles: std::collections::HashMap<String, std::collections::HashMap<ButtonId, Action>>
     },
     /// The focused window class reported by the desktop, if any.
     FocusedApp {

@@ -216,6 +216,54 @@ impl DevicePool {
         save_config(&self.config)
     }
 
+    /// Reads the global Back and Forward mappings and the per-app button
+    /// profiles from the stored configuration.
+    pub(super) fn button_config(
+        &self
+    ) -> (
+        HashMap<ButtonId, Action>,
+        HashMap<String, HashMap<ButtonId, Action>>
+    ) {
+        let Some(device) = self.config.devices.first() else {
+            return (HashMap::new(), HashMap::new());
+        };
+        let buttons = [ButtonId::Back, ButtonId::Forward]
+            .into_iter()
+            .filter_map(|button| {
+                device
+                    .buttons
+                    .get(&button)
+                    .map(|action| (button, action.clone()))
+            })
+            .collect();
+        (buttons, device.button_profiles.clone())
+    }
+
+    /// Mirrors a button remap request into the stored configuration and
+    /// persists it, so software remaps survive a daemon restart.
+    ///
+    /// The mutation itself lives in [`super::rpc::apply_setting`], the same
+    /// pure mapping used for device settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no device entry exists, the request changes no
+    /// button configuration, or the file cannot be written.
+    pub(super) fn set_button_request(
+        &mut self,
+        request: &ipc::Request
+    ) -> std::result::Result<(), masterror::AppError> {
+        if self.config.devices.is_empty() {
+            return Err(masterror::AppError::bad_request("No configured device"));
+        }
+        if !super::rpc::apply_setting(&mut self.config, request) {
+            return Err(masterror::AppError::bad_request(
+                "Request changes no button configuration"
+            ));
+        }
+        save_config(&self.config)
+    }
+
     /// Mirrors a successful device setting into the stored configuration and
     /// persists it, so DPI, `SmartShift` and hi-res choices survive a daemon
     /// restart instead of being rolled back by the next `apply_config`.

@@ -31,7 +31,12 @@ enum Commands {
 
     Hosts,
 
-    Buttons,
+    Buttons {
+        /// Also print the software remap of the thumb buttons, global and
+        /// per application.
+        #[arg(long)]
+        config: bool
+    },
 
     Set {
         #[command(subcommand)]
@@ -210,7 +215,12 @@ fn main() -> Result<()> {
         Commands::Info => cmd_info(),
         Commands::Battery => cmd_battery(),
         Commands::Hosts => cmd_hosts(),
-        Commands::Buttons => cmd_buttons(),
+        Commands::Buttons {
+            config
+        } => {
+            cmd_buttons()?;
+            if config { show_button_config() } else { Ok(()) }
+        }
         Commands::Set {
             setting
         } => cmd_set(setting),
@@ -703,6 +713,54 @@ fn show_gestures() -> Result<()> {
         out.line(format_args!("[{app}]"))?;
         for gesture in &profiles[app] {
             out.line(format_args!("  {}", gesture_line(gesture)))?;
+        }
+    }
+    out.finish()
+}
+
+/// Renders one thumb button remap action as one line.
+fn button_action_line(action: &Action) -> String {
+    match action {
+        Action::Keypress {
+            keys
+        } => keys.join("+"),
+        Action::Command {
+            command
+        } => format!("$ {command}"),
+        other => format!("{other:?}")
+    }
+}
+
+/// Prints the stored thumb button software remap: the global map and every
+/// per-application profile; unbound buttons print as `native`.
+fn show_button_config() -> Result<()> {
+    let Some(Response::ButtonsConfig {
+        buttons,
+        profiles
+    }) = try_request(&Request::GetButtons)
+    else {
+        return Err(AppError::internal(
+            "Daemon is not reachable; start it with `systemctl --user start logi-mx-daemon`"
+        ));
+    };
+    let mut out = Out::new();
+    out.line(format_args!("Thumb button remap:"))?;
+    let render =
+        |map: &std::collections::HashMap<ButtonId, Action>, button: ButtonId, out: &mut Out| {
+            let action = map
+                .get(&button)
+                .map_or_else(|| "native".to_string(), button_action_line);
+            out.line(format_args!("  {button:?}: {action}"))
+        };
+    for button in [ButtonId::Back, ButtonId::Forward] {
+        render(&buttons, button, &mut out)?;
+    }
+    let mut apps: Vec<&String> = profiles.keys().collect();
+    apps.sort_unstable();
+    for app in apps {
+        out.line(format_args!("[{app}]"))?;
+        for button in [ButtonId::Back, ButtonId::Forward] {
+            render(&profiles[app], button, &mut out)?;
         }
     }
     out.finish()
