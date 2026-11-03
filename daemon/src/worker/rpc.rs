@@ -242,6 +242,15 @@ fn handle_device_read(
                 controls
             }
         }
+        ipc::Request::GetButtonRemap {
+            control_id
+        } => {
+            let (_, remap) = device.control_divert(*control_id)?;
+            ipc::Response::ButtonRemap {
+                control_id: *control_id,
+                target_cid: remap
+            }
+        }
         ipc::Request::Dpi => {
             let value = device.dpi()?;
             ipc::Response::Dpi {

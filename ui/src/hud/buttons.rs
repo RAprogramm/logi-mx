@@ -58,6 +58,23 @@ const ASSIGNMENT_CHOICES: [&str; 8] = [
 /// height in a single column.
 const TILE_ROW_MIN_HEIGHT: i32 = 48;
 
+/// Dropdown index matching the firmware remap currently stored for `button`:
+/// `0` (Native) when the control is unmapped or the daemon cannot answer.
+fn initial_assignment(button: MouseButton) -> u32 {
+    ipc::try_request(&ipc::Request::GetButtonRemap {
+        control_id: button.cid()
+    })
+    .and_then(|response| match response {
+        Response::ButtonRemap {
+            target_cid, ..
+        } => Some(target_cid),
+        _ => None
+    })
+    .and_then(|target_cid| REMAP_TARGETS.iter().position(|(_, cid)| *cid == target_cid))
+    .and_then(|position| u32::try_from(position).ok())
+    .map_or(0, |position| position + 1)
+}
+
 /// Builds one button tile: a card with the button name and its assignment
 /// dropdown; picking an entry writes the remap into the mouse firmware
 /// instantly and reverts the choice when the daemon refuses.
@@ -121,7 +138,10 @@ fn button_tile(
     let rows_assign = Rc::clone(rows);
     let drawing_assign = drawing.clone();
     let toast_assign = toast.clone();
-    let applied = Rc::new(Cell::new(0_u32));
+    let applied = Rc::new(Cell::new(initial_assignment(button)));
+    if applied.get() != 0 {
+        dropdown.set_selected(applied.get());
+    }
     dropdown.connect_selected_notify(move |picker| {
         let index = picker.selected();
         if index == applied.get() {

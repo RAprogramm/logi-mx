@@ -169,6 +169,11 @@ pub enum Request {
         /// Target control ID, or `0x0000` to restore native behaviour.
         target_cid: u16
     },
+    /// Reads the firmware remap currently stored for one control.
+    GetButtonRemap {
+        /// HID++ control ID to query.
+        control_id: u16
+    },
     /// Switch to an Easy-Switch host.
     SetHost {
         /// Zero-based host index.
@@ -343,6 +348,13 @@ pub enum Response {
         buttons:  std::collections::HashMap<ButtonId, Action>,
         /// Per-application overrides keyed by window class.
         profiles: std::collections::HashMap<String, std::collections::HashMap<ButtonId, Action>>
+    },
+    /// `GetButtonRemap` reply.
+    ButtonRemap {
+        /// Queried control ID.
+        control_id: u16,
+        /// Control the firmware currently maps it to; `0` means native.
+        target_cid: u16
     },
     /// The focused window class reported by the desktop, if any.
     FocusedApp {
