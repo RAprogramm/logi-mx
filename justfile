@@ -29,14 +29,16 @@ check: build test clippy deny
 
 # Install locally (release)
 install: build-release
-    ./scripts/install.sh
+    PREFIX="${PREFIX:-$HOME/.local}" ./scripts/install.sh
 
 # Uninstall local installation
 uninstall:
+    systemctl --user disable --now logi-mx-daemon.service logi-mx-daemon.socket logi-mx-overlay.service || true
     rm -f ~/.local/bin/logi-mx ~/.local/bin/logi-mx-daemon ~/.local/bin/logi-mx-ui ~/.local/bin/logi-mx-overlay
-    rm -f ~/.config/systemd/user/logi-mx-daemon.service ~/.config/systemd/user/logi-mx-overlay.service
+    rm -f ~/.config/systemd/user/logi-mx-daemon.service ~/.config/systemd/user/logi-mx-daemon.socket ~/.config/systemd/user/logi-mx-overlay.service
+    rm -f ~/.config/autostart/logi-mx-daemon.desktop ~/.local/share/applications/logi-mx-ui.desktop
     systemctl --user daemon-reload || true
-    echo "Uninstalled"
+    echo "Uninstalled user installation (for a system-wide install also run: sudo rm -f /usr/local/bin/logi-mx* /usr/local/lib/udev/rules.d/90-logi-mx.rules /usr/local/lib/modules-load.d/uinput.conf)"
 
 # Run daemon in foreground
 run-daemon:

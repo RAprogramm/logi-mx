@@ -55,10 +55,14 @@ sudo install -Dm755 target/release/logi-mx-overlay /usr/bin/
 sudo cp 90-logi-mx.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 
-# Install systemd service
-mkdir -p ~/.config/systemd/user
+# Install systemd user units (the daemon runs from ~/.local/bin)
+mkdir -p ~/.local/bin ~/.config/systemd/user
+install -m 0755 target/release/logi-mx-daemon ~/.local/bin/
+install -m 0755 target/release/logi-mx-overlay ~/.local/bin/
 cp logi-mx-daemon.service ~/.config/systemd/user/
+cp logi-mx-daemon.socket ~/.config/systemd/user/
 cp overlay/logi-mx-overlay.service ~/.config/systemd/user/
+sed -i "s#^ExecStart=.*#ExecStart=%h/.local/bin/logi-mx-daemon#" ~/.config/systemd/user/logi-mx-daemon.service
 systemctl --user daemon-reload
 systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service
 systemctl --user enable --now logi-mx-overlay.service

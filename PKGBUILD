@@ -42,6 +42,9 @@ package() {
     install -Dm644 overlay/logi-mx-overlay.service "$pkgdir/usr/lib/systemd/user/logi-mx-overlay.service"
     sed -i "s#^ExecStart=.*#ExecStart=/usr/bin/logi-mx-overlay#" "$pkgdir/usr/lib/systemd/user/logi-mx-overlay.service"
 
+    # Load uinput at boot for gesture key injection
+    install -Dm644 uinput.conf "$pkgdir/usr/lib/modules-load.d/uinput.conf"
+
     # Install desktop files
     install -Dm644 logi-mx-daemon.desktop "$pkgdir/usr/share/applications/logi-mx-daemon.desktop"
     install -Dm644 logi-mx-ui.desktop "$pkgdir/usr/share/applications/logi-mx-ui.desktop"

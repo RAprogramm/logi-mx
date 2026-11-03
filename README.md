@@ -293,10 +293,14 @@ sudo modprobe uinput
 # Add your user to input group (required for live telemetry and gesture injection)
 sudo usermod -aG input $USER
 
-# Install systemd service
-mkdir -p ~/.config/systemd/user
+# Install systemd user units (the daemon runs from ~/.local/bin)
+mkdir -p ~/.local/bin ~/.config/systemd/user
+install -m 0755 ~/.cargo/bin/logi-mx-daemon ~/.local/bin/
 curl -o ~/.config/systemd/user/logi-mx-daemon.service \
   https://raw.githubusercontent.com/RAprogramm/logi-mx/main/logi-mx-daemon.service
+curl -o ~/.config/systemd/user/logi-mx-daemon.socket \
+  https://raw.githubusercontent.com/RAprogramm/logi-mx/main/logi-mx-daemon.socket
+sed -i "s#^ExecStart=.*#ExecStart=%h/.local/bin/logi-mx-daemon#" ~/.config/systemd/user/logi-mx-daemon.service
 systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service
 
 # Logout and login for group changes to take effect
@@ -327,9 +331,12 @@ sudo modprobe uinput
 # Add your user to input group (required for live telemetry and gesture injection)
 sudo usermod -aG input $USER
 
-# Install systemd service
-mkdir -p ~/.config/systemd/user
+# Install systemd user units (the daemon runs from ~/.local/bin)
+mkdir -p ~/.local/bin ~/.config/systemd/user
+install -m 0755 ~/.cargo/bin/logi-mx-daemon ~/.local/bin/
 cp logi-mx-daemon.service ~/.config/systemd/user/
+cp logi-mx-daemon.socket ~/.config/systemd/user/
+sed -i "s#^ExecStart=.*#ExecStart=%h/.local/bin/logi-mx-daemon#" ~/.config/systemd/user/logi-mx-daemon.service
 systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service
 
 # Logout and login for group changes to take effect
