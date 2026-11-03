@@ -464,6 +464,55 @@ pub fn open_live_stream() -> std::io::Result<std::os::unix::net::UnixStream> {
     }
 }
 
+/// Opens a radial pie menu event stream against the daemon.
+///
+/// Sends [`Request::WatchPie`] and returns the connected socket positioned
+/// after the handshake: every subsequent newline-delimited JSON line is a
+/// [`Response::Pie`] event until the daemon or the client closes it.
+///
+/// # Errors
+///
+/// Returns an I/O error when the daemon is unreachable or rejects the
+/// handshake.
+///
+/// # Examples
+///
+/// ```no_run
+/// let socket = logi_mx_daemon::ipc::open_pie_stream()?;
+/// drop(socket);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[allow(
+    dead_code,
+    reason = "client helper; the logi-mx-overlay crate consumes the pie stream"
+)]
+pub fn open_pie_stream() -> std::io::Result<std::os::unix::net::UnixStream> {
+    use std::{
+        io::{BufRead as _, BufReader, Write as _},
+        os::unix::net::UnixStream
+    };
+
+    let mut stream = UnixStream::connect(socket_path())?;
+    stream.set_read_timeout(Some(IPC_TIMEOUT))?;
+    stream.set_write_timeout(Some(IPC_TIMEOUT))?;
+
+    let mut payload = serde_json::to_vec(&Request::WatchPie)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    payload.push(b'\n');
+    stream.write_all(&payload)?;
+    stream.flush()?;
+
+    let mut line = String::new();
+    BufReader::new(&stream).read_line(&mut line)?;
+    match serde_json::from_str::<Response>(line.trim()) {
+        Ok(Response::PieReady) => Ok(stream),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "daemon refused pie stream"
+        ))
+    }
+}
+
 /// Runs the async IPC server, forwarding requests to the worker.
 ///
 /// With systemd socket activation the listening socket is inherited from

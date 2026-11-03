@@ -31,6 +31,7 @@ package() {
     install -Dm755 target/release/logi-mx "$pkgdir/usr/bin/logi-mx"
     install -Dm755 target/release/logi-mx-daemon "$pkgdir/usr/bin/logi-mx-daemon"
     install -Dm755 target/release/logi-mx-ui "$pkgdir/usr/bin/logi-mx-ui"
+    install -Dm755 target/release/logi-mx-overlay "$pkgdir/usr/bin/logi-mx-overlay"
 
     # Install udev rules
     install -Dm644 90-logi-mx.rules "$pkgdir/usr/lib/udev/rules.d/90-logi-mx.rules"
@@ -38,6 +39,8 @@ package() {
     # Install systemd user units
     install -Dm644 logi-mx-daemon.service "$pkgdir/usr/lib/systemd/user/logi-mx-daemon.service"
     install -Dm644 logi-mx-daemon.socket "$pkgdir/usr/lib/systemd/user/logi-mx-daemon.socket"
+    install -Dm644 overlay/logi-mx-overlay.service "$pkgdir/usr/lib/systemd/user/logi-mx-overlay.service"
+    sed -i "s#^ExecStart=.*#ExecStart=/usr/bin/logi-mx-overlay#" "$pkgdir/usr/lib/systemd/user/logi-mx-overlay.service"
 
     # Install desktop files
     install -Dm644 logi-mx-daemon.desktop "$pkgdir/usr/share/applications/logi-mx-daemon.desktop"

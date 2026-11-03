@@ -33,8 +33,8 @@ install: build-release
 
 # Uninstall local installation
 uninstall:
-    rm -f ~/.local/bin/logi-mx ~/.local/bin/logi-mx-daemon ~/.local/bin/logi-mx-ui
-    rm -f ~/.config/systemd/user/logi-mx-daemon.service
+    rm -f ~/.local/bin/logi-mx ~/.local/bin/logi-mx-daemon ~/.local/bin/logi-mx-ui ~/.local/bin/logi-mx-overlay
+    rm -f ~/.config/systemd/user/logi-mx-daemon.service ~/.config/systemd/user/logi-mx-overlay.service
     systemctl --user daemon-reload || true
     echo "Uninstalled"
 

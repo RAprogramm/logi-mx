@@ -19,18 +19,25 @@ use libadwaita::{
 };
 use logi_mx_daemon::ipc::{self, Response};
 use logi_mx_driver::{
+    config::PieConfig,
     devices::{Action, Gesture, GestureDirection, GestureMode},
     keys::key_name
 };
 
 use super::{keybinds::open_keybind_picker, page_scroll, report};
 
-/// Gesture tiles in display order: direction and human label.
-const GESTURE_TILES: [(GestureDirection, &str); 5] = [
+/// Gesture tiles in display order: direction and human label. The four
+/// diagonals only ever fire from the radial pie menu, but they bind through
+/// the same store and IPC path as the cardinals.
+const GESTURE_TILES: [(GestureDirection, &str); 9] = [
     (GestureDirection::Up, "Swipe up"),
     (GestureDirection::Down, "Swipe down"),
     (GestureDirection::Left, "Swipe left"),
     (GestureDirection::Right, "Swipe right"),
+    (GestureDirection::UpLeft, "Swipe up-left"),
+    (GestureDirection::UpRight, "Swipe up-right"),
+    (GestureDirection::DownLeft, "Swipe down-left"),
+    (GestureDirection::DownRight, "Swipe down-right"),
     (GestureDirection::None, "Click")
 ];
 
@@ -741,6 +748,114 @@ fn wire_scope_profile_buttons(
     });
 }
 
+/// Parses one radial menu pixel tuning from an entry field.
+///
+/// # Arguments
+///
+/// * `text` - Raw entry text, surrounding whitespace allowed.
+///
+/// # Returns
+///
+/// The value when it is a whole number of pixels within `1..=4000`,
+/// `None` for anything else.
+fn parse_pie_px(text: &str) -> Option<i32> {
+    let value = text.trim().parse::<i32>().ok()?;
+    (1..=4000).contains(&value).then_some(value)
+}
+
+/// Widgets of the Radial menu group, kept so the initial daemon reply can
+/// fill them in after the page was built.
+struct PieWidgets {
+    enable: Switch,
+    radius: Entry,
+    dead:   Entry
+}
+
+/// Builds the Radial menu group: the enable switch, the activation radius
+/// and dead zone entries, and an Apply button that sends
+/// [`ipc::Request::SetPie`] and toasts the outcome.
+fn radial_menu_group(toast: &ToastOverlay, initial: &PieConfig) -> (PreferencesGroup, PieWidgets) {
+    let group = PreferencesGroup::new();
+    group.set_title("Radial menu");
+    group.set_description(Some(
+        "Hold the gesture button, move past the activation radius and release over a sector"
+    ));
+
+    let enable_row = ActionRow::new();
+    enable_row.set_title("Enable radial menu");
+    let enable_switch = Switch::new();
+    enable_switch.set_valign(gtk4::Align::Center);
+    enable_switch.set_active(initial.enabled);
+    enable_row.add_suffix(&enable_switch);
+    enable_row.set_activatable_widget(Some(&enable_switch));
+
+    let radius_row = ActionRow::new();
+    radius_row.set_title("Activation radius");
+    radius_row.set_subtitle("Cursor travel in pixels that opens the menu");
+    let radius_entry = Entry::new();
+    radius_entry.set_width_chars(6);
+    radius_entry.set_valign(gtk4::Align::Center);
+    radius_entry.set_text(&initial.activation_radius.to_string());
+    radius_row.add_suffix(&radius_entry);
+
+    let dead_row = ActionRow::new();
+    dead_row.set_title("Dead zone");
+    dead_row.set_subtitle("Radius in pixels where no sector highlights");
+    let dead_entry = Entry::new();
+    dead_entry.set_width_chars(6);
+    dead_entry.set_valign(gtk4::Align::Center);
+    dead_entry.set_text(&initial.dead_zone.to_string());
+    dead_row.add_suffix(&dead_entry);
+
+    let apply_row = ActionRow::new();
+    apply_row.set_title("Apply tuning");
+    apply_row.set_subtitle("Sends the switch and both radii to the daemon");
+    let apply_btn = Button::with_label("Apply");
+    apply_row.add_suffix(&apply_btn);
+    apply_row.set_activatable_widget(Some(&apply_btn));
+
+    let toast_apply = toast.clone();
+    let (btn_switch, btn_radius, btn_dead) = (
+        enable_switch.clone(),
+        radius_entry.clone(),
+        dead_entry.clone()
+    );
+    apply_btn.connect_clicked(move |_| {
+        let tuning = match (
+            parse_pie_px(&btn_radius.text()),
+            parse_pie_px(&btn_dead.text())
+        ) {
+            (Some(radius), Some(dead)) => Some((radius, dead)),
+            _ => None
+        };
+        let Some((radius, dead)) = tuning else {
+            toast_apply.add_toast(Toast::new(
+                "Activation radius and dead zone must be whole pixels between 1 and 4000"
+            ));
+            return;
+        };
+        let response = ipc::try_request(&ipc::Request::SetPie {
+            enabled:           btn_switch.is_active(),
+            activation_radius: radius,
+            dead_zone:         dead
+        });
+        report(response, &toast_apply, "Radial menu updated");
+    });
+
+    group.add(&enable_row);
+    group.add(&radius_row);
+    group.add(&dead_row);
+    group.add(&apply_row);
+    (
+        group,
+        PieWidgets {
+            enable: enable_switch,
+            radius: radius_entry,
+            dead:   dead_entry
+        }
+    )
+}
+
 /// Builds the Gestures page: a master switch, the scope bar and one tile per
 /// direction.
 ///
@@ -769,6 +884,7 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
     let store: StoreCell = Rc::new(RefCell::new(GestureStore::default()));
     let loading: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let (scope_group, scope_model) = gesture_scope_bar(toast, &store, &tiles, &loading);
+    let (radial_group, radial_widgets) = radial_menu_group(toast, &PieConfig::default());
 
     let flow = FlowBox::new();
     flow.add_css_class("hud-tiles");
@@ -786,6 +902,7 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
 
     box_.append(&enable_group);
     box_.append(&scope_group);
+    box_.append(&radial_group);
     box_.append(&flow);
     scroll.set_child(Some(&box_));
 
@@ -793,7 +910,7 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
         enabled,
         gestures,
         profiles,
-        ..
+        pie
     }) = ipc::try_request(&ipc::Request::GetGestures)
     {
         enable_switch.set_active(enabled);
@@ -802,6 +919,11 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
             guard.global = gestures;
             guard.profiles = profiles;
         }
+        radial_widgets.enable.set_active(pie.enabled);
+        radial_widgets
+            .radius
+            .set_text(&pie.activation_radius.to_string());
+        radial_widgets.dead.set_text(&pie.dead_zone.to_string());
         refresh_scope_model(&scope_model, &store.borrow());
         apply_scope(&tiles, &store, &loading);
     }
@@ -912,4 +1034,27 @@ fn attach_gesture_capture(
     });
 
     window.add_controller(controller);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_pie_px;
+
+    #[test]
+    fn pie_px_accepts_whole_positive_pixels() {
+        assert_eq!(parse_pie_px("40"), Some(40));
+        assert_eq!(parse_pie_px(" 12 "), Some(12));
+        assert_eq!(parse_pie_px("1"), Some(1));
+        assert_eq!(parse_pie_px("4000"), Some(4000));
+    }
+
+    #[test]
+    fn pie_px_rejects_garbage_and_out_of_range() {
+        assert_eq!(parse_pie_px(""), None);
+        assert_eq!(parse_pie_px("0"), None);
+        assert_eq!(parse_pie_px("-5"), None);
+        assert_eq!(parse_pie_px("4001"), None);
+        assert_eq!(parse_pie_px("wide"), None);
+        assert_eq!(parse_pie_px("12.5"), None);
+    }
 }

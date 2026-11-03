@@ -20,6 +20,7 @@ install -d "${BIN_DIR}"
 install -m 0755 "${BIN_SRC}/logi-mx" "${BIN_DIR}/logi-mx"
 install -m 0755 "${BIN_SRC}/logi-mx-daemon" "${BIN_DIR}/logi-mx-daemon"
 install -m 0755 "${BIN_SRC}/logi-mx-ui" "${BIN_DIR}/logi-mx-ui"
+install -m 0755 "${BIN_SRC}/logi-mx-overlay" "${BIN_DIR}/logi-mx-overlay"
 
 echo "Installing udev rules..."
 if [ -w "${UDEV_RULES_DIR}" ] || [ "$(id -u)" -eq 0 ]; then
@@ -83,10 +84,13 @@ if command -v systemctl >/dev/null 2>&1; then
   install -d "${SYSTEMD_USER_DIR}"
   install -m 0644 "${ROOT_DIR}/logi-mx-daemon.service" "${SYSTEMD_USER_DIR}/logi-mx-daemon.service"
   install -m 0644 "${ROOT_DIR}/logi-mx-daemon.socket" "${SYSTEMD_USER_DIR}/logi-mx-daemon.socket"
+  install -m 0644 "${ROOT_DIR}/overlay/logi-mx-overlay.service" "${SYSTEMD_USER_DIR}/logi-mx-overlay.service"
   # fix ExecStart path
   sed -i "s#^ExecStart=.*#ExecStart=${BIN_DIR}/logi-mx-daemon#" "${SYSTEMD_USER_DIR}/logi-mx-daemon.service"
+  sed -i "s#^ExecStart=.*#ExecStart=${BIN_DIR}/logi-mx-overlay#" "${SYSTEMD_USER_DIR}/logi-mx-overlay.service"
   systemctl --user daemon-reload 2>/dev/null || true
   systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service 2>/dev/null || true
+  systemctl --user enable --now logi-mx-overlay.service 2>/dev/null || true
   echo "  systemd user service and socket installed and enabled"
 fi
 

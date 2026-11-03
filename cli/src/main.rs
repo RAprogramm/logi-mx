@@ -570,6 +570,15 @@ fn cmd_config(action: ConfigCommands) -> Result<()> {
     out.finish()
 }
 
+/// Runs `systemctl --user` with the given arguments.
+fn systemctl(args: &[&str]) -> Result<std::process::ExitStatus> {
+    std::process::Command::new("systemctl")
+        .arg("--user")
+        .args(args)
+        .status()
+        .map_err(|e| AppError::internal("Failed to run systemctl").with_source(e))
+}
+
 fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
     let home =
         std::env::var("HOME").map_err(|e| AppError::internal("HOME not set").with_source(e))?;
@@ -577,48 +586,63 @@ fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
         .join(".config")
         .join("systemd")
         .join("user");
-    let service_path = service_dir.join("logi-mx-daemon.service");
-    let service_unit = include_str!("../../logi-mx-daemon.service");
+    let units: [(&str, &str); 2] = [
+        (
+            "logi-mx-daemon.service",
+            include_str!("../../logi-mx-daemon.service")
+        ),
+        (
+            "logi-mx-overlay.service",
+            include_str!("../../overlay/logi-mx-overlay.service")
+        )
+    ];
 
     match action {
         AutostartCommands::Install => {
             std::fs::create_dir_all(&service_dir).map_err(|e| {
                 AppError::internal("Failed to create systemd user dir").with_source(e)
             })?;
-            std::fs::write(&service_path, service_unit)
-                .map_err(|e| AppError::internal("Failed to write service file").with_source(e))?;
+            for (name, unit) in units {
+                std::fs::write(service_dir.join(name), unit).map_err(|e| {
+                    AppError::internal("Failed to write service file").with_source(e)
+                })?;
+            }
 
-            let _ = std::process::Command::new("systemctl")
-                .args(["--user", "daemon-reload"])
-                .status();
-            let status = std::process::Command::new("systemctl")
-                .args(["--user", "enable", "--now", "logi-mx-daemon.service"])
-                .status()
-                .map_err(|e| AppError::internal("Failed to run systemctl").with_source(e))?;
+            let _ = systemctl(&["daemon-reload"]);
+            let status = systemctl(&["enable", "--now", "logi-mx-daemon.service"])?;
             if !status.success() {
                 return Err(AppError::internal("Failed to enable daemon service"));
             }
-            println!("Autostart installed and daemon started.");
+            let overlay = systemctl(&["enable", "--now", "logi-mx-overlay.service"])?;
+            if overlay.success() {
+                println!("Autostart installed and daemon and overlay started.");
+            } else {
+                warn!(
+                    "the overlay service did not start; install the logi-mx-overlay binary to ~/.local/bin"
+                );
+                println!("Autostart installed and daemon started; the overlay needs its binary.");
+            }
         }
         AutostartCommands::Uninstall => {
-            let _ = std::process::Command::new("systemctl")
-                .args(["--user", "disable", "--now", "logi-mx-daemon.service"])
-                .status();
-            let _ = std::fs::remove_file(&service_path);
-            let _ = std::process::Command::new("systemctl")
-                .args(["--user", "daemon-reload"])
-                .status();
+            for (name, _) in units {
+                let _ = systemctl(&["disable", "--now", name]);
+                let _ = std::fs::remove_file(service_dir.join(name));
+            }
+            let _ = systemctl(&["daemon-reload"]);
             println!("Autostart removed.");
         }
         AutostartCommands::Status => {
-            let status = std::process::Command::new("systemctl")
-                .args(["--user", "is-active", "logi-mx-daemon.service"])
-                .status()
-                .map_err(|e| AppError::internal("Failed to run systemctl").with_source(e))?;
-            if status.success() {
+            let daemon = systemctl(&["is-active", "logi-mx-daemon.service"])?;
+            if daemon.success() {
                 println!("Daemon is active.");
             } else {
                 println!("Daemon is not active.");
+            }
+            let overlay = systemctl(&["is-active", "logi-mx-overlay.service"])?;
+            if overlay.success() {
+                println!("Overlay is active.");
+            } else {
+                println!("Overlay is not active.");
             }
         }
     }

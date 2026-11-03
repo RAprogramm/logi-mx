@@ -14,12 +14,8 @@ mod pool;
 mod rpc;
 
 #[cfg(feature = "tray")]
-use std::sync::Arc;
-use std::{
-    sync::{Mutex, mpsc},
-    thread::JoinHandle,
-    time::Duration
-};
+use std::sync::{Arc, Mutex};
+use std::{sync::mpsc, thread::JoinHandle, time::Duration};
 
 use logi_mx_driver::prelude::*;
 #[cfg(feature = "tray")]
@@ -160,7 +156,10 @@ fn run_device_worker(
     #[cfg(feature = "notify")]
     let mut policy = crate::notify::NoticePolicy::new();
 
+    #[cfg(feature = "notify")]
     refresh_and_notify(&mut manager, status, tray, &mut policy);
+    #[cfg(not(feature = "notify"))]
+    refresh_and_notify(&mut manager, status, tray);
     if gestures.should_divert() {
         manager.for_each_cached_mut(|device| gestures.apply(device));
     }
@@ -208,7 +207,10 @@ fn run_device_worker(
         }
 
         if should_refresh {
+            #[cfg(feature = "notify")]
             refresh_and_notify(&mut manager, status, tray, &mut policy);
+            #[cfg(not(feature = "notify"))]
+            refresh_and_notify(&mut manager, status, tray);
             if gestures.should_divert() {
                 manager.for_each_cached_mut(|device| gestures.apply(device));
             }
@@ -265,7 +267,8 @@ fn pump_notifications(
 fn refresh_and_notify(
     manager: &mut DevicePool,
     status: &SharedStatus,
-    tray: &TraySlot,
+    #[cfg(feature = "tray")] tray: &TraySlot,
+    #[cfg(not(feature = "tray"))] _tray: &TraySlot,
     #[cfg(feature = "notify")] policy: &mut crate::notify::NoticePolicy
 ) {
     let readings = manager
