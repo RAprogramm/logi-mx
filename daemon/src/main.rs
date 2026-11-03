@@ -12,6 +12,7 @@ mod notify;
 mod buttons;
 mod focus;
 mod gesture;
+mod hyprbind;
 mod inject;
 mod ipc;
 mod live;

@@ -23,7 +23,7 @@ use logi_mx_driver::{
     keys::key_name
 };
 
-use super::{page_scroll, report};
+use super::{keybinds::open_keybind_picker, page_scroll, report};
 
 /// Gesture tiles in display order: direction and human label.
 const GESTURE_TILES: [(GestureDirection, &str); 5] = [
@@ -152,7 +152,8 @@ struct GestureTile {
     entry:   Entry,
     kind:    DropDown,
     mode:    DropDown,
-    capture: Button
+    capture: Button,
+    hypr:    Button
 }
 
 impl GestureTile {
@@ -196,6 +197,7 @@ impl GestureTile {
     fn show_command(&self, command: bool) {
         self.binding.set_visible(!command);
         self.capture.set_visible(!command);
+        self.hypr.set_visible(!command);
         self.entry.set_visible(command);
     }
 
@@ -332,10 +334,15 @@ fn select_app_scope(
 
 /// Builds one gesture tile: direction, current binding, action kind, fire
 /// moment and the capture/clear controls.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "tile builders receive the full set of shared wiring targets"
+)]
 fn gesture_tile(
     direction: GestureDirection,
     label: &str,
     toast: &ToastOverlay,
+    window: &ApplicationWindow,
     capture: &GestureCapture,
     tiles: &GestureTiles,
     store: &StoreCell,
@@ -371,6 +378,8 @@ fn gesture_tile(
     mode.set_valign(gtk4::Align::Center);
     let spring = Label::new(None);
     spring.set_hexpand(true);
+    let hypr_btn = Button::with_label("Hyprland…");
+    hypr_btn.set_tooltip_text(Some("Pick an existing Hyprland keybind"));
     let capture_btn = Button::with_label("Capture");
     let clear_btn = Button::from_icon_name("user-trash-symbolic");
     clear_btn.add_css_class("flat");
@@ -378,6 +387,7 @@ fn gesture_tile(
     controls.append(&kind);
     controls.append(&mode);
     controls.append(&spring);
+    controls.append(&hypr_btn);
     controls.append(&capture_btn);
     controls.append(&clear_btn);
 
@@ -424,6 +434,8 @@ fn gesture_tile(
         }
     });
 
+    wire_gesture_hypr(&hypr_btn, direction, toast, window, tiles, store);
+
     let gesture = GestureTile {
         child,
         keys,
@@ -432,10 +444,36 @@ fn gesture_tile(
         entry,
         kind,
         mode,
-        capture: capture_btn
+        capture: capture_btn,
+        hypr: hypr_btn
     };
     gesture.set_keys(Vec::new());
     gesture
+}
+
+/// Wires the Hyprland chooser button of a gesture tile: opens the picker and
+/// commits the chosen chord through the shared store path.
+fn wire_gesture_hypr(
+    button: &Button,
+    direction: GestureDirection,
+    toast: &ToastOverlay,
+    window: &ApplicationWindow,
+    tiles: &GestureTiles,
+    store: &StoreCell
+) {
+    let tiles_hypr = Rc::clone(tiles);
+    let store_hypr = Rc::clone(store);
+    let toast_hypr = toast.clone();
+    let window_hypr = window.clone();
+    button.connect_clicked(move |_| {
+        let tiles_cb = Rc::clone(&tiles_hypr);
+        let store_cb = Rc::clone(&store_hypr);
+        let toast_pick = toast_hypr.clone();
+        let toast_cb = toast_hypr.clone();
+        open_keybind_picker(&window_hypr, &toast_pick, move |keys| {
+            commit_gesture_keys(direction, &tiles_cb, &store_cb, &toast_cb, keys);
+        });
+    });
 }
 
 /// Wires the command entry of a gesture tile: Enter binds the shell command
@@ -739,7 +777,9 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
     flow.set_max_children_per_line(1);
     flow.set_row_spacing(12);
     for (direction, label) in GESTURE_TILES {
-        let tile = gesture_tile(direction, label, toast, &capture, &tiles, &store, &loading);
+        let tile = gesture_tile(
+            direction, label, toast, window, &capture, &tiles, &store, &loading
+        );
         tiles.borrow_mut().insert(direction, tile.clone());
         flow.append(&tile.child);
     }
@@ -780,6 +820,34 @@ pub(super) fn gestures_page(toast: &ToastOverlay, window: &ApplicationWindow) ->
 
     attach_gesture_capture(window, &capture, &tiles, &store, toast);
     scroll
+}
+
+/// Binds a finished key chord to `direction` through the daemon and
+/// reflects it on the tile; shared by the window key capture and the
+/// Hyprland keybind picker.
+fn commit_gesture_keys(
+    direction: GestureDirection,
+    tiles: &GestureTiles,
+    store: &StoreCell,
+    toast: &ToastOverlay,
+    names: Vec<String>
+) {
+    let Some(tile) = tiles.borrow().get(&direction).cloned() else {
+        return;
+    };
+    let moment = tile.current_mode();
+    let action = Action::Keypress {
+        keys: names.clone()
+    };
+    let request = store
+        .borrow()
+        .bind_request(direction, moment, action.clone());
+    let response = ipc::try_request(&request);
+    if matches!(response, Some(Response::Ok)) {
+        store.borrow_mut().record(direction, moment, action);
+        tile.set_keys(names);
+    }
+    report(response, toast, "Gesture bound");
 }
 
 /// Installs the window-level capture listener for gesture binding.
@@ -833,26 +901,13 @@ fn attach_gesture_capture(
             .filter_map(|code| key_name(*code))
             .map(str::to_string)
             .collect();
-        let Some(tile) = tiles_release.borrow().get(&direction).cloned() else {
-            return;
-        };
-        let moment = if tile.mode.selected() == 0 {
-            GestureMode::OnPress
-        } else {
-            GestureMode::OnRelease
-        };
-        let action = Action::Keypress {
-            keys: names.clone()
-        };
-        let request = store_release
-            .borrow()
-            .bind_request(direction, moment, action.clone());
-        let response = ipc::try_request(&request);
-        if matches!(response, Some(Response::Ok)) {
-            store_release.borrow_mut().record(direction, moment, action);
-            tile.set_keys(names);
-        }
-        report(response, &toast_release, "Gesture bound");
+        commit_gesture_keys(
+            direction,
+            &tiles_release,
+            &store_release,
+            &toast_release,
+            names
+        );
     });
 
     window.add_controller(controller);

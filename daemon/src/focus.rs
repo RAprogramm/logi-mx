@@ -38,10 +38,16 @@ pub fn new_shared() -> SharedFocus {
     Arc::new(Mutex::new(None))
 }
 
-/// Resolves the Hyprland socket directory: first from the environment, then
-/// by discovering the newest live instance on disk. The fallback matters for
-/// systemd user services, which do not inherit `HYPRLAND_INSTANCE_SIGNATURE`.
-fn instance_dir() -> Option<PathBuf> {
+/// Resolves the Hyprland socket directory for the current session.
+///
+/// First from the environment, then by discovering the newest live instance on
+/// disk. The fallback matters for systemd user services, which do not inherit
+/// `HYPRLAND_INSTANCE_SIGNATURE`.
+///
+/// Shared with [`crate::hyprbind`], which talks to the request socket of the
+/// same directory.
+#[must_use]
+pub fn instance_dir() -> Option<PathBuf> {
     let runtime = std::env::var("XDG_RUNTIME_DIR").ok()?;
     env_dir(&runtime).or_else(|| discover_dir(&runtime))
 }

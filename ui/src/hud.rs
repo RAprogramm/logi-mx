@@ -21,6 +21,7 @@ mod buttons;
 mod device;
 mod diagram;
 mod gestures;
+mod keybinds;
 mod wheel;
 
 use std::{

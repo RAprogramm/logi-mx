@@ -17,6 +17,8 @@ use logi_mx_driver::prelude::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
+use crate::hyprbind::KeybindEntry;
+
 /// RPC envelope forwarded to the worker thread.
 pub struct RpcRequest {
     /// Client request.
@@ -251,6 +253,9 @@ pub enum Request {
     },
     /// Report the currently focused Hyprland window class, if any.
     GetFocusedApp,
+    /// List the active Hyprland keyboard bindings that can be replayed as a
+    /// key chord; answered without touching the device.
+    GetKeybinds,
     /// Subscribe to live input telemetry; the connection becomes a stream of
     /// [`Response::Live`] lines until it is closed.
     WatchLive
@@ -326,6 +331,11 @@ pub enum Response {
     FocusedApp {
         /// Hyprland window class of the focused window.
         app_id: Option<String>
+    },
+    /// `GetKeybinds` reply.
+    Keybinds {
+        /// Replayable keyboard bindings reported by Hyprland.
+        entries: Vec<KeybindEntry>
     },
     /// Generic success for setters.
     Ok,

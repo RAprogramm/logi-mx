@@ -25,8 +25,8 @@ use logi_mx_driver::{
 };
 
 use super::{
-    HudState, MouseButton, ROWS_REGISTRY, RowMap, Tile, page_scroll, queue_leaders, report,
-    sync_row_focus
+    HudState, MouseButton, ROWS_REGISTRY, RowMap, Tile, keybinds::open_keybind_picker,
+    page_scroll, queue_leaders, report, sync_row_focus
 };
 
 /// Native remap targets offered on the assignment dropdowns: label and CID.
@@ -362,7 +362,8 @@ struct RemapTile {
     binding: GtkBox,
     entry:   Entry,
     kind:    DropDown,
-    capture: Button
+    capture: Button,
+    hypr:    Button
 }
 
 impl RemapTile {
@@ -411,6 +412,7 @@ impl RemapTile {
     fn show_command(&self, command: bool) {
         self.binding.set_visible(!command);
         self.capture.set_visible(!command);
+        self.hypr.set_visible(!command);
         self.entry.set_visible(command);
     }
 
@@ -627,10 +629,15 @@ fn wire_remap_clear(
 
 /// Builds one remap row: button name, current binding, kind picker, command
 /// entry, capture and clear controls.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "tile builders receive the full set of shared wiring targets"
+)]
 fn remap_tile(
     button: ButtonId,
     label: &str,
     toast: &ToastOverlay,
+    window: &ApplicationWindow,
     capture: &RemapCapture,
     tiles: &RemapTiles,
     store: &StoreCell,
@@ -664,12 +671,15 @@ fn remap_tile(
     kind.set_tooltip_text(Some("What the button should do"));
     let spring = Label::new(None);
     spring.set_hexpand(true);
+    let hypr_btn = Button::with_label("Hyprland…");
+    hypr_btn.set_tooltip_text(Some("Pick an existing Hyprland keybind"));
     let capture_btn = Button::with_label("Capture");
     let clear_btn = Button::from_icon_name("user-trash-symbolic");
     clear_btn.add_css_class("flat");
     clear_btn.set_tooltip_text(Some("Restore native behaviour"));
     controls.append(&kind);
     controls.append(&spring);
+    controls.append(&hypr_btn);
     controls.append(&capture_btn);
     controls.append(&clear_btn);
 
@@ -685,13 +695,30 @@ fn remap_tile(
     let tiles_arm = Rc::clone(tiles);
     capture_btn.connect_clicked(move |_| arm_capture(button, &capture_arm, &tiles_arm));
 
+    let tiles_hypr = Rc::clone(tiles);
+    let store_hypr = Rc::clone(store);
+    let loading_hypr = Rc::clone(loading);
+    let toast_hypr = toast.clone();
+    let window_hypr = window.clone();
+    hypr_btn.connect_clicked(move |_| {
+        let tiles_cb = Rc::clone(&tiles_hypr);
+        let store_cb = Rc::clone(&store_hypr);
+        let loading_cb = Rc::clone(&loading_hypr);
+        let toast_pick = toast_hypr.clone();
+        let toast_cb = toast_hypr.clone();
+        open_keybind_picker(&window_hypr, &toast_pick, move |keys| {
+            commit_remap_keys(button, &tiles_cb, &store_cb, &loading_cb, &toast_cb, &keys);
+        });
+    });
+
     let row = RemapTile {
         child,
         command: Rc::new(RefCell::new(String::new())),
         binding,
         entry,
         kind,
-        capture: capture_btn
+        capture: capture_btn,
+        hypr: hypr_btn
     };
     row.set_native();
     row
@@ -878,6 +905,35 @@ fn wire_scope_profile_buttons(handles: ScopeHandles<'_>) {
     });
 }
 
+/// Binds a finished key chord to `button` through the daemon and reflects
+/// it on the row; shared by the window key capture and the Hyprland keybind
+/// picker. The loading guard keeps the programmatic kind switch from
+/// re-arming the capture.
+fn commit_remap_keys(
+    button: ButtonId,
+    tiles: &RemapTiles,
+    store: &StoreCell,
+    loading: &Cell<bool>,
+    toast: &ToastOverlay,
+    names: &[String]
+) {
+    let Some(tile) = tiles.borrow().get(&button).cloned() else {
+        return;
+    };
+    let action = Action::Keypress {
+        keys: names.to_vec()
+    };
+    let request = store.borrow().bind_request(button, action.clone());
+    let response = ipc::try_request(&request);
+    if matches!(response, Some(Response::Ok)) {
+        store.borrow_mut().record(button, action);
+        loading.set(true);
+        tile.set_keys(names);
+        loading.set(false);
+    }
+    report(response, toast, "Button bound");
+}
+
 /// Installs the window-level capture listener for button binding.
 ///
 /// Runs in the capture phase so chords never reach the diagram shortcuts or
@@ -887,6 +943,7 @@ fn attach_remap_capture(
     capture: &RemapCapture,
     tiles: &RemapTiles,
     store: &StoreCell,
+    loading: &Rc<Cell<bool>>,
     toast: &ToastOverlay
 ) {
     let controller = EventControllerKey::new();
@@ -915,6 +972,7 @@ fn attach_remap_capture(
     let capture_release = Rc::clone(capture);
     let tiles_release = Rc::clone(tiles);
     let store_release = Rc::clone(store);
+    let loading_release = Rc::clone(loading);
     let toast_release = toast.clone();
     controller.connect_key_released(move |_controller, _key, _code, _state| {
         let Some((button, pressed)) = capture_release.borrow().clone() else {
@@ -929,19 +987,14 @@ fn attach_remap_capture(
             .filter_map(|code| key_name(*code))
             .map(str::to_string)
             .collect();
-        let Some(tile) = tiles_release.borrow().get(&button).cloned() else {
-            return;
-        };
-        let action = Action::Keypress {
-            keys: names.clone()
-        };
-        let request = store_release.borrow().bind_request(button, action.clone());
-        let response = ipc::try_request(&request);
-        if matches!(response, Some(Response::Ok)) {
-            store_release.borrow_mut().record(button, action);
-            tile.set_keys(&names);
-        }
-        report(response, &toast_release, "Button bound");
+        commit_remap_keys(
+            button,
+            &tiles_release,
+            &store_release,
+            loading_release.as_ref(),
+            &toast_release,
+            &names
+        );
     });
 
     window.add_controller(controller);
@@ -965,7 +1018,9 @@ fn thumb_remap_section(toast: &ToastOverlay, window: &ApplicationWindow) -> GtkB
     flow.set_max_children_per_line(1);
     flow.set_row_spacing(12);
     for (button, label) in REMAP_BUTTONS {
-        let tile = remap_tile(button, label, toast, &capture, &tiles, &store, &loading);
+        let tile = remap_tile(
+            button, label, toast, window, &capture, &tiles, &store, &loading
+        );
         tiles.borrow_mut().insert(button, tile.clone());
         flow.append(&tile.child);
     }
@@ -987,7 +1042,7 @@ fn thumb_remap_section(toast: &ToastOverlay, window: &ApplicationWindow) -> GtkB
         apply_scope(&tiles, &store, &loading);
     }
 
-    attach_remap_capture(window, &capture, &tiles, &store, toast);
+    attach_remap_capture(window, &capture, &tiles, &store, &loading, toast);
     section
 }
 

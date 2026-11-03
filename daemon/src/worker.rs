@@ -305,12 +305,24 @@ fn handle_rpc(
 ///
 /// `WatchLive` connections are answered by the IPC server itself and never
 /// reach this function; the arm exists to keep the protocol exhaustive.
+/// `GetKeybinds` is answered from the desktop, not the device, so it is
+/// resolved before any device routing.
 fn handle_request(
     manager: &mut DevicePool,
     gestures: &mut GestureRuntime,
     buttons: &mut ButtonRuntime,
     request: &ipc::Request
 ) -> ipc::Response {
+    if matches!(request, ipc::Request::GetKeybinds) {
+        return match crate::hyprbind::fetch_keybinds() {
+            Ok(entries) => ipc::Response::Keybinds {
+                entries
+            },
+            Err(error) => ipc::Response::Error {
+                message: error.to_string()
+            }
+        };
+    }
     if let Some(response) = handle_gesture_request(manager, gestures, request) {
         return response;
     }

@@ -6,6 +6,7 @@
 pub mod buttons;
 pub mod focus;
 pub mod gesture;
+pub mod hyprbind;
 pub mod inject;
 pub mod ipc;
 pub mod status;

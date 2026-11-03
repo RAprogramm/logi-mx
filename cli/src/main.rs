@@ -64,6 +64,10 @@ enum Commands {
         action: Option<GestureCommands>
     },
 
+    /// List the active Hyprland keyboard bindings that can be attached to a
+    /// gesture or a thumb button remap.
+    Keybinds,
+
     /// Check host permissions and print the commands that fix what is missing.
     Setup
 }
@@ -236,6 +240,7 @@ fn main() -> Result<()> {
         Commands::Gestures {
             action
         } => cmd_gestures(action.as_ref()),
+        Commands::Keybinds => cmd_keybinds(),
         Commands::Setup => cmd_setup()
     }
 }
@@ -762,6 +767,33 @@ fn show_button_config() -> Result<()> {
         for button in [ButtonId::Back, ButtonId::Forward] {
             render(&profiles[app], button, &mut out)?;
         }
+    }
+    out.finish()
+}
+
+/// Prints the active Hyprland keyboard bindings the daemon can replay.
+///
+/// Each line pairs the replayable chord with the binding's human label; the
+/// chords are what `Action::Keypress` stores when a gesture adopts a bind.
+fn cmd_keybinds() -> Result<()> {
+    let Some(Response::Keybinds {
+        entries
+    }) = try_request(&Request::GetKeybinds)
+    else {
+        return Err(AppError::internal(
+            "Daemon is not reachable; start it with `systemctl --user start logi-mx-daemon`"
+        ));
+    };
+    let mut out = Out::new();
+    out.line(format_args!("Hyprland keybinds: {}", entries.len()))?;
+    let chord_width = entries
+        .iter()
+        .map(|entry| entry.keys.join("+").chars().count())
+        .max()
+        .unwrap_or(0);
+    for entry in &entries {
+        let chord = entry.keys.join("+");
+        out.line(format_args!("  {chord:<chord_width$}  {}", entry.label))?;
     }
     out.finish()
 }
