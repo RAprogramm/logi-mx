@@ -137,14 +137,28 @@ fn sector_for_never_returns_direction_none_outside_the_dead_zone() {
 }
 
 #[test]
-fn tap_emits_no_events_and_commits_nothing() {
+fn press_opens_the_ring_and_release_closes_it() {
     let (mut pie, mut rx) = scripted(&[(100, 100)], vec![key_gesture(GestureDirection::Up)]);
     assert!(pie.should_open());
     pie.on_press();
-    pie.on_tick();
-    assert!(!pie.is_open(), "a tap never passes the activation radius");
-    assert_eq!(pie.on_release(), None);
-    assert!(drain(&mut rx).is_empty(), "a tap must not emit any event");
+    assert!(pie.is_open(), "the ring opens on the press edge");
+    assert_eq!(
+        drain(&mut rx),
+        vec![PieEvent::Open {
+            anchor:  (100, 100),
+            sectors: vec![PieSector {
+                direction: GestureDirection::Up,
+                label:     "Up".to_string()
+            }]
+        }]
+    );
+    assert_eq!(pie.on_release(), None, "a tap highlights nothing");
+    assert_eq!(
+        drain(&mut rx),
+        vec![PieEvent::Close {
+            committed: None
+        }]
+    );
 }
 
 #[test]
@@ -216,10 +230,7 @@ fn release_over_bound_sector_commits_and_closes() {
             }
         ]
     );
-    assert!(
-        !pie.armed && !pie.open,
-        "the hold must be settled after release"
-    );
+    assert!(!pie.is_open(), "the hold must be settled after release");
 }
 
 #[test]
@@ -237,42 +248,73 @@ fn release_over_unbound_sector_closes_without_commit() {
 }
 
 #[test]
-fn release_without_activation_returns_none_and_emits_nothing() {
-    let (mut pie, mut rx) = scripted(&[(0, 0), (20, 10)], vec![key_gesture(GestureDirection::Up)]);
+fn swipe_highlights_and_release_commits() {
+    let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
     pie.on_press();
-    pie.on_tick();
-    assert!(
-        !pie.is_open(),
-        "the cursor stayed inside the activation radius"
-    );
-    assert_eq!(pie.on_release(), None);
-    assert_eq!(
-        drain(&mut rx),
-        Vec::new(),
-        "a release inside the activation radius must stay silent"
-    );
-}
-
-#[test]
-fn highlight_falls_to_none_inside_the_dead_zone() {
-    let (mut pie, mut rx) = scripted(
-        &[(0, 0), (100, 0), (5, 0)],
-        vec![key_gesture(GestureDirection::Up)]
-    );
-    pie.on_press();
-    pie.on_tick();
-    pie.on_tick();
+    pie.on_swipe(GestureDirection::Up);
     assert_eq!(
         drain(&mut rx).last(),
         Some(&PieEvent::Highlight {
-            direction: None
-        }),
-        "returning into the dead zone must highlight nothing"
+            direction: Some(GestureDirection::Up)
+        })
+    );
+    pie.on_swipe(GestureDirection::Up);
+    assert!(
+        drain(&mut rx).is_empty(),
+        "the same direction must not repeat Highlight"
+    );
+    assert_eq!(pie.on_release(), Some(GestureDirection::Up));
+    assert_eq!(
+        drain(&mut rx).last(),
+        Some(&PieEvent::Close {
+            committed: Some(GestureDirection::Up)
+        })
     );
 }
 
 #[test]
-fn disabled_config_never_arms_and_never_reads_the_cursor() {
+fn swipe_highlight_survives_a_still_cursor() {
+    let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
+    pie.on_press();
+    pie.on_swipe(GestureDirection::Up);
+    drain(&mut rx);
+    pie.on_tick();
+    pie.on_tick();
+    assert!(
+        drain(&mut rx).is_empty(),
+        "a cursor inside the gate must not clear the swipe highlight"
+    );
+}
+
+#[test]
+fn swipe_over_unbound_direction_closes_without_commit() {
+    let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
+    pie.on_press();
+    pie.on_swipe(GestureDirection::Left);
+    assert_eq!(pie.on_release(), None);
+    assert_eq!(
+        drain(&mut rx).last(),
+        Some(&PieEvent::Close {
+            committed: None
+        })
+    );
+}
+
+#[test]
+fn cursor_inside_the_gate_leaves_the_selection_alone() {
+    let (mut pie, mut rx) = scripted(&[(0, 0), (20, 0)], vec![key_gesture(GestureDirection::Up)]);
+    pie.on_press();
+    pie.on_tick();
+    assert!(
+        drain(&mut rx)
+            .iter()
+            .all(|event| !matches!(event, PieEvent::Highlight { .. })),
+        "travel inside the activation radius must not select a sector"
+    );
+}
+
+#[test]
+fn disabled_config_never_opens_and_never_reads_the_cursor() {
     let reads = Arc::new(AtomicUsize::new(0));
     let counter = {
         let reads = Arc::clone(&reads);
@@ -303,15 +345,15 @@ fn without_bindings_should_open_is_false() {
     let (mut pie, _rx) = scripted(&[(0, 0)], Vec::new());
     assert!(!pie.should_open());
     pie.on_press();
-    assert!(!pie.armed);
+    assert!(!pie.is_open());
 }
 
 #[test]
-fn click_only_binding_does_not_arm_the_pie() {
+fn click_only_binding_does_not_open_the_pie() {
     let (mut pie, _rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::None)]);
     assert!(!pie.should_open(), "a lone click binding is not a sector");
     pie.on_press();
-    assert!(!pie.armed);
+    assert!(!pie.is_open());
 }
 
 #[test]
@@ -326,7 +368,7 @@ fn cancel_closes_an_open_pie_and_resets() {
             committed: None
         })
     );
-    assert!(!pie.armed && !pie.open);
+    assert!(!pie.is_open());
     assert_eq!(pie.on_release(), None);
     assert!(
         drain(&mut rx).is_empty(),
@@ -351,7 +393,7 @@ fn press_without_cursor_keeps_the_hold_a_plain_swipe() {
     pie.set_bindings(vec![key_gesture(GestureDirection::Up)], HashMap::new());
     pie.on_press();
     pie.on_tick();
-    assert!(!pie.armed && !pie.open);
+    assert!(!pie.is_open());
     assert_eq!(pie.on_release(), None);
 }
 

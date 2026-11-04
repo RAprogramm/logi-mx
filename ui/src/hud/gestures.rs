@@ -787,7 +787,7 @@ fn radial_menu_group(toast: &Toasts, initial: &PieConfig) -> (PreferencesGroup, 
 
     let radius_row = ActionRow::new();
     radius_row.set_title("Activation radius");
-    radius_row.set_subtitle("Cursor travel in pixels that opens the menu");
+    radius_row.set_subtitle("Cursor travel in pixels that lets the mouse pick a sector");
     let radius_entry = Entry::new();
     radius_entry.set_width_chars(6);
     radius_entry.set_valign(gtk4::Align::Center);

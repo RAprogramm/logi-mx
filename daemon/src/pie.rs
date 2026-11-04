@@ -3,25 +3,27 @@
 
 //! Radial pie menu runtime for the diverted gesture button.
 //!
-//! While the gesture button is held, the cursor position around the press
-//! point selects one of eight sectors (octants) around the anchor; releasing
-//! over a sector that has a bound action fires it, like a Dota-style radial
-//! menu. This module is the daemon-side half of the feature: it runs the
-//! state machine and publishes [`PieEvent`] lines for the overlay renderer
-//! (a later stage) over a [`PieHub`] broadcast, mirroring the live telemetry
-//! fan-out.
+//! Pressing the gesture button opens the menu at the cursor: the ring shows
+//! one sector per bound direction. The selection follows the wheel — a
+//! committed swipe direction highlights its sector — and, as a secondary
+//! input, the cursor once it travels further than the activation radius from
+//! the anchor. Releasing over a highlighted sector that has a bound action
+//! fires it, like a Dota-style radial menu. This module is the daemon-side
+//! half of the feature: it runs the state machine and publishes [`PieEvent`]
+//! lines for the overlay renderer over a [`PieHub`] broadcast, mirroring the
+//! live telemetry fan-out.
 //!
-//! Everything cursor-driven is either a pure function ([`sector_for`]) or
+//! Everything input-driven is either a pure function ([`sector_for`]) or
 //! runs against an injected cursor reader, so the whole state machine is
 //! testable without Hyprland. The press point is captured through the
 //! Hyprland request socket ([`crate::hyprbind::fetch_cursor_pos`]) because
 //! raw-XY deltas carry no absolute position.
 //!
-//! Swipe semantics stay intact: while the pie is enabled and armed, raw-XY
-//! travel still feeds the swipe accumulator, so `OnPress`-mode swipe commits
-//! keep firing mid-hold exactly as before. Only the release moment changes:
-//! a hold whose pie was open fires the committed pie sector instead of the
-//! swipe `OnRelease` fallback, so one hold never fires twice.
+//! Swipe semantics stay intact: while the pie is enabled, raw-XY travel
+//! still feeds the swipe accumulator, so `OnPress`-mode swipe commits keep
+//! firing mid-hold exactly as before. Only the release moment changes: a
+//! hold whose pie was open fires the highlighted sector's `OnRelease`
+//! bindings instead of the swipe fallback, so one hold never fires twice.
 
 use std::{
     collections::HashMap,
@@ -54,9 +56,9 @@ pub struct PieSector {
 
 /// One event on the pie stream, mirroring the state machine transitions.
 ///
-/// `Open` is emitted the moment the cursor travels past the activation
-/// radius (not on press, so a plain tap emits nothing), `Highlight` on every
-/// sector change while open, and `Close` exactly once per `Open`.
+/// `Open` is emitted when the gesture button is pressed with the pie
+/// enabled and bound sectors, `Highlight` on every sector change while open
+/// (wheel swipe or cursor), and `Close` exactly once per `Open`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PieEvent {
     /// The pie opened at `anchor` with the sectors bound in the scope.
@@ -66,9 +68,9 @@ pub enum PieEvent {
         /// Bound sectors in binding order.
         sectors: Vec<PieSector>
     },
-    /// The sector under the cursor changed; `None` inside the dead zone.
+    /// The selected sector changed; `None` when nothing is selected.
     Highlight {
-        /// Sector under the cursor, `None` in the dead zone.
+        /// Selected sector, `None` while the cursor sits inside the gate.
         direction: Option<GestureDirection>
     },
     /// The pie closed; `committed` is the fired direction, if any.
@@ -198,15 +200,19 @@ type AnchorFetch = Box<dyn Fn() -> Option<(i32, i32)> + Send>;
 ///
 /// Owns the tuning, the effective binding scope (global bindings plus
 /// per-app profiles resolved through [`SharedFocus`]), the hold state
-/// (anchor, armed/open flags, last highlight) and the event fan-out. The
-/// host drives it with [`Self::on_press`], [`Self::on_tick`] per poll while
-/// the button is held, and [`Self::on_release`] or [`Self::on_cancel`] to
-/// settle the hold.
+/// (anchor, open flag, last highlight) and the event fan-out. The host
+/// drives it with [`Self::on_press`], [`Self::on_swipe`] when a swipe
+/// commits, [`Self::on_tick`] per poll while the button is held, and
+/// [`Self::on_release`] or [`Self::on_cancel`] to settle the hold.
 ///
-/// While the pie is enabled, swipe recognition keeps running in parallel:
-/// `OnPress`-mode swipe commits fire mid-hold unchanged. The pie only takes
-/// over the release moment: an open pie commits its sector and the host
-/// suppresses the swipe `OnRelease` fallback for that hold.
+/// A press with the pie enabled opens the ring at the cursor immediately.
+/// Selection then follows whichever input moves: a committed swipe direction
+/// highlights its sector, and a cursor further than the activation radius
+/// from the anchor highlights the sector it points at. While the pie is
+/// enabled, swipe recognition keeps running in parallel: `OnPress`-mode
+/// swipe commits fire mid-hold unchanged. The pie only takes over the
+/// release moment: an open pie commits its sector and the host suppresses
+/// the swipe `OnRelease` fallback for that hold.
 ///
 /// # Examples
 ///
@@ -233,7 +239,6 @@ pub struct PieRuntime {
     hub:          Option<PieHub>,
     anchor:       Option<(i32, i32)>,
     sectors:      Vec<PieSector>,
-    armed:        bool,
     open:         bool,
     highlight:    Option<GestureDirection>
 }
@@ -271,7 +276,6 @@ impl PieRuntime {
             hub:          None,
             anchor:       None,
             sectors:      Vec::new(),
-            armed:        false,
             open:         false,
             highlight:    None
         }
@@ -304,7 +308,7 @@ impl PieRuntime {
         self.profiles = profiles;
     }
 
-    /// Whether a press may arm the pie: enabled and at least one directional
+    /// Whether a press may open the pie: enabled and at least one directional
     /// sector bound in the effective scope. A lone click binding
     /// ([`GestureDirection::None`]) does not count.
     #[must_use]
@@ -316,15 +320,16 @@ impl PieRuntime {
                 .any(|gesture| gesture.direction != GestureDirection::None)
     }
 
-    /// Whether the pie is currently open (past the activation radius).
+    /// Whether the pie ring is currently on screen.
     #[must_use]
     pub const fn is_open(&self) -> bool {
         self.open
     }
 
     /// Handles the press edge: captures the cursor as the anchor, freezes
-    /// the bound sectors and arms the pie. Without bindings or without a
-    /// readable cursor the hold stays a plain swipe and nothing is sent.
+    /// the bound sectors and opens the ring right away. Without bindings or
+    /// without a readable cursor the hold stays a plain swipe and nothing
+    /// is sent.
     pub fn on_press(&mut self) {
         debug!(
             enabled = self.config.enabled,
@@ -340,23 +345,23 @@ impl PieRuntime {
         };
         self.anchor = Some(anchor);
         self.sectors = self.bound_sectors();
-        self.armed = true;
-        debug!(
-            ?anchor,
-            sectors = self.sectors.len(),
-            "pie: armed, waiting for the activation radius"
-        );
+        self.open = true;
+        debug!(?anchor, sectors = self.sectors.len(), "pie: open");
+        self.send(PieEvent::Open {
+            anchor,
+            sectors: self.sectors.clone()
+        });
     }
 
     /// Advances the state machine one poll while the button is held.
     ///
-    /// While armed, a cursor further than the activation radius from the
-    /// anchor opens the pie and emits [`PieEvent::Open`]. While open, the
-    /// sector under the cursor is recomputed and a change emits
-    /// [`PieEvent::Highlight`]. A tick without a readable cursor keeps the
-    /// previous state.
+    /// While open, a cursor further than the activation radius from the
+    /// anchor selects the sector it points at and a change emits
+    /// [`PieEvent::Highlight`]; a cursor inside the gate leaves the
+    /// selection to [`Self::on_swipe`]. A tick without a readable cursor
+    /// keeps the previous state.
     pub fn on_tick(&mut self) {
-        if !self.armed && !self.open {
+        if !self.open {
             return;
         }
         let (Some(cursor), Some(anchor)) = ((self.fetch_anchor)(), self.anchor) else {
@@ -366,17 +371,8 @@ impl PieRuntime {
             cursor.0.saturating_sub(anchor.0),
             cursor.1.saturating_sub(anchor.1)
         );
-        if self.armed {
-            if !beyond_radius(vector.0, vector.1, self.config.activation_radius) {
-                return;
-            }
-            self.armed = false;
-            self.open = true;
-            debug!(?anchor, sectors = self.sectors.len(), "pie: open");
-            self.send(PieEvent::Open {
-                anchor,
-                sectors: self.sectors.clone()
-            });
+        if !beyond_radius(vector.0, vector.1, self.config.activation_radius) {
+            return;
         }
         let sector = sector_for(vector.0, vector.1, self.config.dead_zone);
         if sector != self.highlight {
@@ -387,12 +383,32 @@ impl PieRuntime {
         }
     }
 
+    /// Folds a committed swipe direction into the open pie: the direction's
+    /// sector lights up, so scrolling the wheel selects without moving the
+    /// mouse. A direction that is not a bound sector still highlights — the
+    /// release simply commits nothing.
+    ///
+    /// # Arguments
+    ///
+    /// * `direction` - The direction the swipe accumulator just committed.
+    pub fn on_swipe(&mut self, direction: GestureDirection) {
+        if !self.open || self.highlight == Some(direction) {
+            return;
+        }
+        self.highlight = Some(direction);
+        debug!(?direction, "pie: swipe highlight");
+        self.send(PieEvent::Highlight {
+            direction: Some(direction)
+        });
+    }
+
     /// Settles the hold on release.
     ///
     /// If the pie was open, the highlighted sector commits when it has a
     /// bound action, [`PieEvent::Close`] is emitted and the state resets.
-    /// A hold that never opened (a tap or a tiny movement) returns `None`
-    /// and sends nothing, leaving the release to the swipe runtime.
+    /// A hold whose pie never opened (disabled, unbound, or no readable
+    /// cursor) returns `None` and sends nothing, leaving the release to the
+    /// swipe runtime.
     ///
     /// # Returns
     ///
@@ -425,7 +441,6 @@ impl PieRuntime {
     fn reset(&mut self) {
         self.anchor = None;
         self.sectors.clear();
-        self.armed = false;
         self.open = false;
         self.highlight = None;
     }

@@ -11,7 +11,8 @@
 //! the key injector.
 //!
 //! The runtime also hosts the radial pie menu ([`crate::pie::PieRuntime`]):
-//! the press and release edges arm and settle it, and the worker loop drives
+//! the press edge opens it, a committed swipe highlights its sector, and the
+//! release edge settles it; the worker loop drives
 //! [`GestureRuntime::on_pie_tick`] once per poll while the button is held.
 //! When the pie is disabled (the default) it never queries the cursor and
 //! the release path behaves exactly as without the feature.
@@ -294,7 +295,9 @@ impl GestureRuntime {
     }
 
     /// Folds one raw-XY report into the swipe accumulator and fires the
-    /// direction it commits, if any.
+    /// direction it commits, if any. A committed direction also lights up
+    /// the matching pie sector, so the wheel selects without moving the
+    /// mouse.
     pub fn on_raw_xy(&mut self, dx: i16, dy: i16) {
         if let Some(dir) =
             self.accumulator
@@ -302,12 +305,13 @@ impl GestureRuntime {
         {
             debug!("swipe committed: {dir:?}");
             self.last_commit = Some(dir);
+            self.pie.on_swipe(dir);
             self.fire(dir, Some(GestureMode::OnPress));
         }
     }
 
     /// Tracks the gesture button edge: press opens the swipe accumulator,
-    /// arms the pie and raises the live bit; release settles the hold and
+    /// opens the pie and raises the live bit; release settles the hold and
     /// lowers it.
     fn on_gesture_edge(&mut self, held: bool) {
         if held && !self.accumulator.is_holding() {
@@ -317,7 +321,7 @@ impl GestureRuntime {
             self.set_live_bit(BTN_BIT_GESTURE, true);
             self.pie.on_press();
         } else if !held && self.accumulator.is_holding() {
-            debug!("gesture button released");
+            debug!(pie_open = self.pie.is_open(), "gesture button released");
             self.set_live_bit(BTN_BIT_GESTURE, false);
             self.finish_hold();
         }
@@ -391,21 +395,19 @@ impl GestureRuntime {
 
     /// Settles a released hold.
     ///
-    /// When the pie was open at release it owns the hold: the committed
-    /// sector (if bound) fires and the swipe `OnRelease` fallback is
-    /// suppressed, so one hold never fires twice. Mid-hold `OnPress` swipe
+    /// When the pie was open at release it owns the hold: the highlighted
+    /// sector fires its `OnRelease` bindings and the swipe fallback is
+    /// suppressed, so one hold never fires twice — mid-hold `OnPress` swipe
     /// commits already fired through [`Self::on_raw_xy`] and are untouched.
-    /// When the pie never opened, the swipe release path is byte-identical
-    /// to the pie-less runtime.
+    /// A hold that highlighted nothing (a tap) falls through to the swipe
+    /// settlement so the click binding keeps working. When the pie never
+    /// opened, the release path is byte-identical to the pie-less runtime.
     fn finish_hold(&mut self) {
-        let pie_owned = self.pie.is_open();
         let pie_commit = self.pie.on_release();
         let swipe_commit = self.last_commit.take();
         let settled = self.accumulator.end();
-        if pie_owned {
-            if let Some(dir) = pie_commit {
-                self.fire(dir, None);
-            }
+        if let Some(dir) = pie_commit {
+            self.fire(dir, Some(GestureMode::OnRelease));
             return;
         }
         match settled {

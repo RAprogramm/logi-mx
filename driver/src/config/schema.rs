@@ -107,7 +107,8 @@ pub struct DeviceConfig {
 pub struct PieConfig {
     /// Whether the daemon opens the pie menu on a gesture hold.
     pub enabled:           bool,
-    /// Cursor travel from the press point that opens the menu, in pixels.
+    /// Cursor travel from the press point that hands sector selection to
+    /// the mouse, in pixels. Below it the wheel swipe owns the selection.
     pub activation_radius: i32,
     /// Radius inside which no sector is highlighted, in pixels.
     pub dead_zone:         i32
