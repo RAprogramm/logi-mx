@@ -134,6 +134,7 @@ pub struct Telemetry {
     pub anchor:  crate::live::SharedAnchor
 }
 
+#[cfg_attr(not(feature = "tray"), allow(clippy::trivially_copy_pass_by_ref))]
 fn run_device_worker(
     config: Config,
     rx: &mpsc::Receiver<DeviceEvent>,
@@ -283,6 +284,7 @@ fn sync_anchor(anchor: &crate::live::SharedAnchor, manager: &DevicePool) {
 /// concurrent exchanges. Discovery happens through the pool too, so a
 /// device that appeared without a udev event still gets cached and
 /// configured. Runs on the worker thread; blocking HID++ I/O is expected.
+#[cfg_attr(not(feature = "tray"), allow(clippy::trivially_copy_pass_by_ref))]
 fn refresh_and_notify(
     manager: &mut DevicePool,
     status: &SharedStatus,
