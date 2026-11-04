@@ -686,6 +686,9 @@ pub(super) struct PanelWidgets {
     /// DPI carried for the header chip so a battery refresh can repaint the
     /// chip without losing the DPI part.
     chip_dpi:          Option<u16>,
+    /// Battery text last shown on the header chip, kept so a DPI change can
+    /// repaint the chip without losing the battery part.
+    chip_battery:      Option<String>,
     /// Set once a snapshot (or its failure) has been applied; later
     /// deliveries never overwrite values the user may have edited.
     applied:           bool
@@ -693,22 +696,42 @@ pub(super) struct PanelWidgets {
 
 /// Paints a fresh battery reading onto the battery row and the header status
 /// chip so the panel never shows two different levels at once.
-///
-/// The chip keeps the connection wording and appends the DPI part recorded
-/// by the last snapshot.
-pub(super) fn apply_battery(widgets: &PanelWidgets, battery: &str) {
+pub(super) fn apply_battery(widgets: &mut PanelWidgets, battery: &str) {
     if let Some(row) = &widgets.battery_row {
         row.set_subtitle(battery);
     }
-    if let Some(chip) = &widgets.status_chip {
-        let mut text = format!("Connected · {battery}");
-        if let Some(dpi) = widgets.chip_dpi {
-            text = format!("{text} · {dpi} DPI");
-        }
-        chip.set_text(&text);
-        chip.remove_css_class("hud-status-bad");
-        chip.add_css_class("hud-status-ok");
+    widgets.chip_battery = Some(battery.to_string());
+    repaint_chip(widgets);
+}
+
+/// Reflects a successful DPI change on the current-DPI row and the header
+/// chip, so the chip never keeps showing the opening snapshot's value after
+/// the user applies a new one.
+pub(super) fn apply_dpi(widgets: &mut PanelWidgets, dpi: u16) {
+    widgets.chip_dpi = Some(dpi);
+    if let Some(row) = &widgets.dpi_row {
+        row.set_subtitle(&format!("{dpi} DPI"));
     }
+    repaint_chip(widgets);
+}
+
+/// Repaints the header chip from the recorded parts: connection wording,
+/// the last battery reading and the last known DPI, each present only when
+/// the daemon has supplied it.
+fn repaint_chip(widgets: &PanelWidgets) {
+    let Some(chip) = &widgets.status_chip else {
+        return;
+    };
+    let mut parts: Vec<String> = vec!["Connected".to_string()];
+    if let Some(battery) = &widgets.chip_battery {
+        parts.push(battery.clone());
+    }
+    if let Some(dpi) = widgets.chip_dpi {
+        parts.push(format!("{dpi} DPI"));
+    }
+    chip.set_text(&parts.join(" · "));
+    chip.remove_css_class("hud-status-bad");
+    chip.add_css_class("hud-status-ok");
 }
 
 /// Fills the registered panel widgets from a device snapshot.
@@ -716,18 +739,15 @@ pub(super) fn apply_battery(widgets: &PanelWidgets, battery: &str) {
 /// The snapshot-seeded controls start insensitive so their placeholder
 /// values can never be edited or applied before the device answers; a
 /// successful snapshot fills them in and enables them. `None` marks the
-/// device unreachable and leaves the controls at their defaults with
-/// explicit "unavailable" subtitles.
+/// device unreachable: the controls stay at their defaults with explicit
+/// "unavailable" subtitles, and because the snapshot counts as unapplied
+/// the loader keeps retrying until the daemon answers.
 fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceSnapshot>) {
-    {
-        let mut w = widgets.borrow_mut();
-        if w.applied {
-            return;
-        }
-        w.applied = true;
-        w.chip_dpi = snapshot.and_then(|snapshot| snapshot.dpi);
+    let mut w = widgets.borrow_mut();
+    if w.applied {
+        return;
     }
-    let w = widgets.borrow();
+    w.chip_dpi = snapshot.and_then(|snapshot| snapshot.dpi);
     let Some(snapshot) = snapshot else {
         if let Some(row) = &w.model_row {
             row.set_subtitle("daemon unavailable");
@@ -745,6 +765,7 @@ fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceS
         }
         return;
     };
+    w.applied = true;
     if let Some(row) = &w.model_row {
         row.set_subtitle(snapshot.name.as_str());
     }
@@ -788,21 +809,25 @@ fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceS
     if let Some(button) = &w.scroll_apply {
         button.set_sensitive(true);
     }
-    apply_battery(
-        &w,
-        &snapshot.battery.map_or_else(
-            || "unknown".to_string(),
-            |b| format!("{}% · {:?}", b.level, b.status)
-        )
+    let battery = snapshot.battery.map_or_else(
+        || "unknown".to_string(),
+        |b| format!("{}% · {:?}", b.level, b.status)
     );
+    apply_battery(&mut w, &battery);
 }
+
+/// Pause before re-reading a device snapshot that failed: the daemon may
+/// still be starting or the mouse may be out of radio range.
+const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 
 /// Loads the device snapshot off the main thread and applies it to the panel.
 ///
 /// Device I/O can take seconds (daemon round-trips, direct fallback scans),
 /// so it must never block the first frame. The worker parks the result in a
 /// shared slot and wakes the main context, where the registered hook applies
-/// it; a failed load still applies and marks the device unavailable.
+/// it; a failed load marks the device unavailable and re-arms this loader
+/// after [`SNAPSHOT_RETRY`], so the panel recovers on its own once the
+/// daemon answers again.
 fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
     let slot = Arc::new(Mutex::new(None::<Option<DeviceSnapshot>>));
     let slot_thread = Arc::clone(&slot);
@@ -812,6 +837,12 @@ fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
         let snapshot = slot_hook.lock().ok().and_then(|mut guard| guard.take());
         if let Some(snapshot) = snapshot {
             apply_snapshot(&widgets_hook, snapshot.as_ref());
+            if !widgets_hook.borrow().applied {
+                let widgets_retry = Rc::clone(&widgets_hook);
+                glib::timeout_add_local_once(SNAPSHOT_RETRY, move || {
+                    spawn_snapshot_loader(&widgets_retry);
+                });
+            }
         }
     });
     SNAPSHOT_HOOK.with(|cell| *cell.borrow_mut() = Some(hook));
@@ -834,6 +865,10 @@ fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
     {
         tracing::warn!("Failed to spawn the snapshot loader thread: {e}");
         apply_snapshot(widgets, None);
+        let widgets_retry = Rc::clone(widgets);
+        glib::timeout_add_local_once(SNAPSHOT_RETRY, move || {
+            spawn_snapshot_loader(&widgets_retry);
+        });
     }
 }
 

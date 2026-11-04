@@ -11,8 +11,8 @@ use libadwaita::{ActionRow, ApplicationWindow, PreferencesGroup, prelude::*};
 use logi_mx_daemon::ipc::{self, Response};
 
 use super::{
-    HudState, PanelWidgets, apply_battery, background_section, page_body, page_scroll, report,
-    toasts::Toasts
+    HudState, PanelWidgets, apply_battery, apply_dpi, background_section, page_body, page_scroll,
+    report, toasts::Toasts
 };
 
 /// DPI slider bounds accepted by the device.
@@ -67,15 +67,16 @@ pub(super) fn pointer_page(toast: &Toasts, widgets: &Rc<RefCell<PanelWidgets>>) 
     apply.set_sensitive(false);
     let sc = scale.clone();
     let to = toast.clone();
+    let widgets_apply = Rc::clone(widgets);
     apply.connect_clicked(move |_| {
         let dpi = scale_dpi(sc.value());
-        report(
-            ipc::try_request(&ipc::Request::SetDpi {
-                value: dpi
-            }),
-            &to,
-            &format!("DPI set to {dpi}")
-        );
+        let response = ipc::try_request(&ipc::Request::SetDpi {
+            value: dpi
+        });
+        if matches!(response, Some(Response::Ok)) {
+            apply_dpi(&mut widgets_apply.borrow_mut(), dpi);
+        }
+        report(response, &to, &format!("DPI set to {dpi}"));
     });
 
     group.add(&dpi_row);
@@ -126,7 +127,10 @@ pub(super) fn device_page(
             level,
             status
         }) => {
-            apply_battery(&widgets_refresh.borrow(), &format!("{level}% · {status}"));
+            apply_battery(
+                &mut widgets_refresh.borrow_mut(),
+                &format!("{level}% · {status}")
+            );
         }
         _ => {
             to.show("Daemon unavailable");

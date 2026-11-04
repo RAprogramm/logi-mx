@@ -287,22 +287,56 @@ pub(super) fn pie_page(toast: &Toasts) -> ScrolledWindow {
     body.append(&tuning);
     scroll.set_child(Some(&body));
 
-    if let Some(Response::Gestures {
+    let reload_model = Rc::clone(&model);
+    let reload_selected = Rc::clone(&selected);
+    scroll.connect_map(move |_| {
+        reload_pie(
+            &reload_model,
+            &area,
+            &widgets,
+            &reload_selected,
+            &details,
+            &editor
+        );
+    });
+    scroll
+}
+
+/// Reloads the wheel bindings and the tuning fields from the daemon.
+///
+/// Runs when the page is mapped rather than at build time: the HUD opens on
+/// another tab, so the page skips the round-trip until the user looks at it,
+/// and every later visit shows edits made on the Gestures page, by the CLI
+/// or by another HUD window.
+fn reload_pie(
+    model: &Rc<RefCell<WheelModel>>,
+    area: &DrawingArea,
+    widgets: &PieWidgets,
+    selected: &Cell<Option<GestureDirection>>,
+    details: &Label,
+    editor: &SectorEditor
+) {
+    let Some(Response::Gestures {
         gestures,
         pie,
         ..
     }) = ipc::try_request(&ipc::Request::GetGestures)
-    {
-        model.borrow_mut().bindings = gestures
-            .into_iter()
-            .filter(|gesture| gesture.direction != GestureDirection::None)
-            .collect();
-        area.queue_draw();
-        widgets.enable.set_active(pie.enabled);
-        widgets.radius.set_text(&pie.activation_radius.to_string());
-        widgets.dead.set_text(&pie.dead_zone.to_string());
+    else {
+        return;
+    };
+    model.borrow_mut().bindings = gestures
+        .into_iter()
+        .filter(|gesture| gesture.direction != GestureDirection::None)
+        .collect();
+    area.queue_draw();
+    widgets.enable.set_active(pie.enabled);
+    widgets.radius.set_text(&pie.activation_radius.to_string());
+    widgets.dead.set_text(&pie.dead_zone.to_string());
+    if let Some(direction) = selected.get() {
+        let label = model.borrow().label_for(direction);
+        details.set_text(&format!("{direction:?} — {label}"));
+        editor.inspect(&model.borrow(), Some(direction));
     }
-    scroll
 }
 
 /// Everything a sector editor callback needs to act on the selection.
@@ -547,6 +581,7 @@ fn parse_pie_px(text: &str) -> Option<i32> {
 
 /// Widgets of the Radial menu group, kept so the initial daemon reply can
 /// fill them in after the page was built.
+#[derive(Clone)]
 struct PieWidgets {
     enable: Switch,
     radius: Entry,
