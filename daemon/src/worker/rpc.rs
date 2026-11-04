@@ -41,6 +41,28 @@ fn action_rejection(action: &Action) -> Option<String> {
     }
 }
 
+/// Wraps a rejection message into the error reply every handler branch uses.
+const fn rejection(message: String) -> ipc::Response {
+    ipc::Response::Error {
+        message
+    }
+}
+
+/// Rejects pie tuning the menu cannot act on.
+///
+/// A non-positive activation radius is meaningless, and a dead zone larger
+/// than the activation radius keeps the pointer inside the gate forever:
+/// pointing could never select a sector, only the wheel still could.
+fn pie_rejection(activation_radius: i32, dead_zone: i32) -> Option<String> {
+    if activation_radius < 1 || dead_zone < 0 {
+        return Some(
+            "pie activation radius must be positive and the dead zone not negative".to_string()
+        );
+    }
+    (dead_zone > activation_radius)
+        .then(|| "pie dead zone must not exceed the activation radius".to_string())
+}
+
 /// Rejects everything but the two thumb side buttons: the firmware buttons
 /// and the gesture control belong to other runtimes.
 fn thumb_button_rejection(button: ButtonId) -> Option<String> {
@@ -97,9 +119,7 @@ pub(super) fn handle_gesture_request(
             action
         } => {
             if let Some(message) = action_rejection(action) {
-                return Some(ipc::Response::Error {
-                    message
-                });
+                return Some(rejection(message));
             }
             let (enabled, mut bindings, profiles) = manager.gesture_config();
             upsert_binding(&mut bindings, *direction, *mode, action);
@@ -119,9 +139,7 @@ pub(super) fn handle_gesture_request(
             action
         } => {
             if let Some(message) = action_rejection(action) {
-                return Some(ipc::Response::Error {
-                    message
-                });
+                return Some(rejection(message));
             }
             let (enabled, bindings, mut profiles) = manager.gesture_config();
             let entry = profiles.entry(app_id.clone()).or_default();
@@ -149,8 +167,15 @@ pub(super) fn handle_gesture_request(
             manager.set_gestures(enabled, bindings, profiles)
         }
         ipc::Request::SetPie {
+            activation_radius,
+            dead_zone,
             ..
-        } => manager.set_pie_request(request),
+        } => {
+            if let Some(message) = pie_rejection(*activation_radius, *dead_zone) {
+                return Some(rejection(message));
+            }
+            manager.set_pie_request(request)
+        }
         _ => return None
     };
 
@@ -192,9 +217,7 @@ pub(super) fn handle_button_request(
             if let Some(message) =
                 thumb_button_rejection(*button).or_else(|| action_rejection(action))
             {
-                return Some(ipc::Response::Error {
-                    message
-                });
+                return Some(rejection(message));
             }
             manager.set_button_request(request)
         }
@@ -497,6 +520,20 @@ mod tests {
         ));
         assert!(!config.devices[0].smartshift.enabled);
         assert_eq!(config.devices[0].smartshift.threshold, 13);
+    }
+
+    #[test]
+    fn test_pie_rejection_bounds_the_gate_inside_the_radius() {
+        assert!(pie_rejection(40, 12).is_none());
+        assert!(pie_rejection(40, 0).is_none(), "a zero gate is legal");
+        assert!(pie_rejection(40, 40).is_none(), "equal radii are legal");
+        assert!(
+            pie_rejection(40, 41).is_some(),
+            "the gate may not swallow the ring"
+        );
+        assert!(pie_rejection(0, 0).is_some(), "a zero radius opens nothing");
+        assert!(pie_rejection(-1, 0).is_some());
+        assert!(pie_rejection(40, -1).is_some());
     }
 
     #[test]
