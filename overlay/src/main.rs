@@ -440,6 +440,9 @@ fn arm_animation(
         };
         if !alive {
             flag.set(false);
+            for area in areas_tick.iter() {
+                area.queue_draw();
+            }
             return glib::ControlFlow::Break;
         }
         for area in areas_tick.iter() {
