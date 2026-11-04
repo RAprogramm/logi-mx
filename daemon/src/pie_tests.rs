@@ -18,7 +18,7 @@ use tokio::sync::broadcast::{Receiver, error::TryRecvError};
 
 use super::{
     DOUBLE_CLICK_WINDOW, HOLD_DELAY, PieEvent, PieHub, PieRelease, PieRuntime, PieSector,
-    action_summary, direction_angle, sector_among, sectors_from
+    action_summary, direction_angle, sector_among, sectors_from, wedge_for
 };
 
 /// Builds a key-chord gesture bound to a named evdev key.
@@ -717,4 +717,73 @@ fn hub_replays_the_latched_state_until_close() {
         committed: None
     });
     assert_eq!(hub.replay(), None, "a closed hold replays nothing");
+}
+
+#[test]
+fn wedge_cells_tile_the_circle_for_any_subset() {
+    let subset = [
+        GestureDirection::Right,
+        GestureDirection::Down,
+        GestureDirection::Up
+    ];
+    let sectors: Vec<PieSector> = subset.iter().copied().map(sector).collect();
+    let mut cells: Vec<(f64, f64)> = subset
+        .iter()
+        .filter_map(|direction| wedge_for(*direction, &sectors))
+        .collect();
+    cells.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let mut covered = 0.0;
+    for (index, (start, end)) in cells.iter().enumerate() {
+        assert!(end > start, "every cell runs forward");
+        covered += end - start;
+        let next = cells.get(index + 1).map_or_else(
+            || cells[0].0 + std::f64::consts::TAU,
+            |(next_start, _)| *next_start
+        );
+        assert!(
+            (next - end).abs() < 1e-9,
+            "cells must butt together without gaps or overlap"
+        );
+    }
+    assert!(
+        (covered - std::f64::consts::TAU).abs() < 1e-9,
+        "the cells must cover the whole circle"
+    );
+}
+
+#[test]
+fn wedge_cells_reproduce_octants_when_all_eight_are_bound() {
+    let all = [
+        GestureDirection::Right,
+        GestureDirection::DownRight,
+        GestureDirection::Down,
+        GestureDirection::DownLeft,
+        GestureDirection::Left,
+        GestureDirection::UpLeft,
+        GestureDirection::Up,
+        GestureDirection::UpRight
+    ];
+    let sectors: Vec<PieSector> = all.iter().copied().map(sector).collect();
+    let octant = std::f64::consts::TAU / 8.0;
+    for direction in all {
+        let (start, end) = wedge_for(direction, &sectors).expect("bound");
+        let centre = direction_angle(direction).expect("directional");
+        assert!((end - start - octant).abs() < 1e-9, "each octant is 45°");
+        assert!(
+            (f64::midpoint(start, end) - centre).abs() < 1e-9,
+            "with all eight bound every cell is centred on its direction"
+        );
+    }
+}
+
+#[test]
+fn wedge_for_click_and_unbound_directions_is_none() {
+    let sectors = vec![sector(GestureDirection::Up)];
+    assert_eq!(wedge_for(GestureDirection::None, &sectors), None);
+    assert_eq!(wedge_for(GestureDirection::Left, &sectors), None);
+    let lone = wedge_for(GestureDirection::Up, &sectors).expect("the only sector owns the circle");
+    assert!(
+        (lone.1 - lone.0 - std::f64::consts::TAU).abs() < 1e-9,
+        "a lone sector spans the full turn"
+    );
 }

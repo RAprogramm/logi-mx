@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-//! Unit tests for the pure renderer state: monitor mapping, wedge tiling
-//! against the daemon's sector centres, label truncation and the scene
-//! state machine.
+//! Unit tests for the pure renderer state: monitor mapping, label
+//! truncation and the scene state machine.
 
-use logi_mx_daemon::pie::{PieEvent, PieSector, direction_angle};
+use logi_mx_daemon::pie::{PieEvent, PieSector};
 use logi_mx_driver::devices::GestureDirection;
 
-use super::{MonitorGeom, PieScene, anchor_monitor, logical_anchor, truncate_label, wedge_for};
+use super::{MonitorGeom, PieScene, anchor_monitor, logical_anchor, truncate_label};
 
 /// A scale-2 primary (1920×1080 logical) plus a scale-1 secondary placed
 /// to its right, mirroring the maintainer's live layout.
@@ -60,62 +59,6 @@ fn monitor_edges_are_half_open() {
     let monitors = monitors();
     assert_eq!(anchor_monitor((1920, 0), &monitors), Some(1));
     assert_eq!(anchor_monitor((1919, 1079), &monitors), Some(0));
-}
-
-#[test]
-fn wedges_tile_the_full_circle_without_gaps() {
-    let cardinals = [
-        GestureDirection::Right,
-        GestureDirection::Down,
-        GestureDirection::Left,
-        GestureDirection::Up
-    ];
-    let quarter = std::f64::consts::TAU / 4.0;
-    let mut covered = 0.0;
-    for direction in cardinals {
-        let (start, end) = wedge_for(direction, 4).unwrap_or((f64::NAN, f64::NAN));
-        let centre = direction_angle(direction).unwrap_or(f64::NAN);
-        assert!(
-            (end - start - quarter).abs() < 1e-12,
-            "each of four sectors spans a quarter turn"
-        );
-        assert!(
-            (f64::midpoint(start, end) - centre).abs() < 1e-12,
-            "the wedge of {direction:?} must be centred on its angle"
-        );
-        covered += end - start;
-    }
-    assert!(
-        (covered - std::f64::consts::TAU).abs() < 1e-12,
-        "four wedges must cover the whole circle"
-    );
-}
-
-#[test]
-fn eight_sectors_reproduce_the_octants() {
-    let all = [
-        GestureDirection::Right,
-        GestureDirection::DownRight,
-        GestureDirection::Down,
-        GestureDirection::DownLeft,
-        GestureDirection::Left,
-        GestureDirection::UpLeft,
-        GestureDirection::Up,
-        GestureDirection::UpRight
-    ];
-    let octant = std::f64::consts::TAU / 8.0;
-    for direction in all {
-        let (start, end) = wedge_for(direction, 8).unwrap_or((f64::NAN, f64::NAN));
-        assert!(
-            (end - start - octant).abs() < 1e-12,
-            "each of eight sectors spans an octant"
-        );
-    }
-}
-
-#[test]
-fn wedge_for_click_direction_is_none() {
-    assert_eq!(wedge_for(GestureDirection::None, 4), None);
 }
 
 #[test]

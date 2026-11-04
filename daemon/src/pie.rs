@@ -326,6 +326,87 @@ fn wrapped_distance(angle: f64, centre: f64) -> f64 {
     diff.min(tau - diff)
 }
 
+/// The angular cell of `direction` among the bound sectors.
+///
+/// Every point of the cell lies nearer to this sector's centre than to any
+/// other bound centre, so the cells tile the full circle without overlap or
+/// gaps no matter which subset of directions is bound.
+///
+/// # Arguments
+///
+/// * `direction` - The sector whose cell is wanted.
+/// * `sectors` - The bound sectors advertised with the pie.
+///
+/// # Returns
+///
+/// `(start, end)` in cairo radians with `end > start` (the cell may run
+/// past π), or `None` for the non-directional click binding or a direction
+/// absent from `sectors`.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_daemon::pie::{PieSector, wedge_for};
+/// use logi_mx_driver::devices::GestureDirection;
+///
+/// let sectors = vec![
+///     PieSector {
+///         direction: GestureDirection::Up,
+///         label:     String::new(),
+///         command:   None
+///     },
+///     PieSector {
+///         direction: GestureDirection::Right,
+///         label:     String::new(),
+///         command:   None
+///     },
+/// ];
+/// let (start, end) = wedge_for(GestureDirection::Right, &sectors).expect("bound");
+/// assert!(
+///     end > start,
+///     "the cell spans between the neighbouring midpoints"
+/// );
+/// assert!(
+///     start < 0.0 && end > 0.0,
+///     "the Right cell straddles angle zero"
+/// );
+/// assert!(wedge_for(GestureDirection::None, &sectors).is_none());
+/// ```
+#[must_use]
+#[allow(
+    dead_code,
+    reason = "wedge geometry is consumed by the overlay and HUD crates"
+)]
+pub fn wedge_for(direction: GestureDirection, sectors: &[PieSector]) -> Option<(f64, f64)> {
+    let centre = direction_angle(direction)?;
+    let mut centres: Vec<f64> = sectors
+        .iter()
+        .filter_map(|sector| direction_angle(sector.direction))
+        .collect();
+    centres.sort_by(f64::total_cmp);
+    centres.dedup_by(|left, right| left.total_cmp(right).is_eq());
+    let count = centres.len();
+    let index = centres
+        .iter()
+        .position(|candidate| (candidate - centre).abs() < f64::EPSILON)?;
+    if count == 1 {
+        return Some((centre - std::f64::consts::PI, centre + std::f64::consts::PI));
+    }
+    let previous = centres[(index + count - 1) % count];
+    let next = centres[(index + 1) % count];
+    let mut start = arc_midpoint(previous, centre);
+    let end = arc_midpoint(centre, next);
+    if start >= end {
+        start -= std::f64::consts::TAU;
+    }
+    Some((start, end))
+}
+
+/// The midpoint of the counter-clockwise arc from `from` to `to`.
+fn arc_midpoint(from: f64, to: f64) -> f64 {
+    from + (to - from).rem_euclid(std::f64::consts::TAU) / 2.0
+}
+
 /// Selects the bound sector a cursor vector points at: the one whose centre
 /// angle is nearest, so any number of sectors tiles the circle without
 /// gaps and selection matches the painted wedges exactly.

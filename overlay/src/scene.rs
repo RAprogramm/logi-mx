@@ -10,7 +10,7 @@
 //! keeps the small state machine the overlay paints: nothing here touches
 //! GTK, sockets or the clock, so the whole mapping is unit-testable headless.
 
-use logi_mx_daemon::pie::{PieEvent, PieSector, direction_angle};
+use logi_mx_daemon::pie::{PieEvent, PieSector};
 use logi_mx_driver::devices::GestureDirection;
 
 /// Logical geometry of one monitor, in Hyprland global coordinates.
@@ -146,44 +146,6 @@ pub fn logical_anchor(anchor: (i32, i32), monitor: &MonitorGeom) -> (f64, f64) {
         f64::from(anchor.0.saturating_sub(monitor.x)),
         f64::from(anchor.1.saturating_sub(monitor.y))
     )
-}
-
-/// The wedge `(start, end)` angles of a direction when `count` sectors tile
-/// the circle, in cairo radians, or `None` for [`GestureDirection::None`].
-///
-/// Shared contract with the daemon: every sector is centred on its
-/// [`direction_angle`] and spans `360° / count`, so any number of bound
-/// directions fills the ring edge to edge with no empty gaps, and the wedge
-/// under the cursor is exactly the sector [`logi_mx_daemon::pie::sector_among`]
-/// selects.
-///
-/// # Arguments
-///
-/// * `direction` - Sector direction as advertised by the daemon.
-/// * `count` - Number of sectors in the open menu, at least 1.
-///
-/// # Returns
-///
-/// `(start, end)` in cairo radians with `end − start == 360° / count`, or
-/// `None` for the non-directional click binding.
-///
-/// # Examples
-///
-/// ```
-/// use logi_mx_driver::devices::GestureDirection;
-/// use logi_mx_overlay::scene::wedge_for;
-///
-/// if let Some((start, end)) = wedge_for(GestureDirection::Right, 4) {
-///     assert!(start < 0.0 && end > 0.0);
-/// }
-/// assert!(wedge_for(GestureDirection::None, 4).is_none());
-/// ```
-#[must_use]
-pub fn wedge_for(direction: GestureDirection, count: usize) -> Option<(f64, f64)> {
-    let centre = direction_angle(direction)?;
-    let sectors = u32::try_from(count.max(1)).ok()?;
-    let half = std::f64::consts::PI / f64::from(sectors);
-    Some((centre - half, centre + half))
 }
 
 /// Cuts a sector label to at most `max_chars` characters, appending `…`

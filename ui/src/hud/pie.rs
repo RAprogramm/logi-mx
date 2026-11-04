@@ -17,7 +17,7 @@ use gtk4::{Button, DrawingArea, Entry, GestureClick, Label, ScrolledWindow, Swit
 use libadwaita::{ActionRow, PreferencesGroup, prelude::*};
 use logi_mx_daemon::{
     ipc::{self, Response},
-    pie::{PieSector, action_summary, direction_angle}
+    pie::{PieSector, action_summary, direction_angle, wedge_for}
 };
 use logi_mx_driver::{
     config::PieConfig,
@@ -322,6 +322,18 @@ fn bind_selected(ctx: &SectorContext, action: Option<Action>, success: &str) {
         ctx.toast.show("Select a sector first");
         return;
     };
+    bind_to(ctx, direction, action, success);
+}
+
+/// Sends `action` for `direction` — the sector captured when the action was
+/// requested, not whatever is selected by the time a callback runs — and
+/// reflects it on the wheel.
+fn bind_to(
+    ctx: &SectorContext,
+    direction: GestureDirection,
+    action: Option<Action>,
+    success: &str
+) {
     let Some(action) = action else {
         ctx.toast.show("Enter a command first");
         return;
@@ -369,11 +381,16 @@ fn wire_sector_editor(ctx: &SectorContext) {
     ctx.editor.pick_btn.connect_clicked({
         let ctx = ctx.clone();
         move |_| {
+            let Some(direction) = ctx.selected.get() else {
+                ctx.toast.show("Select a sector first");
+                return;
+            };
             let picker_toast = ctx.toast.clone();
             let picked = ctx.clone();
             open_keybind_picker(&picker_toast, move |keys| {
-                bind_selected(
+                bind_to(
                     &picked,
+                    direction,
                     Some(Action::Keypress {
                         keys
                     }),
@@ -429,12 +446,8 @@ fn paint_wheel(cr: &cairo::Context, width: f64, height: f64, model: &WheelModel)
         let _ = cr.stroke();
         return;
     }
-    let Ok(count) = u32::try_from(sectors.len()) else {
-        return;
-    };
-    let half = std::f64::consts::PI / f64::from(count);
     for sector in &sectors {
-        let Some(middle) = direction_angle(sector.direction) else {
+        let Some((start, end)) = wedge_for(sector.direction, &sectors) else {
             continue;
         };
         let (red, green, blue, alpha) = if model.selected == Some(sector.direction) {
@@ -443,8 +456,8 @@ fn paint_wheel(cr: &cairo::Context, width: f64, height: f64, model: &WheelModel)
             FILL_BASE
         };
         cr.new_path();
-        cr.arc(centre, centre, outer, middle - half, middle + half);
-        cr.arc_negative(centre, centre, INNER_RADIUS, middle + half, middle - half);
+        cr.arc(centre, centre, outer, start, end);
+        cr.arc_negative(centre, centre, INNER_RADIUS, end, start);
         cr.close_path();
         cr.set_source_rgba(red, green, blue, alpha);
         let _ = cr.fill();
@@ -471,9 +484,10 @@ fn paint_labels(cr: &cairo::Context, centre: f64, outer: f64, sectors: &[PieSect
     cr.set_source_rgba(red, green, blue, alpha);
     let radius = f64::midpoint(outer, INNER_RADIUS);
     for sector in sectors {
-        let Some(middle) = direction_angle(sector.direction) else {
+        let Some((start, end)) = wedge_for(sector.direction, sectors) else {
             continue;
         };
+        let middle = f64::midpoint(start, end);
         let mut label: String = sector.label.chars().take(LABEL_MAX_CHARS).collect();
         if sector.label.chars().count() > LABEL_MAX_CHARS {
             label.push('…');
@@ -601,6 +615,10 @@ fn radial_menu_group(toast: &Toasts, initial: &PieConfig) -> (PreferencesGroup, 
             toast_apply.show("Pie radius and dead zone: whole pixels, 1–4000");
             return;
         };
+        if dead > radius {
+            toast_apply.show("Dead zone must not exceed the activation radius");
+            return;
+        }
         let response = ipc::try_request(&ipc::Request::SetPie {
             enabled:           btn_switch.is_active(),
             activation_radius: radius,

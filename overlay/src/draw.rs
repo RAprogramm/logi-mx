@@ -12,10 +12,11 @@
 //! on every theme and compositor.
 
 use gtk4::cairo::{Context, FontSlant, FontWeight, LineCap, RadialGradient};
+use logi_mx_daemon::pie::wedge_for;
 
 use crate::{
     icons::{self, ICON_SIZE, IconCache},
-    scene::{PieScene, truncate_label, wedge_for}
+    scene::{PieScene, truncate_label}
 };
 
 /// Smoothed motion values the host computes per frame: where the aim needle
@@ -210,7 +211,7 @@ fn paint_bloomed(
     paint_shadow(cr, cx, cy);
     paint_sectors(cr, cx, cy, scene);
     if let Some((angle, highlight_alpha)) = motion.highlight {
-        paint_highlight(cr, cx, cy, scene.sectors.len(), angle, highlight_alpha);
+        paint_highlight(cr, cx, cy, highlight_half(scene), angle, highlight_alpha);
     }
     paint_separators(cr, cx, cy, scene);
     if let Some(angle) = motion.needle {
@@ -268,9 +269,8 @@ fn paint_charge(cr: &Context, cx: f64, cy: f64, progress: f64) {
 fn paint_sectors(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
     let (red, green, blue, alpha) = FILL_BASE;
     cr.set_source_rgba(red, green, blue, alpha);
-    let count = scene.sectors.len();
     for sector in &scene.sectors {
-        let Some((start, end)) = wedge_for(sector.direction, count) else {
+        let Some((start, end)) = wedge_for(sector.direction, &scene.sectors) else {
             continue;
         };
         cr.new_path();
@@ -284,14 +284,10 @@ fn paint_sectors(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
 /// Fills the highlight wedge centred on `angle`, the host having animated
 /// the slide from the previous sector, so selection glides instead of
 /// jumping.
-fn paint_highlight(cr: &Context, cx: f64, cy: f64, count: usize, angle: f64, alpha: f64) {
-    if alpha <= 0.0 || count == 0 {
+fn paint_highlight(cr: &Context, cx: f64, cy: f64, half: f64, angle: f64, alpha: f64) {
+    if alpha <= 0.0 || half <= 0.0 {
         return;
     }
-    let Ok(sectors) = u32::try_from(count) else {
-        return;
-    };
-    let half = std::f64::consts::PI / f64::from(sectors);
     let (red, green, blue, base) = FILL_HIGHLIGHT;
     cr.set_source_rgba(red, green, blue, base * alpha);
     cr.new_path();
@@ -330,15 +326,30 @@ fn paint_needle(cr: &Context, cx: f64, cy: f64, angle: f64) {
     let _ = cr.fill();
 }
 
+/// Half-width of the highlighted sector's cell, so the sliding wedge covers
+/// exactly the sector it lands on; an even split is the fallback while no
+/// sector is highlighted.
+fn highlight_half(scene: &PieScene) -> f64 {
+    scene
+        .highlight
+        .and_then(|direction| wedge_for(direction, &scene.sectors))
+        .map_or_else(
+            || {
+                u32::try_from(scene.sectors.len().max(1))
+                    .map_or(0.0, |count| std::f64::consts::PI / f64::from(count))
+            },
+            |(start, end)| (end - start) / 2.0
+        )
+}
+
 /// Strokes the hairline where each sector begins, keeping neighbours crisp
 /// without leaving empty gaps between them.
 fn paint_separators(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
-    let count = scene.sectors.len();
     let (red, green, blue, alpha) = SEPARATOR;
     cr.set_source_rgba(red, green, blue, alpha);
     cr.set_line_width(SEPARATOR_WIDTH);
     for sector in &scene.sectors {
-        let Some((start, _)) = wedge_for(sector.direction, count) else {
+        let Some((start, _)) = wedge_for(sector.direction, &scene.sectors) else {
             continue;
         };
         cr.new_path();
@@ -375,21 +386,17 @@ fn paint_labels(cr: &Context, cx: f64, cy: f64, scene: &PieScene, icons: &IconCa
     cr.select_font_face(LABEL_FONT, FontSlant::Normal, FontWeight::Normal);
     cr.set_font_size(LABEL_SIZE);
     let radius = (RING_OUTER - RING_INNER).mul_add(LABEL_BAND, RING_INNER);
-    let count = scene.sectors.len();
     let scale = f64::from(scene.scale.max(1));
     let px = ICON_SIZE.saturating_mul(scene.scale.max(1));
     for sector in &scene.sectors {
-        let Some((start, end)) = wedge_for(sector.direction, count) else {
+        let Some((start, end)) = wedge_for(sector.direction, &scene.sectors) else {
             continue;
         };
         let middle = f64::midpoint(start, end);
         let bx = radius.mul_add(middle.cos(), cx);
         let by = radius.mul_add(middle.sin(), cy);
         let label = truncate_label(&sector.label, LABEL_MAX_CHARS);
-        let Ok(sectors) = u32::try_from(count.max(1)) else {
-            continue;
-        };
-        let half_wedge = std::f64::consts::PI / f64::from(sectors);
+        let half_wedge = (end - start) / 2.0;
         let chord = (2.0 * radius).mul_add(half_wedge.sin(), -LABEL_SIDE_PAD);
         let label = fit_to_width(cr, &label, chord.max(0.0));
         let icon = icons.surface(sector.command.as_deref(), px);
