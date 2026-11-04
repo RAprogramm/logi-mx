@@ -410,6 +410,12 @@ jobs:
           echo "version_bumped=true" >> $GITHUB_OUTPUT
           echo "New version: $NEW_VERSION"
 
+      - name: Install git-cliff
+        if: steps.bump.outputs.version_bumped == 'true'
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: git-cliff
+
       - name: Update files and create tag
         if: steps.bump.outputs.version_bumped == 'true'
         run: |
@@ -419,17 +425,55 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
-          DEP_PREFIX="logi-mx-driver = { path = \"driver\", version = "
-          sed -i \
-            "s|^${DEP_PREFIX}.*|${DEP_PREFIX}\"${NEW_VERSION}\" }|" \
-            Cargo.toml
           sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
 
-          git add Cargo.toml PKGBUILD
+          python3 - "$NEW_VERSION" <<'PYEOF'
+          import re, sys
+          new = sys.argv[1]
+          names = ("logi-mx", "logi-mx-driver", "logi-mx-daemon",
+                   "logi-mx-ui", "logi-mx-overlay")
+          text = open("Cargo.lock").read()
+          for name in names:
+              pat = r'(name = "%s"\nversion = ")[^"]*(")' % name
+              text = re.sub(pat, r"\g<1>" + new + r"\g<2>", text)
+          open("Cargo.lock", "w").write(text)
+          PYEOF
+
+          git add Cargo.toml Cargo.lock PKGBUILD
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git tag "v${NEW_VERSION}"
+
+          git-cliff --config cliff.toml -o CHANGELOG.md
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for ${NEW_VERSION}"
+          git tag -f "v${NEW_VERSION}"
+
           git push origin main
           git push origin "v${NEW_VERSION}"
+
+      - name: Pin the release archive checksum
+        if: steps.bump.outputs.version_bumped == 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          REPO="${GITHUB_REPOSITORY}"
+          URL="https://github.com/${REPO}/archive/v${NEW_VERSION}.tar.gz"
+          SHA=""
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            SHA=$(curl -fsSL "$URL" | sha256sum | cut -d' ' -f1 || true)
+            [ -n "$SHA" ] && break
+            sleep 5
+          done
+          if [ -z "$SHA" ]; then
+            echo "::warning::could not fetch ${URL};"
+            echo "PKGBUILD keeps its placeholder checksum"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          sed -i "s/^sha256sums=.*/sha256sums=('${SHA}')/" PKGBUILD
+          git add PKGBUILD
+          git commit -m "chore: update PKGBUILD checksum for v${NEW_VERSION}"
+          git push origin main
 
   # ============================================================================
   # RELEASE PIPELINE - runs after version bump OR on tag push
