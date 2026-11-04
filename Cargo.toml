@@ -3,7 +3,7 @@ resolver = "3"
 members = ["driver", "daemon", "cli", "ui", "overlay"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["RAprogramm <andrey.rozanov.vl@gmail.com>"]
 license = "MIT"
