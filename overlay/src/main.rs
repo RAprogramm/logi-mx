@@ -162,8 +162,11 @@ impl Stage {
 ///
 /// The process exit code produced by the GTK main loop.
 fn main() -> glib::ExitCode {
-    if std::env::var("WAYLAND_DISPLAY").is_err() && std::env::var("DISPLAY").is_err() {
-        eprintln!("No graphical session detected; logi-mx-overlay requires Wayland or X11");
+    if std::env::var("WAYLAND_DISPLAY").is_err() {
+        eprintln!(
+            "No Wayland session detected; logi-mx-overlay needs the layer-shell protocol \
+             and does not run on X11"
+        );
         return glib::ExitCode::FAILURE;
     }
 
@@ -194,6 +197,14 @@ fn build_overlay(app: &Application) {
     if !app.windows().is_empty() {
         return;
     }
+    if !gtk4_layer_shell::is_supported() {
+        eprintln!(
+            "overlay: the compositor does not advertise wlr-layer-shell; \
+             the pie cannot be drawn, exiting"
+        );
+        app.quit();
+        return;
+    }
     let monitors = monitor_geometries();
     if monitors.is_empty() {
         eprintln!("overlay: the display reported no monitors, nothing to draw on");
@@ -213,24 +224,65 @@ fn build_overlay(app: &Application) {
     let queue = Arc::new(Mutex::new(Vec::<PieEvent>::new()));
     let connected = Arc::new(AtomicBool::new(false));
 
-    let mut areas = Vec::with_capacity(monitors.len());
+    let areas: Rc<RefCell<Vec<DrawingArea>>> =
+        Rc::new(RefCell::new(Vec::with_capacity(monitors.len())));
+    let tracked: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
     for (index, (monitor, geom)) in monitors.iter().enumerate() {
-        areas.push(monitor_window(app, monitor, *geom, index, &stage));
+        areas
+            .borrow_mut()
+            .push(monitor_window(app, monitor, *geom, index, &stage));
+        tracked
+            .borrow_mut()
+            .push(monitor.connector().unwrap_or_default().to_string());
     }
+    watch_monitors(app, &stage, &areas, &tracked);
 
     glib::timeout_add_local_once(Duration::from_millis(INDEX_WARM_MS), {
         let stage = Rc::clone(&stage);
         move || stage.borrow_mut().icons.warm_index()
     });
 
-    install_hook(
-        stage,
-        Arc::clone(&queue),
-        Arc::clone(&connected),
-        Rc::new(areas)
-    );
+    install_hook(stage, Arc::clone(&queue), Arc::clone(&connected), areas);
     stream::spawn(Arc::clone(&queue), Arc::clone(&connected), make_wake());
     std::mem::forget(app.hold());
+}
+
+/// Keeps the per-monitor surfaces in sync with the compositor: a monitor
+/// connected after startup gets its window, and the scene geometries
+/// always match the live monitor list so anchors map correctly.
+fn watch_monitors(
+    app: &Application,
+    stage: &Rc<RefCell<Stage>>,
+    areas: &Rc<RefCell<Vec<DrawingArea>>>,
+    tracked: &Rc<RefCell<Vec<String>>>
+) {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+    let app = app.clone();
+    let stage = Rc::clone(stage);
+    let areas = Rc::clone(areas);
+    let tracked = Rc::clone(tracked);
+    display.monitors().connect_items_changed(move |_, _, _, _| {
+        let geometries = monitor_geometries();
+        stage.borrow_mut().monitors = geometries.iter().map(|(_, geom)| *geom).collect();
+        let mut keys = tracked.borrow_mut();
+        keys.retain(|key| {
+            geometries
+                .iter()
+                .any(|(monitor, _)| &monitor.connector().unwrap_or_default() == key)
+        });
+        for (index, (monitor, geom)) in geometries.iter().enumerate() {
+            let key = monitor.connector().unwrap_or_default().to_string();
+            if keys.contains(&key) {
+                continue;
+            }
+            areas
+                .borrow_mut()
+                .push(monitor_window(&app, monitor, *geom, index, &stage));
+            keys.push(key);
+        }
+    });
 }
 
 /// Creates the layer-shell window and drawing surface for one monitor.
@@ -333,7 +385,7 @@ fn install_hook(
     stage: Rc<RefCell<Stage>>,
     queue: Arc<Mutex<Vec<PieEvent>>>,
     connected: Arc<AtomicBool>,
-    areas: Rc<Vec<DrawingArea>>
+    areas: Rc<RefCell<Vec<DrawingArea>>>
 ) {
     let anim_running = Rc::new(Cell::new(false));
     let hook: Rc<dyn Fn()> = Rc::new(move || {
@@ -422,7 +474,7 @@ fn install_hook(
             }
         }
         if changed {
-            for area in areas.iter() {
+            for area in areas.borrow().iter() {
                 area.queue_draw();
             }
         }
@@ -435,7 +487,7 @@ fn install_hook(
 /// not running yet; the timer removes itself once both windows have passed.
 fn arm_animation(
     stage: &Rc<RefCell<Stage>>,
-    areas: &Rc<Vec<DrawingArea>>,
+    areas: &Rc<RefCell<Vec<DrawingArea>>>,
     running: &Rc<Cell<bool>>
 ) {
     if running.get() {
@@ -459,12 +511,12 @@ fn arm_animation(
         };
         if !alive {
             flag.set(false);
-            for area in areas_tick.iter() {
+            for area in areas_tick.borrow().iter() {
                 area.queue_draw();
             }
             return glib::ControlFlow::Break;
         }
-        for area in areas_tick.iter() {
+        for area in areas_tick.borrow().iter() {
             area.queue_draw();
         }
         glib::ControlFlow::Continue

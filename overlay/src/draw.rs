@@ -58,6 +58,8 @@ const LABEL_SIZE: f64 = 12.0;
 const LABEL_MAX_CHARS: usize = 12;
 /// Fraction of the ring band where labels sit, between inner and outer edge.
 const LABEL_BAND: f64 = 0.55;
+/// Horizontal breathing room a label keeps from the wedge borders.
+const LABEL_SIDE_PAD: f64 = 10.0;
 /// Sector icon side in logical pixels, mirroring [`ICON_SIZE`].
 const ICON_SIDE: f64 = ICON_SIZE as f64;
 /// Gap between a sector icon and its label.
@@ -384,6 +386,12 @@ fn paint_labels(cr: &Context, cx: f64, cy: f64, scene: &PieScene, icons: &IconCa
         let bx = radius.mul_add(middle.cos(), cx);
         let by = radius.mul_add(middle.sin(), cy);
         let label = truncate_label(&sector.label, LABEL_MAX_CHARS);
+        let Ok(sectors) = u32::try_from(count.max(1)) else {
+            continue;
+        };
+        let half_wedge = std::f64::consts::PI / f64::from(sectors);
+        let chord = (2.0 * radius).mul_add(half_wedge.sin(), -LABEL_SIDE_PAD);
+        let label = fit_to_width(cr, &label, chord.max(0.0));
         let icon = icons.surface(sector.command.as_deref(), px);
         if let Some(surface) = icon {
             let icon_cy = if label.is_empty() {
@@ -407,6 +415,31 @@ fn paint_labels(cr: &Context, cx: f64, cy: f64, scene: &PieScene, icons: &IconCa
         cr.move_to(x, y);
         let _ = cr.show_text(&label);
     }
+}
+
+/// Shortens `label` with an ellipsis until its measured width fits `max_px`.
+///
+/// The font must already be selected on `cr`; the label is returned
+/// unchanged when it fits or measurement fails.
+fn fit_to_width(cr: &Context, label: &str, max_px: f64) -> String {
+    let Ok(extents) = cr.text_extents(label) else {
+        return label.to_string();
+    };
+    if extents.width() <= max_px {
+        return label.to_string();
+    }
+    let mut keep = label.chars().count();
+    while keep > 1 {
+        keep -= 1;
+        let candidate: String = label.chars().take(keep).collect();
+        let Ok(measured) = cr.text_extents(&format!("{candidate}…")) else {
+            break;
+        };
+        if measured.width() <= max_px {
+            return format!("{candidate}…");
+        }
+    }
+    "…".to_string()
 }
 
 /// Paints the accent dot at the anchor.
