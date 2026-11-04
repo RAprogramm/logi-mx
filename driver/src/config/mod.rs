@@ -243,9 +243,10 @@ mod tests {
     fn test_pie_config_round_trip() {
         let mut config = Config::default();
         config.devices[0].pie = PieConfig {
-            enabled:           true,
+            enabled: true,
             activation_radius: 60,
-            dead_zone:         20
+            dead_zone: 20,
+            ..PieConfig::default()
         };
 
         let toml_str = toml::to_string(&config).unwrap();
@@ -253,6 +254,89 @@ mod tests {
             load_config_from_path(write_temp("pie_round_trip.toml", &toml_str).as_path()).unwrap();
 
         assert_eq!(loaded.devices[0].pie, config.devices[0].pie);
+    }
+
+    #[test]
+    fn test_pie_explicit_layout_round_trip() {
+        let mut config = Config::default();
+        config.devices[0].pie = PieConfig {
+            enabled:           true,
+            activation_radius: 80,
+            dead_zone:         10,
+            sectors:           vec![
+                PieSlot {
+                    action: Some(Action::Command {
+                        command: "firefox".to_string()
+                    }),
+                    label:  Some("Web".to_string())
+                },
+                PieSlot::default(),
+            ]
+        };
+        config.devices[0].pie_profiles.insert(
+            "minecraft".to_string(),
+            PieProfile {
+                sectors: vec![PieSlot::default(); 6]
+            }
+        );
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let loaded =
+            load_config_from_path(write_temp("pie_explicit.toml", &toml_str).as_path()).unwrap();
+        assert_eq!(loaded.devices[0].pie, config.devices[0].pie);
+        assert_eq!(
+            loaded.devices[0]
+                .pie_profiles
+                .get("minecraft")
+                .map(|p| p.sectors.len()),
+            Some(6),
+            "per-app pie profiles survive the round trip"
+        );
+    }
+
+    #[test]
+    fn test_pie_rejection_covers_every_invalid_shape() {
+        let legal = || PieConfig {
+            enabled:           true,
+            activation_radius: 40,
+            dead_zone:         12,
+            sectors:           vec![PieSlot::default(); 4]
+        };
+        assert_eq!(legal().rejection(), None);
+        assert!(legal().ring_ready());
+
+        let too_many_slots = PieConfig {
+            sectors: vec![PieSlot::default(); 9],
+            ..legal()
+        };
+        assert!(
+            too_many_slots.rejection().is_some(),
+            "a ring carries at most eight wedges"
+        );
+
+        let thin_ring = PieConfig {
+            sectors: vec![PieSlot::default()],
+            ..legal()
+        };
+        assert!(
+            !thin_ring.ring_ready(),
+            "one slot is nothing to choose from, the ring stays closed"
+        );
+
+        let gate_over_ring = PieConfig {
+            activation_radius: 10,
+            dead_zone: 11,
+            ..legal()
+        };
+        assert!(gate_over_ring.rejection().is_some());
+
+        let zero_radius = PieConfig {
+            activation_radius: 0,
+            ..legal()
+        };
+        assert!(zero_radius.rejection().is_some());
+
+        assert_eq!(PieConfig::default().rejection(), None, "defaults are legal");
     }
 
     #[test]

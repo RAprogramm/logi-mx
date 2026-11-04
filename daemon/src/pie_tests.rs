@@ -44,9 +44,10 @@ fn key_gesture(direction: GestureDirection) -> Gesture {
 
 fn enabled_config() -> super::PieConfig {
     super::PieConfig {
-        enabled:           true,
+        enabled: true,
         activation_radius: 40,
-        dead_zone:         12
+        dead_zone: 12,
+        ..super::PieConfig::default()
     }
 }
 

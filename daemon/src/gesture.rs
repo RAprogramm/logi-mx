@@ -125,7 +125,7 @@ impl GestureRuntime {
     }
 
     /// Replaces the radial pie menu tuning from a configuration change.
-    pub const fn set_pie_config(&mut self, config: PieConfig) {
+    pub fn set_pie_config(&mut self, config: PieConfig) {
         self.pie.set_config(config);
     }
 

@@ -129,6 +129,7 @@ fn test_multiple_devices_config() {
             inverted: true
         },
         buttons:          std::collections::HashMap::new(),
+        pie_profiles:     std::collections::HashMap::new(),
         gestures_enabled: false,
         gesture_profiles: std::collections::HashMap::new(),
         button_profiles:  std::collections::HashMap::new(),

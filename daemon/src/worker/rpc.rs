@@ -370,9 +370,10 @@ pub(super) fn apply_setting(config: &mut Config, request: &ipc::Request) -> bool
             dead_zone
         } => {
             device.pie = PieConfig {
-                enabled:           *enabled,
+                enabled: *enabled,
                 activation_radius: *activation_radius,
-                dead_zone:         *dead_zone
+                dead_zone: *dead_zone,
+                ..device.pie.clone()
             };
         }
         _ => return false

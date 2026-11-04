@@ -82,14 +82,23 @@ pub struct DeviceConfig {
 
     /// Radial pie menu tuning for the diverted gesture button.
     #[serde(default)]
-    pub pie: PieConfig
+    pub pie: PieConfig,
+
+    /// Per-application pie menus keyed by the Hyprland window class. A
+    /// profile replaces the global ring (layout and slots) while its app is
+    /// focused, so a game can carry its own wheel while the desktop keeps
+    /// the default one.
+    #[serde(default)]
+    pub pie_profiles: HashMap<String, PieProfile>
 }
 
 /// Radial pie menu tuning for the diverted gesture button.
 ///
-/// While the gesture button is held, the cursor position around the press
-/// point selects one of eight sectors around the anchor; releasing over a
-/// bound sector fires its action. The daemon-side state machine lives in
+/// The ring divides the circle into as many equal wedges as there are
+/// entries in [`Self::sectors`] — between [`Self::MIN_SLOTS`] and
+/// [`Self::MAX_SLOTS`] — with slot 0 centred at 12 o'clock and the rest
+/// running clockwise. The count is never configured by hand: it follows the
+/// commands the user installed. The daemon-side state machine lives in
 /// `logi-mx-daemon::pie`.
 ///
 /// # Examples
@@ -101,6 +110,7 @@ pub struct DeviceConfig {
 /// assert!(!pie.enabled);
 /// assert_eq!(pie.activation_radius, 40);
 /// assert_eq!(pie.dead_zone, 12);
+/// assert!(pie.sectors.is_empty(), "an empty ring never opens");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -111,7 +121,82 @@ pub struct PieConfig {
     /// the mouse, in pixels. Below it the wheel swipe owns the selection.
     pub activation_radius: i32,
     /// Radius inside which no sector is highlighted, in pixels.
-    pub dead_zone:         i32
+    pub dead_zone:         i32,
+    /// Ring slots in wedge order: index 0 at 12 o'clock, clockwise. The
+    /// ring shows exactly this many equal sectors.
+    pub sectors:           Vec<PieSlot>
+}
+
+impl PieConfig {
+    /// Fewest slots a ring can show; below it there is nothing to choose.
+    pub const MIN_SLOTS: usize = 2;
+    /// Most slots a ring can show before wedges get too thin to hit.
+    pub const MAX_SLOTS: usize = 8;
+
+    /// Rejects pie tuning the menu cannot act on.
+    ///
+    /// # Returns
+    ///
+    /// The rejection reason, or `None` when every field is usable: positive
+    /// activation radius, a non-negative dead zone not exceeding it, and no
+    /// more slots than [`Self::MAX_SLOTS`].
+    #[must_use]
+    pub fn rejection(&self) -> Option<String> {
+        if self.activation_radius < 1 || self.dead_zone < 0 {
+            return Some(
+                "pie activation radius must be positive and the dead zone not negative"
+                    .to_string()
+            );
+        }
+        if self.dead_zone > self.activation_radius {
+            return Some("pie dead zone must not exceed the activation radius".to_string());
+        }
+        if self.sectors.len() > Self::MAX_SLOTS {
+            return Some(format!(
+                "a pie ring carries at most {} slots",
+                Self::MAX_SLOTS
+            ));
+        }
+        None
+    }
+
+    /// Whether the ring has enough slots to open: at least
+    /// [`Self::MIN_SLOTS`] commands installed.
+    #[must_use]
+    pub const fn ring_ready(&self) -> bool {
+        self.sectors.len() >= Self::MIN_SLOTS
+    }
+}
+
+/// One wedge of an explicit pie ring: what fires when the slot commits and
+/// what the wedge shows while selected.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_driver::config::PieSlot;
+///
+/// let empty = PieSlot::default();
+/// assert!(empty.action.is_none(), "a bare slot commits nothing");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PieSlot {
+    /// Action fired when this slot commits; `None` leaves the slot empty.
+    pub action: Option<Action>,
+    /// Text drawn on the wedge; the daemon falls back to a summary of the
+    /// bound action when absent.
+    pub label:  Option<String>
+}
+
+/// Per-application pie menu overriding the global ring while its window
+/// class is focused.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PieProfile {
+    /// Slot bindings replacing the global ring for this app, same wedge
+    /// ordering as [`PieConfig::sectors`]: index 0 at 12 o'clock, clockwise.
+    pub sectors: Vec<PieSlot>
 }
 
 impl Default for PieConfig {
@@ -119,7 +204,8 @@ impl Default for PieConfig {
         Self {
             enabled:           false,
             activation_radius: 40,
-            dead_zone:         12
+            dead_zone:         12,
+            sectors:           Vec::new()
         }
     }
 }
@@ -200,7 +286,8 @@ impl Default for DeviceConfig {
             gestures_enabled: false,
             gesture_profiles: HashMap::new(),
             button_profiles: HashMap::new(),
-            pie: PieConfig::default()
+            pie: PieConfig::default(),
+            pie_profiles: HashMap::new()
         }
     }
 }

@@ -601,7 +601,7 @@ impl PieRuntime {
     }
 
     /// Replaces the pie tuning.
-    pub const fn set_config(&mut self, config: PieConfig) {
+    pub fn set_config(&mut self, config: PieConfig) {
         self.config = config;
     }
 
