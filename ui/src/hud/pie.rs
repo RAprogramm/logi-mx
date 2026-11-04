@@ -3,10 +3,15 @@
 
 //! Pie page: a live preview of the radial menu plus its tuning. The wheel
 //! mirrors what the overlay paints — one sector per bound direction,
-//! labelled with the action summary — and clicking a sector inspects it.
-//! Direction bindings themselves stay edited on the Gestures page.
+//! labelled with the action summary. Clicking a sector selects it and opens
+//! the sector editor below: bind a shell command, pick an existing Hyprland
+//! keybind, or clear the sector — all on the global scope, firing on
+//! release like the pie commit path does.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc
+};
 
 use gtk4::{Button, DrawingArea, Entry, GestureClick, Label, ScrolledWindow, Switch, cairo};
 use libadwaita::{ActionRow, PreferencesGroup, prelude::*};
@@ -14,9 +19,12 @@ use logi_mx_daemon::{
     ipc::{self, Response},
     pie::{PieSector, action_summary, direction_angle}
 };
-use logi_mx_driver::{config::PieConfig, devices::GestureDirection};
+use logi_mx_driver::{
+    config::PieConfig,
+    devices::{Action, Gesture, GestureDirection, GestureMode}
+};
 
-use super::{page_body, page_scroll, report, toasts::Toasts};
+use super::{keybinds::open_keybind_picker, page_body, page_scroll, report, toasts::Toasts};
 
 /// Wheel side length in logical pixels.
 const WHEEL_SIZE: i32 = 260;
@@ -38,15 +46,157 @@ const OUTLINE: (f64, f64, f64, f64) = (0.91, 0.93, 0.96, 0.30);
 /// Sector label text colour.
 const TEXT: (f64, f64, f64, f64) = (0.94, 0.96, 0.98, 0.95);
 
-/// What the preview paints: the bound sectors and the clicked selection.
+/// What the preview paints: the bound gestures and the clicked selection.
 #[derive(Default)]
 struct WheelModel {
-    sectors:  Vec<PieSector>,
+    bindings: Vec<Gesture>,
     selected: Option<GestureDirection>
 }
 
-/// Builds the Pie page: intro, interactive wheel preview, inspection line
-/// and the radial menu tuning group.
+impl WheelModel {
+    /// The bound sectors with their action summaries, in binding order.
+    fn sectors(&self) -> Vec<PieSector> {
+        self.bindings
+            .iter()
+            .map(|gesture| PieSector {
+                direction: gesture.direction,
+                label:     action_summary(&gesture.action)
+            })
+            .collect()
+    }
+
+    /// The summary painted for `direction`, empty when unbound.
+    fn label_for(&self, direction: GestureDirection) -> String {
+        self.bindings
+            .iter()
+            .find(|gesture| gesture.direction == direction)
+            .map_or_else(String::new, |gesture| action_summary(&gesture.action))
+    }
+
+    /// The shell command bound to `direction`, empty for other actions.
+    fn command_for(&self, direction: GestureDirection) -> String {
+        self.bindings
+            .iter()
+            .find(|gesture| gesture.direction == direction)
+            .and_then(|gesture| match gesture.action.as_ref() {
+                Action::Command {
+                    command
+                } => Some(command.clone()),
+                _ => None
+            })
+            .unwrap_or_default()
+    }
+
+    /// Inserts or replaces the binding for the gesture's direction.
+    fn upsert(&mut self, gesture: Gesture) {
+        match self
+            .bindings
+            .iter_mut()
+            .find(|existing| existing.direction == gesture.direction)
+        {
+            Some(existing) => *existing = gesture,
+            None => self.bindings.push(gesture)
+        }
+    }
+
+    /// Drops the binding for `direction`.
+    fn remove(&mut self, direction: GestureDirection) {
+        self.bindings
+            .retain(|gesture| gesture.direction != direction);
+    }
+}
+
+/// Widgets of the sector editor, kept so the click handler can retarget and
+/// gate them. Cheap to clone: every field is a GTK handle.
+#[derive(Clone)]
+struct SectorEditor {
+    group:     PreferencesGroup,
+    title:     ActionRow,
+    command:   Entry,
+    apply_btn: Button,
+    pick_btn:  Button,
+    clear_btn: Button
+}
+
+impl SectorEditor {
+    /// Builds the editor group: a title row, the command row, the keybind
+    /// picker row and the clear row, all insensitive until a sector is
+    /// selected.
+    fn new() -> Self {
+        let group = PreferencesGroup::new();
+        group.set_title("Sector editor");
+        group.set_description(Some(
+            "Click a sector on the wheel to bind it here; bindings fire on release"
+        ));
+
+        let title = ActionRow::new();
+        title.set_title("Sector");
+        title.set_subtitle("Click a sector above");
+
+        let command_row = ActionRow::new();
+        command_row.set_title("Application command");
+        command_row.set_subtitle("Press Enter to bind, e.g. thunar");
+        let command = Entry::new();
+        command.set_width_chars(18);
+        command.set_valign(gtk4::Align::Center);
+        let apply_btn = Button::with_label("Bind");
+        apply_btn.set_valign(gtk4::Align::Center);
+        command_row.add_suffix(&apply_btn);
+        command_row.add_suffix(&command);
+
+        let pick_row = ActionRow::new();
+        pick_row.set_title("Keyboard shortcut");
+        pick_row.set_subtitle("Pick an existing Hyprland keybind");
+        let pick_btn = Button::with_label("Pick…");
+        pick_btn.set_valign(gtk4::Align::Center);
+        pick_row.add_suffix(&pick_btn);
+        pick_row.set_activatable_widget(Some(&pick_btn));
+
+        let clear_row = ActionRow::new();
+        clear_row.set_title("Clear sector");
+        clear_row.set_subtitle("Removes this direction's binding");
+        let clear_btn = Button::with_label("Clear");
+        clear_btn.add_css_class("destructive-action");
+        clear_btn.set_valign(gtk4::Align::Center);
+        clear_row.add_suffix(&clear_btn);
+        clear_row.set_activatable_widget(Some(&clear_btn));
+
+        group.add(&title);
+        group.add(&command_row);
+        group.add(&pick_row);
+        group.add(&clear_row);
+        group.set_sensitive(false);
+
+        Self {
+            group,
+            title,
+            command,
+            apply_btn,
+            pick_btn,
+            clear_btn
+        }
+    }
+
+    /// Points the editor at `direction` (or disables it when `None`),
+    /// prefilling the command entry when the sector holds a command.
+    fn inspect(&self, model: &WheelModel, direction: Option<GestureDirection>) {
+        self.group.set_sensitive(direction.is_some());
+        let Some(dir) = direction else {
+            self.title.set_title("Sector");
+            self.title.set_subtitle("Click a sector above");
+            self.command.set_text("");
+            return;
+        };
+        let label = model.label_for(dir);
+        let summary = if label.is_empty() { "unbound" } else { &label };
+        self.title.set_title(&format!("{dir:?} — {summary}"));
+        self.title.set_subtitle("Choose a new action below");
+        self.command.set_text(&model.command_for(dir));
+    }
+}
+
+/// Builds the Pie page: intro, interactive wheel preview, inspection line,
+/// sector editor and the radial menu tuning group.
 pub(super) fn pie_page(toast: &Toasts) -> ScrolledWindow {
     let scroll = page_scroll();
     let body = page_body();
@@ -58,12 +208,9 @@ pub(super) fn pie_page(toast: &Toasts) -> ScrolledWindow {
          Scroll the wheel or point the mouse to select a sector, release to fire it. A quick tap \
          keeps the click binding; a double click opens the menu at once."
     ));
-    let hint = ActionRow::new();
-    hint.set_title("Sector actions");
-    hint.set_subtitle("Bind directions on the Gestures page");
-    intro.add(&hint);
 
     let model: Rc<RefCell<WheelModel>> = Rc::new(RefCell::new(WheelModel::default()));
+    let selected: Rc<Cell<Option<GestureDirection>>> = Rc::new(Cell::new(None));
 
     let area = DrawingArea::new();
     area.set_size_request(WHEEL_SIZE, WHEEL_SIZE);
@@ -84,29 +231,40 @@ pub(super) fn pie_page(toast: &Toasts) -> ScrolledWindow {
     details.add_css_class("dim-label");
     details.set_halign(gtk4::Align::Center);
 
+    let editor = SectorEditor::new();
+    wire_sector_editor(&SectorContext {
+        toast:    toast.clone(),
+        model:    Rc::clone(&model),
+        selected: Rc::clone(&selected),
+        area:     area.clone(),
+        details:  details.clone(),
+        editor:   editor.clone()
+    });
+
     let click = GestureClick::new();
     let click_model = Rc::clone(&model);
+    let click_selected = Rc::clone(&selected);
     let click_details = details.clone();
     let click_area = area.clone();
+    let click_editor = editor.clone();
     click.connect_pressed(move |_gesture, _n_press, x, y| {
-        let mut state = click_model.borrow_mut();
-        state.selected = sector_at(x, y, f64::from(WHEEL_SIZE), &state.sectors);
-        let text = match state.selected {
-            Some(direction) => {
-                let label = state
-                    .sectors
-                    .iter()
-                    .find(|sector| sector.direction == direction)
-                    .map_or("", |sector| sector.label.as_str());
+        let sectors = click_model.borrow().sectors();
+        let hit = sector_at(x, y, f64::from(WHEEL_SIZE), &sectors);
+        click_selected.set(hit);
+        click_model.borrow_mut().selected = hit;
+        let text = hit.map_or_else(
+            || "Click a sector to inspect its binding".to_string(),
+            |direction| {
+                let label = click_model.borrow().label_for(direction);
                 if label.is_empty() {
-                    format!("{direction:?} — bound, no summary")
+                    format!("{direction:?} — unbound")
                 } else {
                     format!("{direction:?} — {label}")
                 }
             }
-            None => "Click a sector to inspect its binding".to_string()
-        };
+        );
         click_details.set_text(&text);
+        click_editor.inspect(&click_model.borrow(), hit);
         click_area.queue_draw();
     });
     area.add_controller(click);
@@ -116,6 +274,7 @@ pub(super) fn pie_page(toast: &Toasts) -> ScrolledWindow {
     body.append(&intro);
     body.append(&area);
     body.append(&details);
+    body.append(&editor.group);
     body.append(&tuning);
     scroll.set_child(Some(&body));
 
@@ -125,13 +284,9 @@ pub(super) fn pie_page(toast: &Toasts) -> ScrolledWindow {
         ..
     }) = ipc::try_request(&ipc::Request::GetGestures)
     {
-        model.borrow_mut().sectors = gestures
-            .iter()
+        model.borrow_mut().bindings = gestures
+            .into_iter()
             .filter(|gesture| gesture.direction != GestureDirection::None)
-            .map(|gesture| PieSector {
-                direction: gesture.direction,
-                label:     action_summary(&gesture.action)
-            })
             .collect();
         area.queue_draw();
         widgets.enable.set_active(pie.enabled);
@@ -141,12 +296,117 @@ pub(super) fn pie_page(toast: &Toasts) -> ScrolledWindow {
     scroll
 }
 
+/// Everything a sector editor callback needs to act on the selection.
+#[derive(Clone)]
+struct SectorContext {
+    toast:    Toasts,
+    model:    Rc<RefCell<WheelModel>>,
+    selected: Rc<Cell<Option<GestureDirection>>>,
+    area:     DrawingArea,
+    details:  Label,
+    editor:   SectorEditor
+}
+
+/// Sends `action` for the selected sector and reflects it on the wheel.
+fn bind_selected(ctx: &SectorContext, action: Option<Action>, success: &str) {
+    let Some(direction) = ctx.selected.get() else {
+        ctx.toast.show("Select a sector first");
+        return;
+    };
+    let Some(action) = action else {
+        ctx.toast.show("Enter a command first");
+        return;
+    };
+    let response = ipc::try_request(&ipc::Request::SetGesture {
+        direction,
+        mode: GestureMode::OnRelease,
+        action: Box::new(action.clone())
+    });
+    if matches!(response, Some(Response::Ok)) {
+        ctx.model.borrow_mut().upsert(Gesture {
+            direction,
+            mode: GestureMode::OnRelease,
+            action: Box::new(action)
+        });
+        let label = ctx.model.borrow().label_for(direction);
+        ctx.details.set_text(&format!("{direction:?} — {label}"));
+        ctx.editor.inspect(&ctx.model.borrow(), Some(direction));
+        ctx.area.queue_draw();
+    }
+    report(response, &ctx.toast, success);
+}
+
+/// Wires the sector editor rows to the daemon and the wheel model.
+fn wire_sector_editor(ctx: &SectorContext) {
+    let bind_command = {
+        let ctx = ctx.clone();
+        move |entry: &Entry| {
+            let text = entry.text().trim().to_string();
+            let action = (!text.is_empty()).then_some(Action::Command {
+                command: text
+            });
+            bind_selected(&ctx, action, "Sector bound");
+        }
+    };
+    ctx.editor.apply_btn.connect_clicked({
+        let command = ctx.editor.command.clone();
+        let bind = bind_command.clone();
+        move |_| bind(&command)
+    });
+    ctx.editor
+        .command
+        .connect_activate(move |entry| bind_command(entry));
+
+    ctx.editor.pick_btn.connect_clicked({
+        let ctx = ctx.clone();
+        move |_| {
+            let picker_toast = ctx.toast.clone();
+            let picked = ctx.clone();
+            open_keybind_picker(&picker_toast, move |keys| {
+                bind_selected(
+                    &picked,
+                    Some(Action::Keypress {
+                        keys
+                    }),
+                    "Sector bound"
+                );
+            });
+        }
+    });
+
+    ctx.editor.clear_btn.connect_clicked({
+        let ctx = ctx.clone();
+        move |_| {
+            let Some(direction) = ctx.selected.get() else {
+                ctx.toast.show("Select a sector first");
+                return;
+            };
+            let response = ipc::try_request(&ipc::Request::ClearGesture {
+                direction
+            });
+            if matches!(response, Some(Response::Ok)) {
+                let mut model = ctx.model.borrow_mut();
+                model.remove(direction);
+                model.selected = None;
+                drop(model);
+                ctx.selected.set(None);
+                ctx.details
+                    .set_text("Click a sector to inspect its binding");
+                ctx.editor.inspect(&ctx.model.borrow(), None);
+                ctx.area.queue_draw();
+            }
+            report(response, &ctx.toast, "Sector cleared");
+        }
+    });
+}
+
 /// Paints the preview ring: annulus segments tile the circle, the selected
 /// one wears the accent, and every sector carries its action summary.
 fn paint_wheel(cr: &cairo::Context, width: f64, height: f64, model: &WheelModel) {
     let centre = width.min(height) / 2.0;
     let outer = (centre - OUTER_MARGIN).max(INNER_RADIUS + 1.0);
-    if model.sectors.is_empty() {
+    let sectors = model.sectors();
+    if sectors.is_empty() {
         let (red, green, blue, alpha) = OUTLINE;
         cr.set_source_rgba(red, green, blue, alpha);
         cr.set_line_width(2.0);
@@ -160,11 +420,11 @@ fn paint_wheel(cr: &cairo::Context, width: f64, height: f64, model: &WheelModel)
         let _ = cr.stroke();
         return;
     }
-    let Ok(count) = u32::try_from(model.sectors.len()) else {
+    let Ok(count) = u32::try_from(sectors.len()) else {
         return;
     };
     let half = std::f64::consts::PI / f64::from(count);
-    for sector in &model.sectors {
+    for sector in &sectors {
         let Some(middle) = direction_angle(sector.direction) else {
             continue;
         };
@@ -189,11 +449,11 @@ fn paint_wheel(cr: &cairo::Context, width: f64, height: f64, model: &WheelModel)
     cr.new_sub_path();
     cr.arc(centre, centre, INNER_RADIUS, 0.0, std::f64::consts::TAU);
     let _ = cr.stroke();
-    paint_labels(cr, centre, outer, model);
+    paint_labels(cr, centre, outer, &sectors);
 }
 
 /// Draws one truncated action summary per sector, mid-band.
-fn paint_labels(cr: &cairo::Context, centre: f64, outer: f64, model: &WheelModel) {
+fn paint_labels(cr: &cairo::Context, centre: f64, outer: f64, sectors: &[PieSector]) {
     use gtk4::cairo::{FontSlant, FontWeight};
 
     cr.select_font_face(LABEL_FONT, FontSlant::Normal, FontWeight::Normal);
@@ -201,7 +461,7 @@ fn paint_labels(cr: &cairo::Context, centre: f64, outer: f64, model: &WheelModel
     let (red, green, blue, alpha) = TEXT;
     cr.set_source_rgba(red, green, blue, alpha);
     let radius = f64::midpoint(outer, INNER_RADIUS);
-    for sector in &model.sectors {
+    for sector in sectors {
         let Some(middle) = direction_angle(sector.direction) else {
             continue;
         };
