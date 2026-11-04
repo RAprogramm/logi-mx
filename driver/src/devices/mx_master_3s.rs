@@ -40,6 +40,8 @@ const HIRES_MODE_INVERT_BIT: u8 = 0x04;
 
 /// `SmartShift` ratchet mode with automatic disengage.
 const SMARTSHIFT_MODE_RATCHET_AUTO: u8 = 0x02;
+/// Largest scroll-speed threshold the `SmartShift` feature accepts (0-50).
+const SMARTSHIFT_THRESHOLD_MAX: u8 = 50;
 
 /// Control IDs reported by the Reprogrammable Controls feature.
 pub mod control_id {
@@ -143,6 +145,31 @@ pub const fn encode_smartshift(config: SmartShiftConfig) -> [u8; 3] {
     };
 
     [SMARTSHIFT_MODE_RATCHET_AUTO, auto_disengage, 0x00]
+}
+
+/// Rejects a `SmartShift` configuration the device firmware cannot accept.
+///
+/// # Arguments
+///
+/// * `config` - Enable flag and scroll-speed threshold to validate.
+///
+/// # Returns
+///
+/// `Ok(())` when the threshold is within the documented `0..=50` range,
+/// a validation error naming the limit otherwise.
+///
+/// # Errors
+///
+/// [`AppError::validation`] when `config.threshold` exceeds the device
+/// maximum.
+pub fn validate_smartshift(config: &SmartShiftConfig) -> Result<()> {
+    if config.threshold > SMARTSHIFT_THRESHOLD_MAX {
+        return Err(AppError::validation(format!(
+            "SmartShift threshold {} exceeds the device maximum {SMARTSHIFT_THRESHOLD_MAX}",
+            config.threshold
+        )));
+    }
+    Ok(())
 }
 
 /// Parses a hi-res wheel mode byte into a [`HiResScrollConfig`].
@@ -767,6 +794,7 @@ impl MouseDevice for MxMaster3s {
     }
 
     fn set_smartshift(&mut self, config: SmartShiftConfig) -> Result<()> {
+        validate_smartshift(&config)?;
         let feature_index = self.hidpp.feature_index(FEATURE_SMART_SHIFT)?;
 
         let params = encode_smartshift(config);
@@ -856,6 +884,37 @@ mod tests {
         assert_eq!(PID_MX_MASTER_3S_USB, 0x4082);
         assert_eq!(PID_MX_MASTER_3S_BT, 0xB034);
         assert_eq!(RECEIVER_SLOTS.len(), 6);
+    }
+
+    #[test]
+    fn test_validate_smartshift_accepts_documented_range() {
+        assert!(
+            validate_smartshift(&SmartShiftConfig {
+                enabled:   false,
+                threshold: 0
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_smartshift(&SmartShiftConfig {
+                enabled:   true,
+                threshold: 50
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_smartshift_rejects_out_of_range_threshold() {
+        let error = validate_smartshift(&SmartShiftConfig {
+            enabled:   true,
+            threshold: 51
+        })
+        .expect_err("51 is above the device maximum");
+        assert!(
+            error.to_string().contains("50"),
+            "the error names the limit"
+        );
     }
 
     #[test]

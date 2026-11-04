@@ -13,7 +13,7 @@ use super::{PanelWidgets, page_body, page_scroll, report, toasts::Toasts};
 
 /// `SmartShift` threshold slider bounds.
 const SMARTSHIFT_MIN: f64 = 1.0;
-const SMARTSHIFT_MAX: f64 = 255.0;
+const SMARTSHIFT_MAX: f64 = 50.0;
 const SMARTSHIFT_STEP: f64 = 1.0;
 
 /// Narrows a GTK scale reading to a `SmartShift` threshold value.
