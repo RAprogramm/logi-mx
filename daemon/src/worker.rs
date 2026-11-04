@@ -409,7 +409,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<DeviceEvent>();
         drop(tx);
         let (live_hub, _live_sink) = tokio::sync::broadcast::channel(1);
-        let (pie_hub, _pie_sink) = tokio::sync::broadcast::channel(1);
+        let pie_hub = crate::pie::PieHub::new(1);
 
         std::thread::Builder::new()
             .name("test-worker".to_string())

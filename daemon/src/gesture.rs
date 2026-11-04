@@ -437,7 +437,7 @@ impl GestureRuntime {
         let settled = self.accumulator.end();
         match release {
             PieRelease::Opened(Some(dir)) => {
-                self.fire(dir, Some(GestureMode::OnRelease));
+                self.fire_committed(dir);
                 return;
             }
             PieRelease::Opened(None) => return,
@@ -470,28 +470,60 @@ impl GestureRuntime {
             if mode.is_some_and(|wanted| gesture.mode != wanted) {
                 continue;
             }
-            match gesture.action.as_ref() {
-                Action::Keypress {
-                    keys
-                } => match self.injector.press_sequence(keys) {
-                    Ok(()) => info!("gesture fired {direction:?} -> {}", keys.join("+")),
-                    Err(e) if !self.injection_warned => {
-                        self.injection_warned = true;
-                        warn!("gesture injection failed: {e}");
-                    }
-                    Err(_) => {}
-                },
-                Action::Command {
-                    command
-                } => {
-                    info!("gesture fired {direction:?} -> command {command:?}");
-                    spawn_detached("gesture-command", command);
+            self.execute(&gesture.action, direction);
+        }
+    }
+
+    /// Fires the committed pie sector from the bindings captured at press,
+    /// so a focus change while the menu is open cannot swap the action the
+    /// user saw advertised for that sector.
+    ///
+    /// # Arguments
+    ///
+    /// * `direction` - The sector the release commits.
+    fn fire_committed(&mut self, direction: GestureDirection) {
+        let snapshot: Vec<Gesture> = self
+            .pie
+            .press_gestures()
+            .iter()
+            .filter(|gesture| {
+                gesture.direction == direction && gesture.mode == GestureMode::OnRelease
+            })
+            .cloned()
+            .collect();
+        for gesture in &snapshot {
+            self.execute(&gesture.action, direction);
+        }
+    }
+
+    /// Runs one gesture action: injects a key chord or launches a command.
+    ///
+    /// # Arguments
+    ///
+    /// * `action` - The bound action.
+    /// * `direction` - The direction whose binding fired, for logs.
+    fn execute(&mut self, action: &Action, direction: GestureDirection) {
+        match action {
+            Action::Keypress {
+                keys
+            } => match self.injector.press_sequence(keys) {
+                Ok(()) => info!("gesture fired {direction:?} -> {}", keys.join("+")),
+                Err(e) if !self.injection_warned => {
+                    self.injection_warned = true;
+                    warn!("gesture injection failed: {e}");
                 }
-                _ => {
-                    if !self.unsupported_warned {
-                        self.unsupported_warned = true;
-                        warn!("gesture action not supported yet: {:?}", gesture.action);
-                    }
+                Err(_) => {}
+            },
+            Action::Command {
+                command
+            } => {
+                info!("gesture fired {direction:?} -> command {command:?}");
+                spawn_detached("gesture-command", command);
+            }
+            _ => {
+                if !self.unsupported_warned {
+                    self.unsupported_warned = true;
+                    warn!("gesture action not supported yet: {action:?}");
                 }
             }
         }

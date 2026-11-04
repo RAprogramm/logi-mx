@@ -714,6 +714,14 @@ async fn stream_pie(
         .await
         .map_err(|e| masterror::AppError::internal("Failed to ack pie stream").with_source(e))?;
 
+    if let Some(state) = hub.replay() {
+        write_line(&mut writer, &Response::Pie(state))
+            .await
+            .map_err(|e| {
+                masterror::AppError::internal("Failed to replay pie state").with_source(e)
+            })?;
+    }
+
     let (gone_tx, gone_rx) = oneshot::channel();
     tokio::spawn(async move {
         let mut sink = [0u8; 64];

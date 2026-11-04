@@ -17,8 +17,8 @@ use logi_mx_driver::prelude::{Action, Gesture, GestureDirection, GestureMode};
 use tokio::sync::broadcast::{Receiver, error::TryRecvError};
 
 use super::{
-    DOUBLE_CLICK_WINDOW, HOLD_DELAY, PieEvent, PieRelease, PieRuntime, PieSector, action_summary,
-    direction_angle, sector_among
+    DOUBLE_CLICK_WINDOW, HOLD_DELAY, PieEvent, PieHub, PieRelease, PieRuntime, PieSector,
+    action_summary, direction_angle, sector_among, sectors_from
 };
 
 fn key_gesture(direction: GestureDirection) -> Gesture {
@@ -55,7 +55,8 @@ fn scripted(positions: &[(i32, i32)], bindings: Vec<Gesture>) -> (PieRuntime, Re
         }
     };
     let mut runtime = PieRuntime::with_fetch(cursor);
-    let (hub, rx) = tokio::sync::broadcast::channel(64);
+    let hub = PieHub::new(64);
+    let rx = hub.subscribe();
     runtime.attach_hub(hub);
     runtime.set_config(enabled_config());
     runtime.set_bindings(bindings, HashMap::new());
@@ -602,7 +603,7 @@ fn profile_overrides_replace_global_sectors() {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some("firefox".to_string());
     assert!(pie.should_open());
     assert_eq!(
-        pie.bound_sectors(),
+        sectors_from(&pie.effective_bindings()),
         vec![
             sector(GestureDirection::Right),
             sector(GestureDirection::Up),
@@ -613,11 +614,92 @@ fn profile_overrides_replace_global_sectors() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some("other".to_string());
     assert_eq!(
-        pie.bound_sectors(),
+        sectors_from(&pie.effective_bindings()),
         vec![
             sector(GestureDirection::Up),
             sector(GestureDirection::Right),
         ],
         "an unfocused profile falls through to the global set"
     );
+}
+
+#[test]
+fn release_after_deadline_opens_even_without_a_tick() {
+    let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    assert_eq!(
+        pie.on_release(ms(t0, 260)),
+        PieRelease::Opened(None),
+        "a release past the hold deadline belongs to the open menu, not a tap"
+    );
+    let events = drain(&mut rx);
+    assert!(
+        events.contains(&PieEvent::Open {
+            anchor:  (0, 0),
+            sectors: vec![sector(GestureDirection::Up)]
+        }),
+        "the promoted open must still be advertised: {events:?}"
+    );
+    assert_eq!(
+        events.last(),
+        Some(&PieEvent::Close {
+            committed: None
+        }),
+        "no sector was highlighted, so nothing commits"
+    );
+}
+
+#[test]
+fn commit_survives_a_binding_change_while_open() {
+    let (mut pie, _rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
+    pie.set_bindings(Vec::new(), HashMap::new());
+    pie.on_swipe(GestureDirection::Up);
+    assert_eq!(
+        pie.on_release(ms(t0, 500)),
+        PieRelease::Opened(Some(GestureDirection::Up)),
+        "the sector advertised at press commits even after the binding vanished"
+    );
+}
+
+#[test]
+fn duplicate_directions_collapse_to_one_sector() {
+    let mut press_mode = key_gesture(GestureDirection::Up);
+    press_mode.mode = GestureMode::OnPress;
+    let sectors = sectors_from(&[key_gesture(GestureDirection::Up), press_mode]);
+    assert_eq!(
+        sectors.len(),
+        1,
+        "one direction must yield exactly one wedge"
+    );
+    assert_eq!(sectors[0].direction, GestureDirection::Up);
+}
+
+#[test]
+fn hub_replays_the_latched_state_until_close() {
+    let hub = PieHub::new(8);
+    assert_eq!(hub.replay(), None, "an idle hub replays nothing");
+    hub.send(PieEvent::Charge {
+        anchor: (10, 20)
+    });
+    assert_eq!(
+        hub.replay(),
+        Some(PieEvent::Charge {
+            anchor: (10, 20)
+        })
+    );
+    hub.send(PieEvent::Highlight {
+        direction: Some(GestureDirection::Up)
+    });
+    assert!(
+        matches!(hub.replay(), Some(PieEvent::Charge { .. })),
+        "transient events must not replace the latch"
+    );
+    hub.send(PieEvent::Close {
+        committed: None
+    });
+    assert_eq!(hub.replay(), None, "a closed hold replays nothing");
 }

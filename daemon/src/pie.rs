@@ -31,7 +31,7 @@
 //! the swipe fallback, so one hold never fires twice.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::BuildHasher,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant}
@@ -43,8 +43,76 @@ use tracing::debug;
 
 use crate::focus::SharedFocus;
 
-/// Fan-out channel carrying pie menu events to subscribed clients.
-pub type PieHub = tokio::sync::broadcast::Sender<PieEvent>;
+/// Fan-out carrying pie menu events to subscribed clients.
+///
+/// Besides the broadcast channel it latches the current charge or open
+/// event, so a watcher that connects mid-hold — e.g. an overlay restarted
+/// while the button is pressed — receives the state it missed instead of
+/// staying blind until the next release.
+#[derive(Clone, Debug)]
+pub struct PieHub {
+    tx:    tokio::sync::broadcast::Sender<PieEvent>,
+    latch: Arc<Mutex<Option<PieEvent>>>
+}
+
+impl PieHub {
+    /// Builds a fan-out with the given broadcast capacity.
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            tx:    tokio::sync::broadcast::channel(capacity).0,
+            latch: Arc::new(Mutex::new(None))
+        }
+    }
+
+    /// Subscribes to the event stream.
+    #[must_use]
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<PieEvent> {
+        self.tx.subscribe()
+    }
+
+    /// Number of live subscribers.
+    #[must_use]
+    pub fn receiver_count(&self) -> usize {
+        self.tx.receiver_count()
+    }
+
+    /// Publishes `event` and updates the latch a late watcher replays.
+    pub fn send(&self, event: PieEvent) {
+        match &event {
+            PieEvent::Charge {
+                ..
+            }
+            | PieEvent::Open {
+                ..
+            } => {
+                *self.latch.lock().unwrap_or_else(PoisonError::into_inner) = Some(event.clone());
+            }
+            PieEvent::Close {
+                ..
+            } => {
+                *self.latch.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            }
+            PieEvent::Highlight {
+                ..
+            }
+            | PieEvent::Aim {
+                ..
+            } => {}
+        }
+        let _ = self.tx.send(event);
+    }
+
+    /// The latched charge or open event when a hold is in flight, `None`
+    /// while idle.
+    #[must_use]
+    pub fn replay(&self) -> Option<PieEvent> {
+        self.latch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
 
 /// Re-export of the stored pie tuning so daemon consumers import it from
 /// the pie module; the schema itself lives in the driver crate because the
@@ -381,20 +449,21 @@ type AnchorFetch = Box<dyn Fn() -> Option<(i32, i32)> + Send>;
 /// pie.set_bindings(Vec::new(), HashMap::new());
 /// ```
 pub struct PieRuntime {
-    config:       PieConfig,
-    focus:        SharedFocus,
-    bindings:     Vec<Gesture>,
-    profiles:     HashMap<String, Vec<Gesture>>,
-    fetch_anchor: AnchorFetch,
-    hub:          Option<PieHub>,
-    anchor:       Option<(i32, i32)>,
-    sectors:      Vec<PieSector>,
-    charging:     bool,
-    charge_since: Option<Instant>,
-    last_tap:     Option<Instant>,
-    open:         bool,
-    highlight:    Option<GestureDirection>,
-    last_aim:     Option<f64>
+    config:         PieConfig,
+    focus:          SharedFocus,
+    bindings:       Vec<Gesture>,
+    profiles:       HashMap<String, Vec<Gesture>>,
+    fetch_anchor:   AnchorFetch,
+    hub:            Option<PieHub>,
+    anchor:         Option<(i32, i32)>,
+    sectors:        Vec<PieSector>,
+    press_gestures: Vec<Gesture>,
+    charging:       bool,
+    charge_since:   Option<Instant>,
+    last_tap:       Option<Instant>,
+    open:           bool,
+    highlight:      Option<GestureDirection>,
+    last_aim:       Option<f64>
 }
 
 impl Default for PieRuntime {
@@ -422,20 +491,21 @@ impl PieRuntime {
         F: Fn() -> Option<(i32, i32)> + Send + 'static
     {
         Self {
-            config:       PieConfig::default(),
-            focus:        Arc::new(Mutex::new(None)),
-            bindings:     Vec::new(),
-            profiles:     HashMap::new(),
-            fetch_anchor: Box::new(fetch),
-            hub:          None,
-            anchor:       None,
-            sectors:      Vec::new(),
-            charging:     false,
-            charge_since: None,
-            last_tap:     None,
-            open:         false,
-            highlight:    None,
-            last_aim:     None
+            config:         PieConfig::default(),
+            focus:          Arc::new(Mutex::new(None)),
+            bindings:       Vec::new(),
+            profiles:       HashMap::new(),
+            fetch_anchor:   Box::new(fetch),
+            hub:            None,
+            anchor:         None,
+            sectors:        Vec::new(),
+            press_gestures: Vec::new(),
+            charging:       false,
+            charge_since:   None,
+            last_tap:       None,
+            open:           false,
+            highlight:      None,
+            last_aim:       None
         }
     }
 
@@ -506,28 +576,35 @@ impl PieRuntime {
             return;
         };
         self.anchor = Some(anchor);
-        self.sectors = self.bound_sectors();
+        self.press_gestures = self.effective_bindings();
+        self.sectors = sectors_from(&self.press_gestures);
         let double_click = self
             .last_tap
             .is_some_and(|tap| now.saturating_duration_since(tap) <= DOUBLE_CLICK_WINDOW);
         self.last_tap = None;
         if double_click {
-            self.open = true;
-            debug!(
-                ?anchor,
-                sectors = self.sectors.len(),
-                "pie: open (double click)"
-            );
-            self.send(PieEvent::Open {
-                anchor,
-                sectors: self.sectors.clone()
-            });
+            self.open_menu();
         } else {
             self.charging = true;
             self.charge_since = Some(now);
             debug!(?anchor, "pie: charge");
             self.send(PieEvent::Charge {
                 anchor
+            });
+        }
+    }
+
+    /// Blooms the charge ring into the full menu: flips the state and emits
+    /// [`PieEvent::Open`] with the sectors captured at press.
+    fn open_menu(&mut self) {
+        self.charging = false;
+        self.charge_since = None;
+        self.open = true;
+        if let Some(anchor) = self.anchor {
+            debug!(?anchor, sectors = self.sectors.len(), "pie: open");
+            self.send(PieEvent::Open {
+                anchor,
+                sectors: self.sectors.clone()
             });
         }
     }
@@ -550,16 +627,7 @@ impl PieRuntime {
                 .charge_since
                 .is_some_and(|start| now.saturating_duration_since(start) >= HOLD_DELAY)
             {
-                self.charging = false;
-                self.charge_since = None;
-                self.open = true;
-                if let Some(anchor) = self.anchor {
-                    debug!(?anchor, sectors = self.sectors.len(), "pie: open");
-                    self.send(PieEvent::Open {
-                        anchor,
-                        sectors: self.sectors.clone()
-                    });
-                }
+                self.open_menu();
             }
             return;
         }
@@ -643,8 +711,17 @@ impl PieRuntime {
     ///
     /// The release outcome for the host.
     pub fn on_release(&mut self, now: Instant) -> PieRelease {
+        if self.charging
+            && self
+                .charge_since
+                .is_some_and(|start| now.saturating_duration_since(start) >= HOLD_DELAY)
+        {
+            self.open_menu();
+        }
         if self.open {
-            let committed = self.highlight.filter(|dir| self.is_bound(*dir));
+            let committed = self
+                .highlight
+                .filter(|dir| self.sectors.iter().any(|sector| sector.direction == *dir));
             self.send(PieEvent::Close {
                 committed
             });
@@ -675,6 +752,14 @@ impl PieRuntime {
         self.reset();
     }
 
+    /// The effective gestures captured at the last press. The host fires a
+    /// committed sector from this snapshot, so a focus change while the
+    /// menu is open cannot swap the action the user saw advertised.
+    #[must_use]
+    pub fn press_gestures(&self) -> &[Gesture] {
+        &self.press_gestures
+    }
+
     fn reset(&mut self) {
         self.anchor = None;
         self.sectors.clear();
@@ -700,32 +785,6 @@ impl PieRuntime {
         )
     }
 
-    fn bound_sectors(&self) -> Vec<PieSector> {
-        self.effective_bindings()
-            .iter()
-            .filter(|gesture| gesture.direction != GestureDirection::None)
-            .map(|gesture| {
-                let command = match gesture.action.as_ref() {
-                    Action::Command {
-                        command
-                    } => Some(command.clone()),
-                    _ => None
-                };
-                PieSector {
-                    direction: gesture.direction,
-                    label: action_summary(&gesture.action),
-                    command
-                }
-            })
-            .collect()
-    }
-
-    fn is_bound(&self, direction: GestureDirection) -> bool {
-        self.effective_bindings()
-            .iter()
-            .any(|gesture| gesture.direction == direction)
-    }
-
     fn send(&self, event: PieEvent) {
         match &self.hub {
             Some(hub) => {
@@ -734,13 +793,38 @@ impl PieRuntime {
                     subscribers = hub.receiver_count(),
                     "pie: event published"
                 );
-                let _ = hub.send(event);
+                hub.send(event);
             }
             None => {
                 debug!(?event, "pie: event dropped, no hub attached");
             }
         }
     }
+}
+
+/// Builds the advertised sectors from a snapshot of effective gestures:
+/// one sector per direction (the first binding wins, so a hand-edited
+/// config cannot inflate the wedge count), skipping the click direction.
+fn sectors_from(gestures: &[Gesture]) -> Vec<PieSector> {
+    let mut seen = HashSet::new();
+    gestures
+        .iter()
+        .filter(|gesture| gesture.direction != GestureDirection::None)
+        .filter(|gesture| seen.insert(gesture.direction))
+        .map(|gesture| {
+            let command = match gesture.action.as_ref() {
+                Action::Command {
+                    command
+                } => Some(command.clone()),
+                _ => None
+            };
+            PieSector {
+                direction: gesture.direction,
+                label: action_summary(&gesture.action),
+                command
+            }
+        })
+        .collect()
 }
 
 /// Whether a cursor vector left the activation circle: strictly further than

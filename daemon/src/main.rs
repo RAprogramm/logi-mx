@@ -181,8 +181,7 @@ fn new_live_state() -> (ipc::LiveHub, ipc::SharedLiveState) {
 
 /// Creates the pie event fan-out for `WatchPie` subscribers.
 fn new_pie_hub() -> pie::PieHub {
-    let (hub, _sink) = tokio::sync::broadcast::channel::<pie::PieEvent>(64);
-    hub
+    pie::PieHub::new(64)
 }
 
 /// Attaches the evdev tap thread to an existing fan-out.
