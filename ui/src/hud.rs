@@ -27,7 +27,7 @@ mod toasts;
 mod wheel;
 
 use std::{
-    cell::{OnceCell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::HashMap,
     fs,
     io::BufReader,
@@ -452,7 +452,10 @@ pub(super) struct HudState {
 #[derive(Clone)]
 pub(super) struct Tile {
     child:    FlowBoxChild,
-    dropdown: DropDown
+    dropdown: DropDown,
+    /// Last remap index confirmed for this tile: `0` until the background
+    /// loader or the user sets one.
+    applied:  Rc<Cell<u32>>
 }
 
 /// Shared handle to the button tiles of the open window, keyed by button.
@@ -572,6 +575,7 @@ fn build_hud(app: &Application) {
         });
         LIVE_HOOK.with(|hook| *hook.borrow_mut() = None);
         SNAPSHOT_HOOK.with(|hook| *hook.borrow_mut() = None);
+        buttons::clear_remap_hook();
         ROWS_REGISTRY.with(|rows| *rows.borrow_mut() = None);
         LEADERS_AREA.with(|area| *area.borrow_mut() = None);
         ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = None);

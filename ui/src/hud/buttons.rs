@@ -8,7 +8,9 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    rc::Rc
+    rc::Rc,
+    sync::{Arc, Mutex},
+    thread
 };
 
 use gtk4::{
@@ -56,11 +58,22 @@ const ASSIGNMENT_CHOICES: [&str; 8] = [
 /// height in a single column.
 const TILE_ROW_MIN_HEIGHT: i32 = 48;
 
-/// Dropdown index matching the firmware remap currently stored for `button`:
+/// Dropdown index matching the firmware remap stored for `control_id`:
 /// `0` (Native) when the control is unmapped or the daemon cannot answer.
-fn initial_assignment(button: MouseButton) -> u32 {
+///
+/// This is device I/O — a round-trip that can take a second when the mouse
+/// has fallen asleep — so callers keep it off the main thread.
+///
+/// # Arguments
+///
+/// * `control_id` - Firmware CID of the reprogrammable button.
+///
+/// # Returns
+///
+/// The dropdown index into [`ASSIGNMENT_CHOICES`] for the stored remap.
+fn remap_index(control_id: u16) -> u32 {
     ipc::try_request(&ipc::Request::GetButtonRemap {
-        control_id: button.cid()
+        control_id
     })
     .and_then(|response| match response {
         Response::ButtonRemap {
@@ -71,6 +84,90 @@ fn initial_assignment(button: MouseButton) -> u32 {
     .and_then(|target_cid| REMAP_TARGETS.iter().position(|(_, cid)| *cid == target_cid))
     .and_then(|position| u32::try_from(position).ok())
     .map_or(0, |position| position + 1)
+}
+
+thread_local! {
+    /// Main-context hook that applies remap results delivered by the loader
+    /// thread; cleared when the HUD closes so a late reply finds nothing.
+    static REMAP_HOOK: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+}
+
+/// Clears the remap loader hook; called when the HUD window closes.
+pub(super) fn clear_remap_hook() {
+    REMAP_HOOK.with(|cell| *cell.borrow_mut() = None);
+}
+
+/// Shared slot for remap results delivered by the loader thread.
+type RemapSlot = Arc<Mutex<Option<Vec<(u16, u32)>>>>;
+
+/// Reads every tile's firmware remap off the main thread and paints the
+/// dropdowns once the first frame is up.
+///
+/// The window must not wait on device I/O: the first read after the mouse
+/// sleeps costs about a second. A worker thread collects the plain
+/// `(control_id, index)` pairs, parks them in a shared slot and wakes the
+/// main context, where the hook applies each index only while the user has
+/// not touched that dropdown yet.
+///
+/// # Arguments
+///
+/// * `tiles` - Built button tiles keyed by button.
+fn spawn_remap_loader(tiles: &RowMap) {
+    let plan: Vec<(u16, DropDown, Rc<Cell<u32>>)> = tiles
+        .borrow()
+        .iter()
+        .map(|(button, tile)| {
+            (
+                button.cid(),
+                tile.dropdown.clone(),
+                Rc::clone(&tile.applied)
+            )
+        })
+        .collect();
+    let slot: RemapSlot = Arc::new(Mutex::new(None));
+    let cids: Vec<u16> = plan.iter().map(|(cid, ..)| *cid).collect();
+    let slot_thread = Arc::clone(&slot);
+    let slot_hook = Arc::clone(&slot);
+    let hook: Rc<dyn Fn()> = Rc::new(move || {
+        let Some(results) = slot_hook.lock().ok().and_then(|mut guard| guard.take()) else {
+            return;
+        };
+        for (control_id, index) in results {
+            for (cid, dropdown, applied) in &plan {
+                if *cid == control_id
+                    && index != 0
+                    && applied.get() == 0
+                    && dropdown.selected() == 0
+                {
+                    applied.set(index);
+                    dropdown.set_selected(index);
+                }
+            }
+        }
+    });
+    REMAP_HOOK.with(|cell| *cell.borrow_mut() = Some(hook));
+    let context = glib::MainContext::default();
+    if let Err(e) = thread::Builder::new()
+        .name("remap-loader".to_string())
+        .spawn(move || {
+            let results: Vec<(u16, u32)> = cids
+                .into_iter()
+                .map(|control_id| (control_id, remap_index(control_id)))
+                .collect();
+            if let Ok(mut guard) = slot_thread.lock() {
+                *guard = Some(results);
+            }
+            context.invoke(|| {
+                REMAP_HOOK.with(|cell| {
+                    if let Some(hook) = cell.borrow().as_ref() {
+                        hook();
+                    }
+                });
+            });
+        })
+    {
+        tracing::warn!("Failed to spawn the remap loader thread: {e}");
+    }
 }
 
 /// Builds one button tile: a card with the button name and its assignment
@@ -136,13 +233,11 @@ fn button_tile(
     let rows_assign = Rc::clone(rows);
     let drawing_assign = drawing.clone();
     let toast_assign = toast.clone();
-    let applied = Rc::new(Cell::new(initial_assignment(button)));
-    if applied.get() != 0 {
-        dropdown.set_selected(applied.get());
-    }
+    let applied = Rc::new(Cell::new(0u32));
+    let applied_notify = Rc::clone(&applied);
     dropdown.connect_selected_notify(move |picker| {
         let index = picker.selected();
-        if index == applied.get() {
+        if index == applied_notify.get() {
             return;
         }
         let target_cid = if index == 0 {
@@ -155,7 +250,7 @@ fn button_tile(
             target_cid
         });
         if matches!(response, Some(Response::Ok)) {
-            applied.set(index);
+            applied_notify.set(index);
             let label =
                 (target_cid != 0).then(|| REMAP_TARGETS[(index - 1) as usize].0.to_string());
             set_assignment(
@@ -171,14 +266,15 @@ fn button_tile(
             );
             toast_assign.show(&message);
         } else {
-            picker.set_selected(applied.get());
+            picker.set_selected(applied_notify.get());
             toast_assign.show("Daemon unavailable — change not applied");
         }
     });
 
     Tile {
         child,
-        dropdown
+        dropdown,
+        applied
     }
 }
 
@@ -1076,9 +1172,16 @@ pub(super) fn buttons_page(
         .vadjustment()
         .connect_value_changed(move |_| queue_leaders());
     let box_ = page_body();
-    let (buttons_section, _rows) = buttons_list_section(state, drawing, toast);
+    let (buttons_section, rows) = buttons_list_section(state, drawing, toast);
     box_.append(&buttons_section);
     box_.append(&thumb_remap_section(toast, window));
+    let rows_loader = Rc::clone(&rows);
+    let window_weak = window.downgrade();
+    glib::idle_add_local_once(move || {
+        if window_weak.upgrade().is_some() {
+            spawn_remap_loader(&rows_loader);
+        }
+    });
     scroll.set_child(Some(&box_));
     scroll
 }
