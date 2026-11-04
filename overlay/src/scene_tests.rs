@@ -1,28 +1,28 @@
 // SPDX-FileCopyrightText: 2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-//! Unit tests for the pure renderer state: monitor mapping, octant angles
-//! against the daemon's sector boundaries, label truncation and the scene
+//! Unit tests for the pure renderer state: monitor mapping, wedge tiling
+//! against the daemon's sector centres, label truncation and the scene
 //! state machine.
 
-use logi_mx_daemon::pie::{PieEvent, PieSector, sector_for};
+use logi_mx_daemon::pie::{PieEvent, PieSector, direction_angle};
 use logi_mx_driver::devices::GestureDirection;
 
 use super::{MonitorGeom, PieScene, anchor_monitor, logical_anchor, truncate_label, wedge_for};
 
-/// A scale-2 primary (3840×2160 physical) plus a scale-1 secondary placed
+/// A scale-2 primary (1920×1080 logical) plus a scale-1 secondary placed
 /// to its right, mirroring the maintainer's live layout.
 fn monitors() -> Vec<MonitorGeom> {
     vec![
         MonitorGeom {
             x:      0,
             y:      0,
-            width:  3840,
-            height: 2160,
+            width:  1920,
+            height: 1080,
             scale:  2
         },
         MonitorGeom {
-            x:      3840,
+            x:      1920,
             y:      0,
             width:  2560,
             height: 1440,
@@ -32,32 +32,18 @@ fn monitors() -> Vec<MonitorGeom> {
 }
 
 #[test]
-fn anchor_maps_to_monitor_and_logical_coordinates() {
+fn anchor_maps_to_monitor_and_local_coordinates() {
     let monitors = monitors();
     let index = anchor_monitor((100, 200), &monitors).unwrap_or(usize::MAX);
     assert_eq!(index, 0);
-    assert_eq!(logical_anchor((100, 200), &monitors[index]), (50.0, 100.0));
+    assert_eq!(logical_anchor((100, 200), &monitors[index]), (100.0, 200.0));
 
-    let second = anchor_monitor((4000, 700), &monitors).unwrap_or(usize::MAX);
+    let second = anchor_monitor((2000, 700), &monitors).unwrap_or(usize::MAX);
     assert_eq!(second, 1);
     assert_eq!(
-        logical_anchor((4000, 700), &monitors[second]),
-        (160.0, 700.0)
+        logical_anchor((2000, 700), &monitors[second]),
+        (80.0, 700.0)
     );
-}
-
-#[test]
-fn anchor_on_scale_one_monitor_maps_identity() {
-    let monitors = [MonitorGeom {
-        x:      1920,
-        y:      0,
-        width:  1920,
-        height: 1080,
-        scale:  1
-    }];
-    let index = anchor_monitor((2000, 500), &monitors).unwrap_or(usize::MAX);
-    assert_eq!(index, 0);
-    assert_eq!(logical_anchor((2000, 500), &monitors[index]), (80.0, 500.0));
 }
 
 #[test]
@@ -65,73 +51,71 @@ fn anchor_outside_every_monitor_is_none() {
     let monitors = monitors();
     assert_eq!(anchor_monitor((-1, 0), &monitors), None);
     assert_eq!(anchor_monitor((0, -1), &monitors), None);
-    assert_eq!(anchor_monitor((6400, 0), &monitors), None);
-    assert_eq!(anchor_monitor((0, 2160), &monitors), None);
+    assert_eq!(anchor_monitor((4480, 0), &monitors), None);
+    assert_eq!(anchor_monitor((0, 1080), &monitors), None);
 }
 
 #[test]
 fn monitor_edges_are_half_open() {
     let monitors = monitors();
-    assert_eq!(anchor_monitor((3840, 0), &monitors), Some(1));
-    assert_eq!(anchor_monitor((3839, 2159), &monitors), Some(0));
+    assert_eq!(anchor_monitor((1920, 0), &monitors), Some(1));
+    assert_eq!(anchor_monitor((1919, 1079), &monitors), Some(0));
 }
 
-/// The wedge table must reproduce the daemon's octants: the midpoint of
-/// every wedge, and points well inside it, resolve to the same direction
-/// through `sector_for`.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "vectors are bounded to ±100 after rounding"
-)]
 #[test]
-fn wedge_table_matches_daemon_sector_boundaries() {
-    let octants = [
-        (GestureDirection::Right, 0.0_f64),
-        (GestureDirection::DownRight, 45.0),
-        (GestureDirection::Down, 90.0),
-        (GestureDirection::DownLeft, 135.0),
-        (GestureDirection::Left, 180.0),
-        (GestureDirection::UpLeft, 225.0),
-        (GestureDirection::Up, 270.0),
-        (GestureDirection::UpRight, 315.0)
+fn wedges_tile_the_full_circle_without_gaps() {
+    let cardinals = [
+        GestureDirection::Right,
+        GestureDirection::Down,
+        GestureDirection::Left,
+        GestureDirection::Up
     ];
-    for (direction, degrees) in octants {
-        let middle = degrees.to_radians();
-        let (start, end) = wedge_for(direction).unwrap_or((f64::NAN, f64::NAN));
+    let quarter = std::f64::consts::TAU / 4.0;
+    let mut covered = 0.0;
+    for direction in cardinals {
+        let (start, end) = wedge_for(direction, 4).unwrap_or((f64::NAN, f64::NAN));
+        let centre = direction_angle(direction).unwrap_or(f64::NAN);
         assert!(
-            (middle - start - std::f64::consts::FRAC_PI_8).abs() < 1e-12
-                && (end - middle - std::f64::consts::FRAC_PI_8).abs() < 1e-12,
-            "wedge of {direction:?} must be centred on {degrees}°"
+            (end - start - quarter).abs() < 1e-12,
+            "each of four sectors spans a quarter turn"
         );
-        for offset in [-20.0_f64, 0.0, 20.0] {
-            let angle = middle + offset.to_radians();
-            let dx = (angle.cos() * 100.0).round() as i32;
-            let dy = (angle.sin() * 100.0).round() as i32;
-            assert_eq!(
-                sector_for(dx, dy, 0),
-                Some(direction),
-                "vector at {}° must resolve to {direction:?}",
-                angle.to_degrees()
-            );
-        }
+        assert!(
+            (f64::midpoint(start, end) - centre).abs() < 1e-12,
+            "the wedge of {direction:?} must be centred on its angle"
+        );
+        covered += end - start;
     }
+    assert!(
+        (covered - std::f64::consts::TAU).abs() < 1e-12,
+        "four wedges must cover the whole circle"
+    );
 }
 
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "the boundary vector is bounded to 100 after rounding"
-)]
 #[test]
-fn wedge_on_boundary_belongs_to_cardinal_like_daemon() {
-    let (start, end) = wedge_for(GestureDirection::Right).unwrap_or((f64::NAN, f64::NAN));
-    assert!(end.is_finite() && start.is_finite());
-    let boundary = (end.tan() * 100.0).round() as i32;
-    assert_eq!(sector_for(100, boundary, 0), Some(GestureDirection::Right));
+fn eight_sectors_reproduce_the_octants() {
+    let all = [
+        GestureDirection::Right,
+        GestureDirection::DownRight,
+        GestureDirection::Down,
+        GestureDirection::DownLeft,
+        GestureDirection::Left,
+        GestureDirection::UpLeft,
+        GestureDirection::Up,
+        GestureDirection::UpRight
+    ];
+    let octant = std::f64::consts::TAU / 8.0;
+    for direction in all {
+        let (start, end) = wedge_for(direction, 8).unwrap_or((f64::NAN, f64::NAN));
+        assert!(
+            (end - start - octant).abs() < 1e-12,
+            "each of eight sectors spans an octant"
+        );
+    }
 }
 
 #[test]
 fn wedge_for_click_direction_is_none() {
-    assert_eq!(wedge_for(GestureDirection::None), None);
+    assert_eq!(wedge_for(GestureDirection::None, 4), None);
 }
 
 #[test]
@@ -149,9 +133,29 @@ fn labels_truncate_by_characters_not_bytes() {
 }
 
 #[test]
-fn scene_open_highlight_close_cycle() {
+fn scene_charge_open_highlight_close_cycle() {
     let monitors = monitors();
     let mut scene = PieScene::default();
+    scene.apply(
+        &PieEvent::Charge {
+            anchor: (100, 200)
+        },
+        &monitors
+    );
+    assert!(scene.is_active());
+    assert!(scene.charging);
+    assert_eq!(scene.anchor, (100.0, 200.0));
+    scene.apply(
+        &PieEvent::Highlight {
+            direction: Some(GestureDirection::Up)
+        },
+        &monitors
+    );
+    assert_eq!(
+        scene.highlight, None,
+        "a highlight cannot select a sector while charging"
+    );
+
     scene.apply(
         &PieEvent::Open {
             anchor:  (100, 200),
@@ -169,8 +173,8 @@ fn scene_open_highlight_close_cycle() {
         &monitors
     );
     assert!(scene.is_active());
+    assert!(!scene.charging);
     assert_eq!(scene.monitor, 0);
-    assert_eq!(scene.anchor, (50.0, 100.0));
     assert_eq!(scene.sectors.len(), 2);
     assert_eq!(scene.highlight, None);
 
@@ -193,7 +197,7 @@ fn scene_open_highlight_close_cycle() {
 }
 
 #[test]
-fn scene_ignores_events_without_an_open() {
+fn scene_ignores_events_without_a_charge() {
     let monitors = monitors();
     let mut scene = PieScene::default();
     scene.apply(

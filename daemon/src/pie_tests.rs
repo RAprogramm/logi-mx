@@ -1,21 +1,25 @@
 // SPDX-FileCopyrightText: 2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-//! Pure tests for the pie state machine and the octant function: no sockets,
-//! no time, scripted cursor readers only.
+//! Pure tests for the pie state machine and sector selection: no sockets,
+//! no sleeping, scripted cursor readers and explicit clocks only.
 
 use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering}
-    }
+    },
+    time::{Duration, Instant}
 };
 
 use logi_mx_driver::prelude::{Action, Gesture, GestureDirection, GestureMode};
 use tokio::sync::broadcast::{Receiver, error::TryRecvError};
 
-use super::{PieEvent, PieRuntime, PieSector, sector_for};
+use super::{
+    DOUBLE_CLICK_WINDOW, HOLD_DELAY, PieEvent, PieRelease, PieRuntime, PieSector, direction_angle,
+    sector_among
+};
 
 fn key_gesture(direction: GestureDirection) -> Gesture {
     Gesture {
@@ -66,97 +70,204 @@ fn drain(rx: &mut Receiver<PieEvent>) -> Vec<PieEvent> {
     events
 }
 
-#[test]
-fn sector_for_maps_octant_centers() {
-    assert_eq!(sector_for(10, 0, 0), Some(GestureDirection::Right));
-    assert_eq!(sector_for(10, 10, 0), Some(GestureDirection::DownRight));
-    assert_eq!(sector_for(0, 10, 0), Some(GestureDirection::Down));
-    assert_eq!(sector_for(-10, 10, 0), Some(GestureDirection::DownLeft));
-    assert_eq!(sector_for(-10, 0, 0), Some(GestureDirection::Left));
-    assert_eq!(sector_for(-10, -10, 0), Some(GestureDirection::UpLeft));
-    assert_eq!(sector_for(0, -10, 0), Some(GestureDirection::Up));
-    assert_eq!(sector_for(10, -10, 0), Some(GestureDirection::UpRight));
+/// Advances a clock by whole milliseconds past a fixed origin.
+fn ms(origin: Instant, millis: u64) -> Instant {
+    origin + Duration::from_millis(millis)
 }
 
-#[test]
-fn sector_for_respects_octant_boundaries() {
-    assert_eq!(sector_for(100, 41, 0), Some(GestureDirection::Right));
-    assert_eq!(sector_for(100, 42, 0), Some(GestureDirection::DownRight));
-    assert_eq!(sector_for(100, 241, 0), Some(GestureDirection::DownRight));
-    assert_eq!(sector_for(100, 242, 0), Some(GestureDirection::Down));
-    assert_eq!(sector_for(-100, -41, 0), Some(GestureDirection::Left));
-    assert_eq!(sector_for(-100, -42, 0), Some(GestureDirection::UpLeft));
-    assert_eq!(sector_for(-100, -241, 0), Some(GestureDirection::UpLeft));
-    assert_eq!(sector_for(-100, -242, 0), Some(GestureDirection::Up));
-    assert_eq!(sector_for(100, -241, 0), Some(GestureDirection::UpRight));
-    assert_eq!(sector_for(100, -242, 0), Some(GestureDirection::Up));
-    assert_eq!(sector_for(-100, 241, 0), Some(GestureDirection::DownLeft));
-    assert_eq!(sector_for(-100, 242, 0), Some(GestureDirection::Down));
-}
-
-#[test]
-fn sector_for_dead_zone_is_inclusive() {
-    assert_eq!(sector_for(3, 4, 5), None);
-    assert_eq!(sector_for(-3, -4, 5), None);
-    assert_eq!(sector_for(3, 4, 4), Some(GestureDirection::DownRight));
-    assert_eq!(sector_for(0, 0, 0), None);
-    assert_eq!(sector_for(0, 0, 12), None);
-    assert_eq!(sector_for(1, 0, 0), Some(GestureDirection::Right));
-    assert_eq!(sector_for(0, 0, -5), None);
-    assert_eq!(sector_for(1, 0, -5), Some(GestureDirection::Right));
-}
-
-#[test]
-fn sector_for_survives_extreme_vectors() {
-    assert_eq!(
-        sector_for(i32::MAX, i32::MAX, 0),
-        Some(GestureDirection::DownRight)
-    );
-    assert_eq!(
-        sector_for(i32::MIN, i32::MIN, 10),
-        Some(GestureDirection::UpLeft)
-    );
-    assert_eq!(sector_for(i32::MIN, 0, 0), Some(GestureDirection::Left));
-    assert_eq!(sector_for(0, i32::MIN, 0), Some(GestureDirection::Up));
-    assert_eq!(sector_for(i32::MIN, 0, i32::MAX), None);
-}
-
-#[test]
-fn sector_for_never_returns_direction_none_outside_the_dead_zone() {
-    for dx in -60..=60 {
-        for dy in -60..=60 {
-            let outside = i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy) > 100;
-            let sector = sector_for(dx, dy, 10);
-            assert_eq!(
-                sector.is_some_and(|dir| dir != GestureDirection::None),
-                outside,
-                "vector ({dx}, {dy}) must map outside the dead zone and never to None"
-            );
-        }
+fn sector(direction: GestureDirection) -> PieSector {
+    PieSector {
+        direction,
+        label: format!("{direction:?}")
     }
 }
 
 #[test]
-fn press_opens_the_ring_and_release_closes_it() {
+fn direction_angle_places_cardinals_and_rejects_click() {
+    assert_eq!(direction_angle(GestureDirection::Right), Some(0.0));
+    assert!(
+        (direction_angle(GestureDirection::Down).unwrap_or(0.0) - std::f64::consts::FRAC_PI_2)
+            .abs()
+            < 1e-12
+    );
+    assert!(
+        (direction_angle(GestureDirection::Left).unwrap_or(0.0) - std::f64::consts::PI).abs()
+            < 1e-12
+    );
+    let up = direction_angle(GestureDirection::Up).unwrap_or(0.0);
+    let expected = 3.0 * std::f64::consts::FRAC_PI_2;
+    assert!((up - expected).abs() < 1e-12);
+    assert_eq!(direction_angle(GestureDirection::None), None);
+}
+
+#[test]
+fn sector_among_maps_vectors_to_nearest_centre() {
+    let eight = vec![
+        sector(GestureDirection::Right),
+        sector(GestureDirection::DownRight),
+        sector(GestureDirection::Down),
+        sector(GestureDirection::DownLeft),
+        sector(GestureDirection::Left),
+        sector(GestureDirection::UpLeft),
+        sector(GestureDirection::Up),
+        sector(GestureDirection::UpRight),
+    ];
+    assert_eq!(sector_among(10, 0, &eight), Some(GestureDirection::Right));
+    assert_eq!(
+        sector_among(10, 10, &eight),
+        Some(GestureDirection::DownRight)
+    );
+    assert_eq!(sector_among(0, 10, &eight), Some(GestureDirection::Down));
+    assert_eq!(
+        sector_among(-10, 10, &eight),
+        Some(GestureDirection::DownLeft)
+    );
+    assert_eq!(sector_among(-10, 0, &eight), Some(GestureDirection::Left));
+    assert_eq!(
+        sector_among(-10, -10, &eight),
+        Some(GestureDirection::UpLeft)
+    );
+    assert_eq!(sector_among(0, -10, &eight), Some(GestureDirection::Up));
+    assert_eq!(
+        sector_among(10, -10, &eight),
+        Some(GestureDirection::UpRight)
+    );
+}
+
+#[test]
+fn sector_among_tiles_cardinals_without_gaps() {
+    let cardinals = vec![
+        sector(GestureDirection::Up),
+        sector(GestureDirection::Right),
+        sector(GestureDirection::Down),
+        sector(GestureDirection::Left),
+    ];
+    assert_eq!(
+        sector_among(50, -49, &cardinals),
+        Some(GestureDirection::Right)
+    );
+    assert_eq!(
+        sector_among(49, -50, &cardinals),
+        Some(GestureDirection::Up)
+    );
+    assert_eq!(
+        sector_among(-1, -100, &cardinals),
+        Some(GestureDirection::Up)
+    );
+    assert_eq!(
+        sector_among(-100, 1, &cardinals),
+        Some(GestureDirection::Left)
+    );
+}
+
+#[test]
+fn sector_among_breaks_ties_towards_the_first_sector() {
+    let cardinals = vec![
+        sector(GestureDirection::Up),
+        sector(GestureDirection::Right),
+    ];
+    assert_eq!(
+        sector_among(50, -50, &cardinals),
+        Some(GestureDirection::Up),
+        "an exact boundary belongs to the earlier sector"
+    );
+}
+
+#[test]
+fn sector_among_rejects_zero_vectors_and_empty_lists() {
+    let cardinals = vec![sector(GestureDirection::Up)];
+    assert_eq!(sector_among(0, 0, &cardinals), None);
+    assert_eq!(sector_among(10, 0, &[]), None);
+}
+
+#[test]
+fn press_charges_and_a_held_button_opens_after_the_delay() {
     let (mut pie, mut rx) = scripted(&[(100, 100)], vec![key_gesture(GestureDirection::Up)]);
+    let t0 = Instant::now();
     assert!(pie.should_open());
-    pie.on_press();
-    assert!(pie.is_open(), "the ring opens on the press edge");
+    pie.on_press(t0);
+    assert_eq!(
+        drain(&mut rx),
+        vec![PieEvent::Charge {
+            anchor: (100, 100)
+        }]
+    );
+    pie.on_tick(ms(t0, 100));
+    assert!(
+        drain(&mut rx).is_empty(),
+        "a tick inside the hold gate keeps charging"
+    );
+    pie.on_tick(t0 + HOLD_DELAY);
     assert_eq!(
         drain(&mut rx),
         vec![PieEvent::Open {
             anchor:  (100, 100),
-            sectors: vec![PieSector {
-                direction: GestureDirection::Up,
-                label:     "Up".to_string()
-            }]
+            sectors: vec![sector(GestureDirection::Up)]
         }]
     );
-    assert_eq!(pie.on_release(), None, "a tap highlights nothing");
+    assert!(pie.is_open());
+}
+
+#[test]
+fn tap_closes_the_charge_and_reports_charging() {
+    let (mut pie, mut rx) = scripted(&[(100, 100)], vec![key_gesture(GestureDirection::Up)]);
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 50));
+    assert_eq!(pie.on_release(ms(t0, 100)), PieRelease::Charging);
     assert_eq!(
         drain(&mut rx),
-        vec![PieEvent::Close {
-            committed: None
+        vec![
+            PieEvent::Charge {
+                anchor: (100, 100)
+            },
+            PieEvent::Close {
+                committed: None
+            },
+        ]
+    );
+    assert!(!pie.is_open());
+}
+
+#[test]
+fn double_click_opens_without_charging_again() {
+    let (mut pie, mut rx) = scripted(
+        &[(100, 100), (100, 100)],
+        vec![key_gesture(GestureDirection::Up)]
+    );
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    assert_eq!(pie.on_release(ms(t0, 100)), PieRelease::Charging);
+    drain(&mut rx);
+    let second = ms(t0, 100) + DOUBLE_CLICK_WINDOW / 2;
+    pie.on_press(second);
+    assert!(pie.is_open(), "the second press opens the menu at once");
+    assert_eq!(
+        drain(&mut rx),
+        vec![PieEvent::Open {
+            anchor:  (100, 100),
+            sectors: vec![sector(GestureDirection::Up)]
+        }]
+    );
+}
+
+#[test]
+fn a_press_after_the_window_charges_again() {
+    let (mut pie, mut rx) = scripted(&[(0, 0), (0, 0)], vec![key_gesture(GestureDirection::Up)]);
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_release(ms(t0, 50));
+    drain(&mut rx);
+    let late = ms(t0, 50) + DOUBLE_CLICK_WINDOW * 2;
+    pie.on_press(late);
+    assert!(
+        !pie.is_open(),
+        "a stale tap no longer counts as a double click"
+    );
+    assert_eq!(
+        drain(&mut rx),
+        vec![PieEvent::Charge {
+            anchor: (0, 0)
         }]
     );
 }
@@ -167,38 +278,37 @@ fn open_and_highlight_fire_only_on_change() {
         key_gesture(GestureDirection::Up),
         key_gesture(GestureDirection::Right),
     ];
-    let (mut pie, mut rx) = scripted(&[(0, 0), (100, 0), (100, 0), (0, 100)], bindings);
-    pie.on_press();
-    pie.on_tick();
-    pie.on_tick();
+    let (mut pie, mut rx) = scripted(&[(0, 0), (100, 0), (100, 0), (0, -100)], bindings);
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
+    pie.on_tick(ms(t0, 310));
     assert!(pie.is_open());
     assert_eq!(
         drain(&mut rx),
         vec![
+            PieEvent::Charge {
+                anchor: (0, 0)
+            },
             PieEvent::Open {
                 anchor:  (0, 0),
                 sectors: vec![
-                    PieSector {
-                        direction: GestureDirection::Up,
-                        label:     "Up".to_string()
-                    },
-                    PieSector {
-                        direction: GestureDirection::Right,
-                        label:     "Right".to_string()
-                    }
+                    sector(GestureDirection::Up),
+                    sector(GestureDirection::Right),
                 ]
             },
             PieEvent::Highlight {
                 direction: Some(GestureDirection::Right)
             }
         ],
-        "the second identical tick must not repeat Open or Highlight"
+        "the second identical tick must not repeat Charge, Open or Highlight"
     );
-    pie.on_tick();
+    pie.on_tick(ms(t0, 320));
+    pie.on_tick(ms(t0, 330));
     assert_eq!(
         drain(&mut rx),
         vec![PieEvent::Highlight {
-            direction: Some(GestureDirection::Down)
+            direction: Some(GestureDirection::Up)
         }]
     );
 }
@@ -209,48 +319,29 @@ fn release_over_bound_sector_commits_and_closes() {
         &[(0, 0), (0, -100)],
         vec![key_gesture(GestureDirection::Up)]
     );
-    pie.on_press();
-    pie.on_tick();
-    assert_eq!(pie.on_release(), Some(GestureDirection::Up));
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
+    pie.on_tick(ms(t0, 310));
     assert_eq!(
-        drain(&mut rx),
-        vec![
-            PieEvent::Open {
-                anchor:  (0, 0),
-                sectors: vec![PieSector {
-                    direction: GestureDirection::Up,
-                    label:     "Up".to_string()
-                }]
-            },
-            PieEvent::Highlight {
-                direction: Some(GestureDirection::Up)
-            },
-            PieEvent::Close {
-                committed: Some(GestureDirection::Up)
-            }
-        ]
+        pie.on_release(ms(t0, 400)),
+        PieRelease::Opened(Some(GestureDirection::Up))
+    );
+    assert_eq!(
+        drain(&mut rx).last(),
+        Some(&PieEvent::Close {
+            committed: Some(GestureDirection::Up)
+        })
     );
     assert!(!pie.is_open(), "the hold must be settled after release");
 }
 
 #[test]
-fn release_over_unbound_sector_closes_without_commit() {
-    let (mut pie, mut rx) = scripted(&[(0, 0), (100, 0)], vec![key_gesture(GestureDirection::Up)]);
-    pie.on_press();
-    pie.on_tick();
-    assert_eq!(pie.on_release(), None);
-    assert_eq!(
-        drain(&mut rx).last(),
-        Some(&PieEvent::Close {
-            committed: None
-        })
-    );
-}
-
-#[test]
 fn swipe_highlights_and_release_commits() {
     let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
-    pie.on_press();
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
     pie.on_swipe(GestureDirection::Up);
     assert_eq!(
         drain(&mut rx).last(),
@@ -263,7 +354,10 @@ fn swipe_highlights_and_release_commits() {
         drain(&mut rx).is_empty(),
         "the same direction must not repeat Highlight"
     );
-    assert_eq!(pie.on_release(), Some(GestureDirection::Up));
+    assert_eq!(
+        pie.on_release(ms(t0, 500)),
+        PieRelease::Opened(Some(GestureDirection::Up))
+    );
     assert_eq!(
         drain(&mut rx).last(),
         Some(&PieEvent::Close {
@@ -275,11 +369,13 @@ fn swipe_highlights_and_release_commits() {
 #[test]
 fn swipe_highlight_survives_a_still_cursor() {
     let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
-    pie.on_press();
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
     pie.on_swipe(GestureDirection::Up);
     drain(&mut rx);
-    pie.on_tick();
-    pie.on_tick();
+    pie.on_tick(ms(t0, 310));
+    pie.on_tick(ms(t0, 320));
     assert!(
         drain(&mut rx).is_empty(),
         "a cursor inside the gate must not clear the swipe highlight"
@@ -289,9 +385,11 @@ fn swipe_highlight_survives_a_still_cursor() {
 #[test]
 fn swipe_over_unbound_direction_closes_without_commit() {
     let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
-    pie.on_press();
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
     pie.on_swipe(GestureDirection::Left);
-    assert_eq!(pie.on_release(), None);
+    assert_eq!(pie.on_release(ms(t0, 400)), PieRelease::Opened(None));
     assert_eq!(
         drain(&mut rx).last(),
         Some(&PieEvent::Close {
@@ -303,8 +401,10 @@ fn swipe_over_unbound_direction_closes_without_commit() {
 #[test]
 fn cursor_inside_the_gate_leaves_the_selection_alone() {
     let (mut pie, mut rx) = scripted(&[(0, 0), (20, 0)], vec![key_gesture(GestureDirection::Up)]);
-    pie.on_press();
-    pie.on_tick();
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
+    pie.on_tick(ms(t0, 310));
     assert!(
         drain(&mut rx)
             .iter()
@@ -314,7 +414,7 @@ fn cursor_inside_the_gate_leaves_the_selection_alone() {
 }
 
 #[test]
-fn disabled_config_never_opens_and_never_reads_the_cursor() {
+fn disabled_config_never_engages_and_never_reads_the_cursor() {
     let reads = Arc::new(AtomicUsize::new(0));
     let counter = {
         let reads = Arc::clone(&reads);
@@ -329,10 +429,11 @@ fn disabled_config_never_opens_and_never_reads_the_cursor() {
         ..enabled_config()
     });
     pie.set_bindings(vec![key_gesture(GestureDirection::Up)], HashMap::new());
+    let t0 = Instant::now();
     assert!(!pie.should_open());
-    pie.on_press();
-    pie.on_tick();
-    assert_eq!(pie.on_release(), None);
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
+    assert_eq!(pie.on_release(ms(t0, 400)), PieRelease::Idle);
     assert_eq!(
         reads.load(Ordering::Relaxed),
         0,
@@ -343,24 +444,28 @@ fn disabled_config_never_opens_and_never_reads_the_cursor() {
 #[test]
 fn without_bindings_should_open_is_false() {
     let (mut pie, _rx) = scripted(&[(0, 0)], Vec::new());
+    let t0 = Instant::now();
     assert!(!pie.should_open());
-    pie.on_press();
+    pie.on_press(t0);
     assert!(!pie.is_open());
+    assert_eq!(pie.on_release(ms(t0, 400)), PieRelease::Idle);
 }
 
 #[test]
 fn click_only_binding_does_not_open_the_pie() {
     let (mut pie, _rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::None)]);
+    let t0 = Instant::now();
     assert!(!pie.should_open(), "a lone click binding is not a sector");
-    pie.on_press();
+    pie.on_press(t0);
     assert!(!pie.is_open());
+    assert_eq!(pie.on_release(ms(t0, 400)), PieRelease::Idle);
 }
 
 #[test]
-fn cancel_closes_an_open_pie_and_resets() {
-    let (mut pie, mut rx) = scripted(&[(0, 0), (100, 0)], vec![key_gesture(GestureDirection::Up)]);
-    pie.on_press();
-    pie.on_tick();
+fn cancel_closes_a_charging_ring() {
+    let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
+    let t0 = Instant::now();
+    pie.on_press(t0);
     pie.on_cancel();
     assert_eq!(
         drain(&mut rx).last(),
@@ -369,11 +474,28 @@ fn cancel_closes_an_open_pie_and_resets() {
         })
     );
     assert!(!pie.is_open());
-    assert_eq!(pie.on_release(), None);
+    assert_eq!(pie.on_release(ms(t0, 100)), PieRelease::Idle);
     assert!(
         drain(&mut rx).is_empty(),
         "the settle after cancel is silent"
     );
+}
+
+#[test]
+fn cancel_closes_an_open_pie_and_resets() {
+    let (mut pie, mut rx) = scripted(&[(0, 0)], vec![key_gesture(GestureDirection::Up)]);
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
+    pie.on_cancel();
+    assert_eq!(
+        drain(&mut rx).last(),
+        Some(&PieEvent::Close {
+            committed: None
+        })
+    );
+    assert!(!pie.is_open());
+    assert_eq!(pie.on_release(ms(t0, 400)), PieRelease::Idle);
 }
 
 #[test]
@@ -391,10 +513,11 @@ fn press_without_cursor_keeps_the_hold_a_plain_swipe() {
     let mut pie = PieRuntime::with_fetch(|| None);
     pie.set_config(enabled_config());
     pie.set_bindings(vec![key_gesture(GestureDirection::Up)], HashMap::new());
-    pie.on_press();
-    pie.on_tick();
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
     assert!(!pie.is_open());
-    assert_eq!(pie.on_release(), None);
+    assert_eq!(pie.on_release(ms(t0, 400)), PieRelease::Idle);
 }
 
 #[test]
@@ -419,14 +542,8 @@ fn profile_overrides_replace_global_sectors() {
     assert_eq!(
         pie.bound_sectors(),
         vec![
-            PieSector {
-                direction: GestureDirection::Right,
-                label:     "Right".to_string()
-            },
-            PieSector {
-                direction: GestureDirection::Up,
-                label:     "Up".to_string()
-            },
+            sector(GestureDirection::Right),
+            sector(GestureDirection::Up),
         ],
         "the profile entry replaces the global binding for its direction"
     );
@@ -436,14 +553,8 @@ fn profile_overrides_replace_global_sectors() {
     assert_eq!(
         pie.bound_sectors(),
         vec![
-            PieSector {
-                direction: GestureDirection::Up,
-                label:     "Up".to_string()
-            },
-            PieSector {
-                direction: GestureDirection::Right,
-                label:     "Right".to_string()
-            },
+            sector(GestureDirection::Up),
+            sector(GestureDirection::Right),
         ],
         "an unfocused profile falls through to the global set"
     );

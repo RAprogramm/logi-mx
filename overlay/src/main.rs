@@ -6,19 +6,21 @@
 //!
 //! The windows never take focus (`KeyboardMode::None`) and carry an empty
 //! input region, so pointer events fall through to the desktop and the
-//! overlay is invisible to the compositor until the daemon streams an
-//! `Open`. Decoded events reach the main context through the [`stream`]
+//! overlay is invisible to the compositor until the daemon streams a
+//! `Charge`. Decoded events reach the main context through the [`stream`]
 //! pump and a coalesced wake, where the scene is folded and every surface
-//! is queued for repaint.
+//! is queued for repaint. While a charge fills or the menu blooms, a short
+//! 60 fps timer keeps repainting until the animation window passes.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering}
     },
-    thread_local
+    thread_local,
+    time::{Duration, Instant}
 };
 
 use gtk4::{
@@ -26,7 +28,7 @@ use gtk4::{
     prelude::*, style_context_add_provider_for_display
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use logi_mx_daemon::pie::PieEvent;
+use logi_mx_daemon::pie::{HOLD_DELAY, PieEvent};
 use logi_mx_overlay::{
     draw,
     scene::{MonitorGeom, PieScene},
@@ -41,6 +43,10 @@ const SHELL_NAMESPACE: &str = "logi-mx-pie";
 /// Sheet that makes the full-screen surfaces fully transparent.
 const OVERLAY_CSS: &str =
     "window.logi-mx-pie, window.logi-mx-pie > * { background: none transparent; }";
+/// Duration of the open bloom animation.
+const OPEN_ANIM: Duration = Duration::from_millis(140);
+/// Repaint cadence while an animation runs (~60 fps).
+const ANIM_TICK: Duration = Duration::from_millis(16);
 
 thread_local! {
     /// Main-thread callback that drains the event queue and repaints the
@@ -51,8 +57,10 @@ thread_local! {
 /// Renderer state shared by the draw callbacks and the wake hook.
 #[derive(Default)]
 struct Stage {
-    scene:    PieScene,
-    monitors: Vec<MonitorGeom>
+    scene:          PieScene,
+    monitors:       Vec<MonitorGeom>,
+    charge_started: Option<Instant>,
+    open_started:   Option<Instant>
 }
 
 /// Runs the overlay application, or exits with an error when no graphical
@@ -100,8 +108,10 @@ fn build_overlay(app: &Application) {
     }
 
     let stage = Rc::new(RefCell::new(Stage {
-        scene:    PieScene::default(),
-        monitors: monitors.iter().map(|(_, geom)| *geom).collect()
+        scene:          PieScene::default(),
+        monitors:       monitors.iter().map(|(_, geom)| *geom).collect(),
+        charge_started: None,
+        open_started:   None
     }));
     let queue = Arc::new(Mutex::new(Vec::<PieEvent>::new()));
     let connected = Arc::new(AtomicBool::new(false));
@@ -146,26 +156,34 @@ fn monitor_window(
             surface.set_input_region(Some(&Region::create()));
         }
     });
-    let scale = geom.scale.max(1);
-    window.set_default_size(geom.width / scale, geom.height / scale);
+    window.set_default_size(geom.width, geom.height);
 
     let area = DrawingArea::builder().hexpand(true).vexpand(true).build();
     area.set_can_target(false);
     let draw_stage = Rc::clone(stage);
     area.set_draw_func(move |_area, cr, _width, _height| {
         let stage = draw_stage.borrow();
-        draw::render(cr, index, &stage.scene);
+        let progress = if stage.scene.charging {
+            stage
+                .charge_started
+                .map_or(0.0, |start| fraction(start.elapsed(), HOLD_DELAY))
+        } else {
+            stage
+                .open_started
+                .map_or(1.0, |start| ease_out(fraction(start.elapsed(), OPEN_ANIM)))
+        };
+        draw::render(cr, index, &stage.scene, progress);
     });
     window.set_child(Some(&area));
     window.present();
     area
 }
 
-/// Enumerates the monitors with their physical geometries.
+/// Enumerates the monitors with their logical geometries.
 ///
-/// GDK reports logical geometry and an integer scale; Hyprland anchors are
-/// physical, so the overlay multiplies origin and size by the scale to get
-/// the same coordinate space the daemon uses.
+/// GDK reports logical geometry and an integer scale; Hyprland anchors live
+/// in the same logical space, so the geometry is taken as reported and the
+/// scale is only carried along for painting hints.
 fn monitor_geometries() -> Vec<(gdk::Monitor, MonitorGeom)> {
     let Some(display) = gdk::Display::default() else {
         return Vec::new();
@@ -184,10 +202,10 @@ fn monitor_geometries() -> Vec<(gdk::Monitor, MonitorGeom)> {
         out.push((
             monitor,
             MonitorGeom {
-                x: geometry.x().saturating_mul(scale),
-                y: geometry.y().saturating_mul(scale),
-                width: geometry.width().saturating_mul(scale),
-                height: geometry.height().saturating_mul(scale),
+                x: geometry.x(),
+                y: geometry.y(),
+                width: geometry.width(),
+                height: geometry.height(),
                 scale
             }
         ));
@@ -198,31 +216,57 @@ fn monitor_geometries() -> Vec<(gdk::Monitor, MonitorGeom)> {
 /// Installs the main-context hook that folds queued events into the scene.
 ///
 /// A dropped stream while a pie is open (daemon restart mid-hold) clears the
-/// scene, so a stale ring never lingers on screen.
+/// scene, so a stale ring never lingers on screen. While the charge fills or
+/// the menu blooms, the hook also arms a short repaint timer.
 fn install_hook(
     stage: Rc<RefCell<Stage>>,
     queue: Arc<Mutex<Vec<PieEvent>>>,
     connected: Arc<AtomicBool>,
     areas: Rc<Vec<DrawingArea>>
 ) {
+    let anim_running = Rc::new(Cell::new(false));
     let hook: Rc<dyn Fn()> = Rc::new(move || {
         let events: Vec<PieEvent> = match queue.lock() {
             Ok(mut guard) => std::mem::take(&mut *guard),
             Err(poisoned) => std::mem::take(&mut *poisoned.into_inner())
         };
-        let mut changed = !events.is_empty();
+        let changed = !events.is_empty();
         {
+            let now = Instant::now();
             let stage_ref = &mut *stage.borrow_mut();
             let Stage {
                 scene,
-                monitors
+                monitors,
+                charge_started,
+                open_started
             } = stage_ref;
             for event in &events {
+                match event {
+                    PieEvent::Charge {
+                        ..
+                    } => *charge_started = Some(now),
+                    PieEvent::Open {
+                        ..
+                    } => {
+                        *charge_started = None;
+                        *open_started = Some(now);
+                    }
+                    PieEvent::Close {
+                        ..
+                    } => {
+                        *charge_started = None;
+                        *open_started = None;
+                    }
+                    PieEvent::Highlight {
+                        ..
+                    } => {}
+                }
                 scene.apply(event, monitors);
             }
             if !connected.load(Ordering::Relaxed) && scene.is_active() {
                 scene.reset();
-                changed = true;
+                *charge_started = None;
+                *open_started = None;
             }
         }
         if changed {
@@ -230,8 +274,43 @@ fn install_hook(
                 area.queue_draw();
             }
         }
+        arm_animation(&stage, &areas, &anim_running);
     });
     PIE_HOOK.with(|cell| *cell.borrow_mut() = Some(hook));
+}
+
+/// Starts the repaint timer while a charge fills or a bloom runs, if it is
+/// not running yet; the timer removes itself once both windows have passed.
+fn arm_animation(
+    stage: &Rc<RefCell<Stage>>,
+    areas: &Rc<Vec<DrawingArea>>,
+    running: &Rc<Cell<bool>>
+) {
+    if running.get() {
+        return;
+    }
+    running.set(true);
+    let stage_tick = Rc::clone(stage);
+    let areas_tick = Rc::clone(areas);
+    let flag = Rc::clone(running);
+    glib::timeout_add_local(ANIM_TICK, move || {
+        let alive = {
+            let st = stage_tick.borrow();
+            st.scene.is_active()
+                && (st.scene.charging
+                    || st
+                        .open_started
+                        .is_some_and(|start| start.elapsed() < OPEN_ANIM))
+        };
+        if !alive {
+            flag.set(false);
+            return glib::ControlFlow::Break;
+        }
+        for area in areas_tick.iter() {
+            area.queue_draw();
+        }
+        glib::ControlFlow::Continue
+    });
 }
 
 /// Builds the coalesced wake callback the pump thread calls.
@@ -256,4 +335,18 @@ fn make_wake() -> stream::Wake {
             });
         });
     })
+}
+
+/// Linear `0..=1` fraction of `elapsed` inside `total`.
+fn fraction(elapsed: Duration, total: Duration) -> f64 {
+    if total.is_zero() {
+        return 1.0;
+    }
+    (elapsed.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0)
+}
+
+/// Cubic ease-out, fast start and a soft landing.
+fn ease_out(progress: f64) -> f64 {
+    let inverse = 1.0 - progress;
+    (inverse * inverse).mul_add(-inverse, 1.0)
 }

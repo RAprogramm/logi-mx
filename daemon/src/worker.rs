@@ -178,7 +178,7 @@ fn run_device_worker(
             handle_rpc(req, &mut manager, &mut gestures, &mut buttons);
         }
 
-        let poll = if gestures.is_holding() {
+        let poll = if gestures.is_holding() || gestures.has_pending_click() {
             GESTURE_POLL
         } else {
             IDLE_POLL
@@ -213,8 +213,9 @@ fn run_device_worker(
             });
         }
         if gestures.is_holding() {
-            gestures.on_pie_tick();
+            gestures.on_pie_tick(std::time::Instant::now());
         }
+        gestures.on_clock(std::time::Instant::now());
 
         if should_refresh {
             #[cfg(feature = "notify")]

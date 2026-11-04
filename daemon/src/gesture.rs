@@ -36,7 +36,7 @@ use crate::{
     focus::SharedFocus,
     inject::Injector,
     ipc::{BTN_BIT_DPI, BTN_BIT_GESTURE, LiveFrame, LiveHub, SharedLiveState},
-    pie::{PieConfig, PieHub, PieRuntime, merge_effective}
+    pie::{PieConfig, PieHub, PieRelease, PieRuntime, merge_effective}
 };
 
 /// Divert bookkeeping for the wheel-mode (DPI shift) button.
@@ -68,6 +68,7 @@ pub struct GestureRuntime {
     accumulator:        SwipeAccumulator,
     injector:           Injector,
     last_commit:        Option<GestureDirection>,
+    pending_click:      Option<Instant>,
     injection_warned:   bool,
     unsupported_warned: bool,
     pending_smartshift: Option<SmartShiftConfig>
@@ -130,8 +131,32 @@ impl GestureRuntime {
 
     /// Advances the pie state machine one poll while the gesture button is
     /// held; the worker loop calls this beside the notification pump.
-    pub fn on_pie_tick(&mut self) {
-        self.pie.on_tick();
+    pub fn on_pie_tick(&mut self, now: Instant) {
+        self.pie.on_tick(now);
+    }
+
+    /// Whether a released tap is still inside the double-click window and
+    /// the worker loop should keep polling at the gesture cadence.
+    #[must_use]
+    pub const fn has_pending_click(&self) -> bool {
+        self.pending_click.is_some()
+    }
+
+    /// Fires the click binding a tap deferred when the pie engaged, once
+    /// the double-click window has passed without a second press. The
+    /// worker loop calls this on every poll, holding or not.
+    ///
+    /// # Arguments
+    ///
+    /// * `now` - Monotonic time of this poll.
+    pub fn on_clock(&mut self, now: Instant) {
+        let Some(tap) = self.pending_click else {
+            return;
+        };
+        if now.saturating_duration_since(tap) >= crate::pie::DOUBLE_CLICK_WINDOW {
+            self.pending_click = None;
+            self.fire(GestureDirection::None, None);
+        }
     }
 
     /// The class of the currently focused window, if the desktop reports one.
@@ -311,19 +336,22 @@ impl GestureRuntime {
     }
 
     /// Tracks the gesture button edge: press opens the swipe accumulator,
-    /// opens the pie and raises the live bit; release settles the hold and
-    /// lowers it.
+    /// engages the pie and raises the live bit; release settles the hold and
+    /// lowers it. A press while a tap is still pending is the double click
+    /// that consumes it.
     fn on_gesture_edge(&mut self, held: bool) {
         if held && !self.accumulator.is_holding() {
             debug!("gesture button pressed");
-            self.accumulator.begin(Instant::now());
+            let now = Instant::now();
+            self.pending_click = None;
+            self.accumulator.begin(now);
             self.last_commit = None;
             self.set_live_bit(BTN_BIT_GESTURE, true);
-            self.pie.on_press();
+            self.pie.on_press(now);
         } else if !held && self.accumulator.is_holding() {
             debug!(pie_open = self.pie.is_open(), "gesture button released");
             self.set_live_bit(BTN_BIT_GESTURE, false);
-            self.finish_hold();
+            self.finish_hold(Instant::now());
         }
     }
 
@@ -399,16 +427,27 @@ impl GestureRuntime {
     /// sector fires its `OnRelease` bindings and the swipe fallback is
     /// suppressed, so one hold never fires twice — mid-hold `OnPress` swipe
     /// commits already fired through [`Self::on_raw_xy`] and are untouched.
-    /// A hold that highlighted nothing (a tap) falls through to the swipe
-    /// settlement so the click binding keeps working. When the pie never
-    /// opened, the release path is byte-identical to the pie-less runtime.
-    fn finish_hold(&mut self) {
-        let pie_commit = self.pie.on_release();
+    /// A tap that ended the charge defers the click binding by the
+    /// double-click window through [`Self::on_clock`] so a second press can
+    /// open the menu instead. When the pie never engaged, the release path
+    /// is byte-identical to the pie-less runtime.
+    fn finish_hold(&mut self, now: Instant) {
+        let release = self.pie.on_release(now);
         let swipe_commit = self.last_commit.take();
         let settled = self.accumulator.end();
-        if let Some(dir) = pie_commit {
-            self.fire(dir, Some(GestureMode::OnRelease));
-            return;
+        match release {
+            PieRelease::Opened(Some(dir)) => {
+                self.fire(dir, Some(GestureMode::OnRelease));
+                return;
+            }
+            PieRelease::Opened(None) => return,
+            PieRelease::Charging => {
+                if settled == Some(GestureDirection::None) && swipe_commit.is_none() {
+                    self.pending_click = Some(now);
+                    return;
+                }
+            }
+            PieRelease::Idle => {}
         }
         match settled {
             Some(dir) => self.fire(dir, None),

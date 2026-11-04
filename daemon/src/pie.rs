@@ -3,32 +3,38 @@
 
 //! Radial pie menu runtime for the diverted gesture button.
 //!
-//! Pressing the gesture button opens the menu at the cursor: the ring shows
-//! one sector per bound direction. The selection follows the wheel — a
+//! Pressing and holding the gesture button charges a thin ring around the
+//! cursor; once the hold gate passes, the ring blooms into the full menu at
+//! the cursor. A quick tap never charges: it releases the click binding
+//! instead, and a second press within the double-click window skips the
+//! charge and opens the menu straight away. The menu shows one sector per
+//! bound direction, tiling the full circle. Selection follows the wheel — a
 //! committed swipe direction highlights its sector — and, as a secondary
-//! input, the cursor once it travels further than the activation radius from
-//! the anchor. Releasing over a highlighted sector that has a bound action
-//! fires it, like a Dota-style radial menu. This module is the daemon-side
-//! half of the feature: it runs the state machine and publishes [`PieEvent`]
-//! lines for the overlay renderer over a [`PieHub`] broadcast, mirroring the
-//! live telemetry fan-out.
+//! input, the cursor once it travels further than the activation radius
+//! from the anchor. Releasing over a highlighted sector fires its action,
+//! like a Dota-style radial menu. This module is the daemon-side half of
+//! the feature: it runs the state machine and publishes [`PieEvent`] lines
+//! for the overlay renderer over a [`PieHub`] broadcast, mirroring the live
+//! telemetry fan-out.
 //!
-//! Everything input-driven is either a pure function ([`sector_for`]) or
-//! runs against an injected cursor reader, so the whole state machine is
-//! testable without Hyprland. The press point is captured through the
-//! Hyprland request socket ([`crate::hyprbind::fetch_cursor_pos`]) because
-//! raw-XY deltas carry no absolute position.
+//! Every input is either a pure function ([`sector_among`]) or runs against
+//! an injected cursor reader and an explicit clock, so the whole state
+//! machine is testable without Hyprland and without sleeping. The press
+//! point is captured through the Hyprland request socket
+//! ([`crate::hyprbind::fetch_cursor_pos`]) because raw-XY deltas carry no
+//! absolute position.
 //!
 //! Swipe semantics stay intact: while the pie is enabled, raw-XY travel
 //! still feeds the swipe accumulator, so `OnPress`-mode swipe commits keep
-//! firing mid-hold exactly as before. Only the release moment changes: a
-//! hold whose pie was open fires the highlighted sector's `OnRelease`
-//! bindings instead of the swipe fallback, so one hold never fires twice.
+//! firing mid-hold exactly as before. Only the release moment changes: an
+//! open pie fires the highlighted sector's `OnRelease` bindings instead of
+//! the swipe fallback, so one hold never fires twice.
 
 use std::{
     collections::HashMap,
     hash::BuildHasher,
-    sync::{Arc, Mutex, PoisonError}
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant}
 };
 
 use logi_mx_driver::prelude::{Gesture, GestureDirection};
@@ -56,11 +62,18 @@ pub struct PieSector {
 
 /// One event on the pie stream, mirroring the state machine transitions.
 ///
-/// `Open` is emitted when the gesture button is pressed with the pie
-/// enabled and bound sectors, `Highlight` on every sector change while open
-/// (wheel swipe or cursor), and `Close` exactly once per `Open`.
+/// `Charge` starts the thin hold-gate ring on press, `Open` replaces it with
+/// the full menu once the hold gate passes (or immediately on a double
+/// click), `Highlight` marks every sector change while open (wheel swipe or
+/// cursor), and `Close` ends the visual — exactly once per `Charge` or
+/// `Open`, whichever engaged.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PieEvent {
+    /// A hold is charging at `anchor`; the overlay fills a thin ring.
+    Charge {
+        /// Press point in screen coordinates.
+        anchor: (i32, i32)
+    },
     /// The pie opened at `anchor` with the sectors bound in the scope.
     Open {
         /// Press point in screen coordinates.
@@ -80,87 +93,130 @@ pub enum PieEvent {
     }
 }
 
-/// Tangent of 22.5 degrees scaled by [`TAN_SCALE`], the cardinal/diagonal
-/// octant boundary (tan 22.5° = √2 − 1 ≈ 0.41421356).
-const TAN_22_5: i64 = 4142;
-/// Tangent of 67.5 degrees scaled by [`TAN_SCALE`] (√2 + 1 ≈ 2.41421356).
-const TAN_67_5: i64 = 24142;
-/// Fixed-point scale for the tangent comparisons.
-const TAN_SCALE: i64 = 10_000;
-
-/// Maps a cursor vector to the octant it points at, in screen coordinates
-/// (y grows downward).
+/// How long the gesture button must stay pressed before the charge ring
+/// blooms into the full menu.
+pub const HOLD_DELAY: Duration = Duration::from_millis(250);
+/// How long after a released tap a fresh press counts as a double click
+/// and opens the menu without charging first.
 ///
-/// Returns `None` inside the dead zone, i.e. when the Euclidean length is at
-/// most `dead_zone` (a negative zone is treated as zero). Otherwise the
-/// octant: `Right` spans −22.5°..=22.5°, then clockwise `DownRight`, `Down`,
-/// `DownLeft`, `Left`, `UpLeft`, `Up`, `UpRight`. The 22.5° and 67.5°
-/// boundaries are compared in fixed-point integer math (scaled tangents,
-/// `i64` intermediates), and a vector exactly on a boundary belongs to the
-/// cardinal sector. The result is never [`GestureDirection::None`].
+/// Matches the GNOME default `gtk-double-click-time`; the tap's own action
+/// is deferred by this window so the two never fire together.
+pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
+
+/// What a released hold leaves for the host to settle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PieRelease {
+    /// The pie was open; the host fires the committed direction's
+    /// `OnRelease` bindings, if any, and suppresses the swipe fallback.
+    Opened(Option<GestureDirection>),
+    /// The hold ended while charging (a tap); the host settles a click
+    /// binding, delayed so a second press can become a double click.
+    Charging,
+    /// The pie never engaged; the host settles the hold as a plain swipe.
+    Idle
+}
+
+/// The centre angle of a direction in cairo radians, screen coordinates
+/// (y grows downward): `Right` at 0, then clockwise in 45° steps.
+///
+/// Shared contract with the overlay: wedges are centred on these angles and
+/// [`sector_among`] picks the nearest one, so the painted sector and the
+/// selected sector always agree.
+///
+/// # Arguments
+///
+/// * `direction` - Sector direction; the click direction has no angle.
+///
+/// # Returns
+///
+/// The centre angle in `0..2π`, or `None` for [`GestureDirection::None`].
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_daemon::pie::direction_angle;
+/// use logi_mx_driver::devices::GestureDirection;
+///
+/// assert_eq!(direction_angle(GestureDirection::Right), Some(0.0));
+/// assert!(
+///     (direction_angle(GestureDirection::Up).unwrap_or(0.0) - 3.0 * std::f64::consts::FRAC_PI_2)
+///         .abs()
+///         < 1e-12
+/// );
+/// assert_eq!(direction_angle(GestureDirection::None), None);
+/// ```
+#[must_use]
+pub fn direction_angle(direction: GestureDirection) -> Option<f64> {
+    let steps: f64 = match direction {
+        GestureDirection::Right => 0.0,
+        GestureDirection::DownRight => 1.0,
+        GestureDirection::Down => 2.0,
+        GestureDirection::DownLeft => 3.0,
+        GestureDirection::Left => 4.0,
+        GestureDirection::UpLeft => 5.0,
+        GestureDirection::Up => 6.0,
+        GestureDirection::UpRight => 7.0,
+        GestureDirection::None => return None
+    };
+    Some(steps * std::f64::consts::FRAC_PI_4)
+}
+
+/// Wraps an angle difference into `0..=π`, the shorter way around the circle.
+fn wrapped_distance(angle: f64, centre: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    let diff = (angle - centre).rem_euclid(tau);
+    diff.min(tau - diff)
+}
+
+/// Selects the bound sector a cursor vector points at: the one whose centre
+/// angle is nearest, so any number of sectors tiles the circle without
+/// gaps and selection matches the painted wedges exactly.
 ///
 /// # Arguments
 ///
 /// * `dx` - Horizontal cursor offset from the anchor, positive rightward.
 /// * `dy` - Vertical cursor offset from the anchor, positive downward.
-/// * `dead_zone` - Radius inside which no sector is selected.
+/// * `sectors` - The bound sectors to choose among.
 ///
 /// # Returns
 ///
-/// The octant direction, or `None` inside the dead zone.
+/// The nearest sector's direction, or `None` for a zero vector or an empty
+/// sector list.
 ///
 /// # Examples
 ///
 /// ```
-/// use logi_mx_daemon::pie::sector_for;
+/// use logi_mx_daemon::pie::{PieSector, sector_among};
 /// use logi_mx_driver::devices::GestureDirection;
 ///
-/// assert_eq!(sector_for(30, 0, 12), Some(GestureDirection::Right));
-/// assert_eq!(sector_for(0, -30, 12), Some(GestureDirection::Up));
-/// assert_eq!(sector_for(3, 4, 12), None);
+/// let sectors = vec![
+///     PieSector {
+///         direction: GestureDirection::Up,
+///         label:     "Up".to_string()
+///     },
+///     PieSector {
+///         direction: GestureDirection::Right,
+///         label:     "Right".to_string()
+///     },
+/// ];
+/// assert_eq!(sector_among(0, -50, &sectors), Some(GestureDirection::Up));
+/// assert_eq!(sector_among(50, 0, &sectors), Some(GestureDirection::Right));
+/// assert_eq!(sector_among(0, 0, &sectors), None);
 /// ```
 #[must_use]
-pub fn sector_for(dx: i32, dy: i32, dead_zone: i32) -> Option<GestureDirection> {
-    let (abs_x, abs_y) = (
-        i64::from(dx.saturating_abs()),
-        i64::from(dy.saturating_abs())
-    );
-    let zone = i64::from(dead_zone.max(0));
-    if abs_x * abs_x + abs_y * abs_y <= zone * zone {
+pub fn sector_among(dx: i32, dy: i32, sectors: &[PieSector]) -> Option<GestureDirection> {
+    if dx == 0 && dy == 0 {
         return None;
     }
-    let down = dy >= 0;
-    if dx >= 0 {
-        if abs_y * TAN_SCALE <= abs_x * TAN_22_5 {
-            Some(GestureDirection::Right)
-        } else if abs_y * TAN_SCALE <= abs_x * TAN_67_5 {
-            Some(if down {
-                GestureDirection::DownRight
-            } else {
-                GestureDirection::UpRight
-            })
-        } else {
-            Some(if down {
-                GestureDirection::Down
-            } else {
-                GestureDirection::Up
-            })
-        }
-    } else if abs_y * TAN_SCALE <= abs_x * TAN_22_5 {
-        Some(GestureDirection::Left)
-    } else if abs_y * TAN_SCALE <= abs_x * TAN_67_5 {
-        Some(if down {
-            GestureDirection::DownLeft
-        } else {
-            GestureDirection::UpLeft
+    let angle = f64::from(dy).atan2(f64::from(dx));
+    sectors
+        .iter()
+        .filter_map(|sector| {
+            let centre = direction_angle(sector.direction)?;
+            Some((wrapped_distance(angle, centre), sector.direction))
         })
-    } else {
-        Some(if down {
-            GestureDirection::Down
-        } else {
-            GestureDirection::Up
-        })
-    }
+        .min_by(|(left, _), (right, _)| left.total_cmp(right))
+        .map(|(_, direction)| direction)
 }
 
 /// Merges the global bindings with the focused app's profile overrides.
@@ -200,15 +256,17 @@ type AnchorFetch = Box<dyn Fn() -> Option<(i32, i32)> + Send>;
 ///
 /// Owns the tuning, the effective binding scope (global bindings plus
 /// per-app profiles resolved through [`SharedFocus`]), the hold state
-/// (anchor, open flag, last highlight) and the event fan-out. The host
-/// drives it with [`Self::on_press`], [`Self::on_swipe`] when a swipe
-/// commits, [`Self::on_tick`] per poll while the button is held, and
-/// [`Self::on_release`] or [`Self::on_cancel`] to settle the hold.
+/// (anchor, charging/open flags, last highlight, last tap) and the event
+/// fan-out. The host drives it with [`Self::on_press`], [`Self::on_swipe`]
+/// when a swipe commits, [`Self::on_tick`] per poll while the button is
+/// held, and [`Self::on_release`] or [`Self::on_cancel`] to settle the hold.
 ///
-/// A press with the pie enabled opens the ring at the cursor immediately.
+/// A press with the pie enabled charges a thin ring at the cursor; after
+/// [`HOLD_DELAY`] the ring blooms into the menu, and a press within
+/// [`DOUBLE_CLICK_WINDOW`] of a released tap skips straight to the menu.
 /// Selection then follows whichever input moves: a committed swipe direction
 /// highlights its sector, and a cursor further than the activation radius
-/// from the anchor highlights the sector it points at. While the pie is
+/// from the anchor highlights the nearest sector. While the pie is
 /// enabled, swipe recognition keeps running in parallel: `OnPress`-mode
 /// swipe commits fire mid-hold unchanged. The pie only takes over the
 /// release moment: an open pie commits its sector and the host suppresses
@@ -239,6 +297,9 @@ pub struct PieRuntime {
     hub:          Option<PieHub>,
     anchor:       Option<(i32, i32)>,
     sectors:      Vec<PieSector>,
+    charging:     bool,
+    charge_since: Option<Instant>,
+    last_tap:     Option<Instant>,
     open:         bool,
     highlight:    Option<GestureDirection>
 }
@@ -276,6 +337,9 @@ impl PieRuntime {
             hub:          None,
             anchor:       None,
             sectors:      Vec::new(),
+            charging:     false,
+            charge_since: None,
+            last_tap:     None,
             open:         false,
             highlight:    None
         }
@@ -326,11 +390,15 @@ impl PieRuntime {
         self.open
     }
 
-    /// Handles the press edge: captures the cursor as the anchor, freezes
-    /// the bound sectors and opens the ring right away. Without bindings or
-    /// without a readable cursor the hold stays a plain swipe and nothing
-    /// is sent.
-    pub fn on_press(&mut self) {
+    /// Handles the press edge: captures the cursor as the anchor and either
+    /// starts the charge ring or, on a double click, opens the menu right
+    /// away. Without bindings or without a readable cursor the hold stays a
+    /// plain swipe and nothing is sent.
+    ///
+    /// # Arguments
+    ///
+    /// * `now` - Monotonic time of the press edge.
+    pub fn on_press(&mut self, now: Instant) {
         debug!(
             enabled = self.config.enabled,
             should_open = self.should_open(),
@@ -345,22 +413,62 @@ impl PieRuntime {
         };
         self.anchor = Some(anchor);
         self.sectors = self.bound_sectors();
-        self.open = true;
-        debug!(?anchor, sectors = self.sectors.len(), "pie: open");
-        self.send(PieEvent::Open {
-            anchor,
-            sectors: self.sectors.clone()
-        });
+        let double_click = self
+            .last_tap
+            .is_some_and(|tap| now.saturating_duration_since(tap) <= DOUBLE_CLICK_WINDOW);
+        self.last_tap = None;
+        if double_click {
+            self.open = true;
+            debug!(
+                ?anchor,
+                sectors = self.sectors.len(),
+                "pie: open (double click)"
+            );
+            self.send(PieEvent::Open {
+                anchor,
+                sectors: self.sectors.clone()
+            });
+        } else {
+            self.charging = true;
+            self.charge_since = Some(now);
+            debug!(?anchor, "pie: charge");
+            self.send(PieEvent::Charge {
+                anchor
+            });
+        }
     }
 
     /// Advances the state machine one poll while the button is held.
     ///
-    /// While open, a cursor further than the activation radius from the
-    /// anchor selects the sector it points at and a change emits
-    /// [`PieEvent::Highlight`]; a cursor inside the gate leaves the
-    /// selection to [`Self::on_swipe`]. A tick without a readable cursor
-    /// keeps the previous state.
-    pub fn on_tick(&mut self) {
+    /// While charging, a hold that passed [`HOLD_DELAY`] blooms into the
+    /// open menu and emits [`PieEvent::Open`]. While open, a cursor further
+    /// than the activation radius from the anchor selects the nearest
+    /// sector and a change emits [`PieEvent::Highlight`]; a cursor inside
+    /// the gate leaves the selection to [`Self::on_swipe`]. A tick without
+    /// a readable cursor keeps the previous state.
+    ///
+    /// # Arguments
+    ///
+    /// * `now` - Monotonic time of this poll.
+    pub fn on_tick(&mut self, now: Instant) {
+        if self.charging {
+            if self
+                .charge_since
+                .is_some_and(|start| now.saturating_duration_since(start) >= HOLD_DELAY)
+            {
+                self.charging = false;
+                self.charge_since = None;
+                self.open = true;
+                if let Some(anchor) = self.anchor {
+                    debug!(?anchor, sectors = self.sectors.len(), "pie: open");
+                    self.send(PieEvent::Open {
+                        anchor,
+                        sectors: self.sectors.clone()
+                    });
+                }
+            }
+            return;
+        }
         if !self.open {
             return;
         }
@@ -371,10 +479,11 @@ impl PieRuntime {
             cursor.0.saturating_sub(anchor.0),
             cursor.1.saturating_sub(anchor.1)
         );
-        if !beyond_radius(vector.0, vector.1, self.config.activation_radius) {
+        let gate = self.config.activation_radius.max(self.config.dead_zone);
+        if !beyond_radius(vector.0, vector.1, gate) {
             return;
         }
-        let sector = sector_for(vector.0, vector.1, self.config.dead_zone);
+        let sector = sector_among(vector.0, vector.1, &self.sectors);
         if sector != self.highlight {
             self.highlight = sector;
             self.send(PieEvent::Highlight {
@@ -402,35 +511,48 @@ impl PieRuntime {
         });
     }
 
-    /// Settles the hold on release.
+    /// Settles the hold on release and reports what the host must do.
     ///
-    /// If the pie was open, the highlighted sector commits when it has a
-    /// bound action, [`PieEvent::Close`] is emitted and the state resets.
-    /// A hold whose pie never opened (disabled, unbound, or no readable
-    /// cursor) returns `None` and sends nothing, leaving the release to the
-    /// swipe runtime.
+    /// An open pie commits the highlighted sector when it has a bound
+    /// action and emits [`PieEvent::Close`]; a hold that ended while
+    /// charging is a tap — the charge ring closes and
+    /// [`PieRelease::Charging`] asks the host to delay the click binding so
+    /// a second press can become a double click. A hold that never engaged
+    /// returns [`PieRelease::Idle`] and sends nothing.
+    ///
+    /// # Arguments
+    ///
+    /// * `now` - Monotonic time of the release edge.
     ///
     /// # Returns
     ///
-    /// The direction whose action the host must fire, if any.
-    pub fn on_release(&mut self) -> Option<GestureDirection> {
-        if !self.open {
+    /// The release outcome for the host.
+    pub fn on_release(&mut self, now: Instant) -> PieRelease {
+        if self.open {
+            let committed = self.highlight.filter(|dir| self.is_bound(*dir));
+            self.send(PieEvent::Close {
+                committed
+            });
             self.reset();
-            return None;
+            return PieRelease::Opened(committed);
         }
-        let committed = self.highlight.filter(|dir| self.is_bound(*dir));
-        self.send(PieEvent::Close {
-            committed
-        });
+        if self.charging {
+            self.send(PieEvent::Close {
+                committed: None
+            });
+            self.reset();
+            self.last_tap = Some(now);
+            return PieRelease::Charging;
+        }
         self.reset();
-        committed
+        PieRelease::Idle
     }
 
     /// Aborts a hold without committing, e.g. on device detach or daemon
-    /// shutdown. An open pie closes with `committed: None`; an idle runtime
-    /// stays silent.
+    /// shutdown. A charging or open pie closes with `committed: None`; an
+    /// idle runtime stays silent.
     pub fn on_cancel(&mut self) {
-        if self.open {
+        if self.open || self.charging {
             self.send(PieEvent::Close {
                 committed: None
             });
@@ -441,6 +563,8 @@ impl PieRuntime {
     fn reset(&mut self) {
         self.anchor = None;
         self.sectors.clear();
+        self.charging = false;
+        self.charge_since = None;
         self.open = false;
         self.highlight = None;
     }

@@ -1,23 +1,23 @@
 // SPDX-FileCopyrightText: 2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-//! Pure renderer state: monitor mapping, octant geometry and the scene the
+//! Pure renderer state: monitor mapping, sector geometry and the scene the
 //! draw callbacks paint.
 //!
 //! The daemon streams the press anchor in Hyprland global coordinates, which
-//! are physical pixels, while GTK paints in logical pixels per monitor. This
-//! module converts between the two and keeps the small state machine the
-//! overlay paints: nothing here touches GTK, sockets or the clock, so the
-//! whole mapping is unit-testable headless.
+//! are logical pixels, and GDK reports monitor geometry in the same logical
+//! space. This module maps the anchor onto the monitor that contains it and
+//! keeps the small state machine the overlay paints: nothing here touches
+//! GTK, sockets or the clock, so the whole mapping is unit-testable headless.
 
-use logi_mx_daemon::pie::{PieEvent, PieSector};
+use logi_mx_daemon::pie::{PieEvent, PieSector, direction_angle};
 use logi_mx_driver::devices::GestureDirection;
 
-/// Physical geometry of one monitor, in Hyprland global pixels.
+/// Logical geometry of one monitor, in Hyprland global coordinates.
 ///
-/// `x` and `y` are the monitor's origin in the global physical layout,
-/// `width` and `height` its physical size and `scale` the integer scale
-/// factor (at least 1) GDK reports for it.
+/// `x` and `y` are the monitor's origin in the global logical layout,
+/// `width` and `height` its logical size and `scale` the integer scale
+/// factor (at least 1) GDK reports for it, kept for painting hints.
 ///
 /// # Examples
 ///
@@ -27,36 +27,36 @@ use logi_mx_driver::devices::GestureDirection;
 /// let monitor = MonitorGeom {
 ///     x:      0,
 ///     y:      0,
-///     width:  3840,
-///     height: 2160,
+///     width:  1920,
+///     height: 1080,
 ///     scale:  2
 /// };
 /// assert!(monitor.contains((100, 200)));
-/// assert!(!monitor.contains((3840, 0)));
+/// assert!(!monitor.contains((1920, 0)));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonitorGeom {
-    /// Global physical x of the monitor's top-left corner.
+    /// Global logical x of the monitor's top-left corner.
     pub x:      i32,
-    /// Global physical y of the monitor's top-left corner.
+    /// Global logical y of the monitor's top-left corner.
     pub y:      i32,
-    /// Physical width in pixels.
+    /// Logical width in pixels.
     pub width:  i32,
-    /// Physical height in pixels.
+    /// Logical height in pixels.
     pub height: i32,
     /// Integer scale factor, at least 1.
     pub scale:  i32
 }
 
 impl MonitorGeom {
-    /// Reports whether a global physical point falls inside the monitor.
+    /// Reports whether a global logical point falls inside the monitor.
     ///
     /// The rectangle is half-open: the right and bottom edges belong to the
     /// neighbouring monitor, so overlapping edges never pick two monitors.
     ///
     /// # Arguments
     ///
-    /// * `point` - Global physical `(x, y)` coordinate.
+    /// * `point` - Global logical `(x, y)` coordinate.
     ///
     /// # Returns
     ///
@@ -70,12 +70,12 @@ impl MonitorGeom {
     }
 }
 
-/// Finds the monitor whose physical geometry contains a global anchor.
+/// Finds the monitor whose logical geometry contains a global anchor.
 ///
 /// # Arguments
 ///
-/// * `anchor` - Press point in Hyprland global physical coordinates.
-/// * `monitors` - Physical geometries of all monitors, in window order.
+/// * `anchor` - Press point in Hyprland global logical coordinates.
+/// * `monitors` - Logical geometries of all monitors, in window order.
 ///
 /// # Returns
 ///
@@ -91,12 +91,12 @@ impl MonitorGeom {
 ///     MonitorGeom {
 ///         x:      0,
 ///         y:      0,
-///         width:  3840,
-///         height: 2160,
+///         width:  1920,
+///         height: 1080,
 ///         scale:  2
 ///     },
 ///     MonitorGeom {
-///         x:      3840,
+///         x:      1920,
 ///         y:      0,
 ///         width:  2560,
 ///         height: 1440,
@@ -104,7 +104,7 @@ impl MonitorGeom {
 ///     }
 /// ];
 /// assert_eq!(anchor_monitor((100, 20), &monitors), Some(0));
-/// assert_eq!(anchor_monitor((4000, 20), &monitors), Some(1));
+/// assert_eq!(anchor_monitor((2000, 20), &monitors), Some(1));
 /// assert_eq!(anchor_monitor((-1, 20), &monitors), None);
 /// ```
 #[must_use]
@@ -112,14 +112,14 @@ pub fn anchor_monitor(anchor: (i32, i32), monitors: &[MonitorGeom]) -> Option<us
     monitors.iter().position(|monitor| monitor.contains(anchor))
 }
 
-/// Converts a global physical anchor into monitor-local logical coordinates.
+/// Converts a global logical anchor into monitor-local logical coordinates.
 ///
-/// GTK paints in logical pixels, so the overlay divides the offset from the
-/// monitor origin by the monitor scale factor.
+/// The daemon's anchor and GDK's monitor origins share Hyprland's logical
+/// space, so the conversion is a plain subtraction of the monitor origin.
 ///
 /// # Arguments
 ///
-/// * `anchor` - Press point in Hyprland global physical coordinates.
+/// * `anchor` - Press point in Hyprland global logical coordinates.
 /// * `monitor` - The monitor that contains the anchor.
 ///
 /// # Returns
@@ -134,46 +134,38 @@ pub fn anchor_monitor(anchor: (i32, i32), monitors: &[MonitorGeom]) -> Option<us
 /// let monitor = MonitorGeom {
 ///     x:      0,
 ///     y:      0,
-///     width:  3840,
-///     height: 2160,
+///     width:  1920,
+///     height: 1080,
 ///     scale:  2
 /// };
-/// assert_eq!(logical_anchor((100, 200), &monitor), (50.0, 100.0));
+/// assert_eq!(logical_anchor((100, 200), &monitor), (100.0, 200.0));
 /// ```
 #[must_use]
 pub fn logical_anchor(anchor: (i32, i32), monitor: &MonitorGeom) -> (f64, f64) {
-    let scale = f64::from(monitor.scale.max(1));
     (
-        f64::from(anchor.0.saturating_sub(monitor.x)) / scale,
-        f64::from(anchor.1.saturating_sub(monitor.y)) / scale
+        f64::from(anchor.0.saturating_sub(monitor.x)),
+        f64::from(anchor.1.saturating_sub(monitor.y))
     )
 }
 
-/// Full angle of one octant in radians (45 degrees).
-const OCTANT: f64 = std::f64::consts::FRAC_PI_4;
-/// Half an octant in radians (22.5 degrees), the cardinal half-width.
-const HALF_OCTANT: f64 = std::f64::consts::FRAC_PI_8;
-
-/// The wedge `(start, end)` angles of a direction in cairo radians, or
-/// `None` for [`GestureDirection::None`].
+/// The wedge `(start, end)` angles of a direction when `count` sectors tile
+/// the circle, in cairo radians, or `None` for [`GestureDirection::None`].
 ///
-/// Shared contract with the daemon: the angles reproduce the octants of
-/// [`logi_mx_daemon::pie::sector_for`] exactly, in screen coordinates where
-/// y grows downward — `Right` spans −22.5°..=22.5° around +x, then clockwise
-/// `DownRight`, `Down`, `DownLeft`, `Left`, `UpLeft`, `Up`, `UpRight`. Cairo
-/// angles use the same convention (0 along +x, increasing toward +y, which
-/// is downward on screen), so wedge `i` spans `i × 45° ± 22.5°` in that
-/// order. A vector on a wedge boundary belongs to the cardinal sector, which
-/// only matters for painting edges and is therefore shared by both wedges.
+/// Shared contract with the daemon: every sector is centred on its
+/// [`direction_angle`] and spans `360° / count`, so any number of bound
+/// directions fills the ring edge to edge with no empty gaps, and the wedge
+/// under the cursor is exactly the sector [`logi_mx_daemon::pie::sector_among`]
+/// selects.
 ///
 /// # Arguments
 ///
 /// * `direction` - Sector direction as advertised by the daemon.
+/// * `count` - Number of sectors in the open menu, at least 1.
 ///
 /// # Returns
 ///
-/// `(start, end)` in cairo radians with `end − start == 45°`, or `None` for
-/// the non-directional click binding.
+/// `(start, end)` in cairo radians with `end − start == 360° / count`, or
+/// `None` for the non-directional click binding.
 ///
 /// # Examples
 ///
@@ -181,26 +173,17 @@ const HALF_OCTANT: f64 = std::f64::consts::FRAC_PI_8;
 /// use logi_mx_driver::devices::GestureDirection;
 /// use logi_mx_overlay::scene::wedge_for;
 ///
-/// if let Some((start, end)) = wedge_for(GestureDirection::Right) {
+/// if let Some((start, end)) = wedge_for(GestureDirection::Right, 4) {
 ///     assert!(start < 0.0 && end > 0.0);
 /// }
-/// assert!(wedge_for(GestureDirection::None).is_none());
+/// assert!(wedge_for(GestureDirection::None, 4).is_none());
 /// ```
 #[must_use]
-pub fn wedge_for(direction: GestureDirection) -> Option<(f64, f64)> {
-    let index: f64 = match direction {
-        GestureDirection::Right => 0.0,
-        GestureDirection::DownRight => 1.0,
-        GestureDirection::Down => 2.0,
-        GestureDirection::DownLeft => 3.0,
-        GestureDirection::Left => 4.0,
-        GestureDirection::UpLeft => 5.0,
-        GestureDirection::Up => 6.0,
-        GestureDirection::UpRight => 7.0,
-        GestureDirection::None => return None
-    };
-    let middle = index * OCTANT;
-    Some((middle - HALF_OCTANT, middle + HALF_OCTANT))
+pub fn wedge_for(direction: GestureDirection, count: usize) -> Option<(f64, f64)> {
+    let centre = direction_angle(direction)?;
+    let sectors = u32::try_from(count.max(1)).ok()?;
+    let half = std::f64::consts::PI / f64::from(sectors);
+    Some((centre - half, centre + half))
 }
 
 /// Cuts a sector label to at most `max_chars` characters, appending `…`
@@ -241,8 +224,8 @@ pub fn truncate_label(label: &str, max_chars: usize) -> String {
 /// Everything the draw callbacks paint, folded from the daemon event stream.
 ///
 /// The overlay is a passive renderer: [`Self::apply`] mirrors the daemon
-/// state machine (`Open` → `Highlight`* → `Close`) and nothing else can make
-/// the ring appear.
+/// state machine (`Charge` → `Open`? → `Highlight`* → `Close`) and nothing
+/// else can make the ring appear.
 ///
 /// # Examples
 ///
@@ -265,53 +248,68 @@ pub fn truncate_label(label: &str, max_chars: usize) -> String {
 ///     },
 ///     &monitors
 /// );
-/// assert!(!scene.is_active(), "a Close without an Open stays inert");
+/// assert!(!scene.is_active(), "a Close without a charge stays inert");
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct PieScene {
-    /// Whether a pie is currently open on some monitor.
+    /// Whether a charge ring or a pie is currently painted on some monitor.
     pub active:    bool,
+    /// Whether the thin hold-gate ring is charging instead of the menu.
+    pub charging:  bool,
     /// Index of the monitor carrying the anchor.
     pub monitor:   usize,
     /// Anchor in logical pixels relative to that monitor.
     pub anchor:    (f64, f64),
     /// Bound sectors advertised when the pie opened.
     pub sectors:   Vec<PieSector>,
-    /// Sector under the cursor, `None` inside the dead zone.
+    /// Selected sector, `None` while nothing is highlighted.
     pub highlight: Option<GestureDirection>
 }
 
 impl PieScene {
     /// Folds one daemon event into the scene.
     ///
-    /// `Open` activates the scene on the monitor containing the anchor and
-    /// resets the highlight; an anchor outside every monitor keeps the scene
-    /// inactive. `Highlight` only moves the highlight while active, and
+    /// `Charge` activates the thin ring on the monitor containing the
+    /// anchor; `Open` replaces the charge with the full menu and resets the
+    /// highlight. An anchor outside every monitor keeps the scene inactive.
+    /// `Highlight` only moves the highlight while a menu is open, and
     /// `Close` always clears everything.
     ///
     /// # Arguments
     ///
     /// * `event` - Event decoded from the daemon stream.
-    /// * `monitors` - Physical geometries used to map the anchor.
+    /// * `monitors` - Logical geometries used to map the anchor.
     pub fn apply(&mut self, event: &PieEvent, monitors: &[MonitorGeom]) {
         match event {
+            PieEvent::Charge {
+                anchor
+            } => match anchor_monitor(*anchor, monitors) {
+                Some(index) => {
+                    self.reset();
+                    self.active = true;
+                    self.charging = true;
+                    self.monitor = index;
+                    self.anchor = logical_anchor(*anchor, &monitors[index]);
+                }
+                None => self.reset()
+            },
             PieEvent::Open {
                 anchor,
                 sectors
             } => match anchor_monitor(*anchor, monitors) {
                 Some(index) => {
+                    self.reset();
                     self.active = true;
                     self.monitor = index;
                     self.anchor = logical_anchor(*anchor, &monitors[index]);
                     self.sectors.clone_from(sectors);
-                    self.highlight = None;
                 }
                 None => self.reset()
             },
             PieEvent::Highlight {
                 direction
             } => {
-                if self.active {
+                if self.active && !self.charging {
                     self.highlight = *direction;
                 }
             }
@@ -326,7 +324,7 @@ impl PieScene {
         *self = Self::default();
     }
 
-    /// Whether a ring should be painted at all.
+    /// Whether anything should be painted at all.
     #[must_use]
     pub const fn is_active(&self) -> bool {
         self.active
