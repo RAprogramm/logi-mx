@@ -998,6 +998,19 @@ fn panel_header(window: &ApplicationWindow, widgets: &Rc<RefCell<PanelWidgets>>)
     header
 }
 
+/// The tab glyph, centered so the vertical box skips it in its baseline
+/// computation: a filling `GtkImage` reports no baseline and GTK warns
+/// about it on every size request.
+///
+/// # Arguments
+///
+/// * `icon` - Symbolic icon name from [`PAGE_SPECS`].
+fn tab_icon(icon: &str) -> Image {
+    let glyph = Image::from_icon_name(icon);
+    glyph.set_valign(gtk4::Align::Center);
+    glyph
+}
+
 /// Builds the segmented page switcher: one pill per page, kept in sync with
 /// the stack in both directions.
 fn panel_tabs(stack: &ViewStack) -> GtkBox {
@@ -1013,7 +1026,7 @@ fn panel_tabs(stack: &ViewStack) -> GtkBox {
         tab.set_hexpand(true);
 
         let content = GtkBox::new(Orientation::Vertical, 2);
-        content.append(&Image::from_icon_name(icon));
+        content.append(&tab_icon(icon));
         let caption = Label::new(Some(label));
         caption.add_css_class("caption");
         content.append(&caption);
