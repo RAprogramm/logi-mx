@@ -15,6 +15,16 @@ use gtk4::cairo::{Context, FontSlant, FontWeight, LineCap, RadialGradient};
 
 use crate::scene::{PieScene, truncate_label, wedge_for};
 
+/// Smoothed motion values the host computes per frame: where the aim needle
+/// points and where the highlight wedge currently sits with its opacity.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Motion {
+    /// Needle angle in radians, `None` hides the needle.
+    pub needle:    Option<f64>,
+    /// Highlight wedge centre angle and its alpha, `None` hides the wedge.
+    pub highlight: Option<(f64, f64)>
+}
+
 /// Inner ring radius in logical pixels, mirroring the daemon dead zone.
 pub const RING_INNER: f64 = 18.0;
 /// Outer ring radius in logical pixels.
@@ -25,6 +35,14 @@ const CHARGE_RADIUS: f64 = 26.0;
 const CHARGE_WIDTH: f64 = 4.0;
 /// Centre dot radius in logical pixels.
 const CENTER_DOT: f64 = 3.5;
+/// Stroke width of the aim needle.
+const NEEDLE_WIDTH: f64 = 3.0;
+/// Distance from the centre where the needle starts.
+const NEEDLE_INNER: f64 = 10.0;
+/// Distance from the ring edge where the needle tip stops.
+const NEEDLE_TIP_INSET: f64 = 8.0;
+/// Radius of the needle tip dot.
+const NEEDLE_TIP_RADIUS: f64 = 3.0;
 /// Stroke width of the ring outline.
 const OUTLINE_WIDTH: f64 = 1.0;
 /// Stroke width of the hairline between neighbouring sectors.
@@ -81,6 +99,7 @@ const SHADOW_ALPHA: f64 = 0.32;
 /// * `scene` - Current folded renderer state.
 /// * `progress` - Linear animation progress in `0..=1`: how far the charge ring
 ///   has filled while charging, or how far the menu has bloomed.
+/// * `motion` - Smoothed needle and highlight positions for this frame.
 ///
 /// # Examples
 ///
@@ -92,7 +111,13 @@ const SHADOW_ALPHA: f64 = 0.32;
 ///     "an idle scene paints nothing"
 /// );
 /// ```
-pub fn render(cr: &Context, monitor_index: usize, scene: &PieScene, progress: f64) {
+pub fn render(
+    cr: &Context,
+    monitor_index: usize,
+    scene: &PieScene,
+    progress: f64,
+    motion: &Motion
+) {
     if !targets(monitor_index, scene) {
         return;
     }
@@ -104,7 +129,7 @@ pub fn render(cr: &Context, monitor_index: usize, scene: &PieScene, progress: f6
     }
     let scale = (1.0 - BLOOM_FROM).mul_add(ease_out_back(progress), BLOOM_FROM);
     let alpha = (progress / BLOOM_FADE).min(1.0);
-    paint_bloomed(cr, cx, cy, scene, scale, alpha);
+    paint_bloomed(cr, cx, cy, scene, scale, alpha, motion);
 }
 
 /// Paints the exit of a menu that already closed: shrinking away and fading
@@ -116,7 +141,14 @@ pub fn render(cr: &Context, monitor_index: usize, scene: &PieScene, progress: f6
 /// * `monitor_index` - Index of this window's monitor.
 /// * `scene` - Snapshot of the menu as it was when it closed.
 /// * `progress` - Linear exit progress in `0..=1`.
-pub fn render_exit(cr: &Context, monitor_index: usize, scene: &PieScene, progress: f64) {
+/// * `motion` - Needle and highlight positions frozen at close.
+pub fn render_exit(
+    cr: &Context,
+    monitor_index: usize,
+    scene: &PieScene,
+    progress: f64,
+    motion: &Motion
+) {
     if !targets(monitor_index, scene) {
         return;
     }
@@ -124,7 +156,7 @@ pub fn render_exit(cr: &Context, monitor_index: usize, scene: &PieScene, progres
     let eased = progress.clamp(0.0, 1.0);
     let eased = eased * eased;
     let scale = (EXIT_TO - 1.0).mul_add(eased, 1.0);
-    paint_bloomed(cr, cx, cy, scene, scale, 1.0 - eased);
+    paint_bloomed(cr, cx, cy, scene, scale, 1.0 - eased, motion);
 }
 
 /// Whether a scene should be painted on a given monitor window.
@@ -142,10 +174,19 @@ pub const fn targets(monitor_index: usize, scene: &PieScene) -> bool {
     scene.is_active() && scene.monitor == monitor_index
 }
 
-/// Draws the menu at a given scale and opacity: shadow, sectors, hairlines,
-/// outline, labels and the centre dot, all inside one transform so the
-/// bloom and the exit move as a single object.
-fn paint_bloomed(cr: &Context, cx: f64, cy: f64, scene: &PieScene, scale: f64, alpha: f64) {
+/// Draws the menu at a given scale and opacity: shadow, sectors, the sliding
+/// highlight, hairlines, the aim needle, outline, labels and the centre dot,
+/// all inside one transform so the bloom and the exit move as a single
+/// object.
+fn paint_bloomed(
+    cr: &Context,
+    cx: f64,
+    cy: f64,
+    scene: &PieScene,
+    scale: f64,
+    alpha: f64,
+    motion: &Motion
+) {
     let _ = cr.save();
     cr.translate(cx, cy);
     cr.scale(scale, scale);
@@ -153,7 +194,13 @@ fn paint_bloomed(cr: &Context, cx: f64, cy: f64, scene: &PieScene, scale: f64, a
     cr.push_group();
     paint_shadow(cr, cx, cy);
     paint_sectors(cr, cx, cy, scene);
+    if let Some((angle, highlight_alpha)) = motion.highlight {
+        paint_highlight(cr, cx, cy, scene.sectors.len(), angle, highlight_alpha);
+    }
     paint_separators(cr, cx, cy, scene);
+    if let Some(angle) = motion.needle {
+        paint_needle(cr, cx, cy, angle);
+    }
     paint_outline(cr, cx, cy);
     paint_labels(cr, cx, cy, scene);
     paint_dot(cr, cx, cy);
@@ -200,27 +247,72 @@ fn paint_charge(cr: &Context, cx: f64, cy: f64, progress: f64) {
     let _ = cr.stroke();
 }
 
-/// Fills every bound sector; wedges tile the full circle, so no gap is left
-/// between sections regardless of how many directions are bound.
+/// Fills every bound sector in the base colour; wedges tile the full circle,
+/// so no gap is left between sections regardless of how many directions are
+/// bound. The highlight is a separate sliding wedge.
 fn paint_sectors(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
+    let (red, green, blue, alpha) = FILL_BASE;
+    cr.set_source_rgba(red, green, blue, alpha);
     let count = scene.sectors.len();
     for sector in &scene.sectors {
         let Some((start, end)) = wedge_for(sector.direction, count) else {
             continue;
         };
-        let highlighted = scene.highlight == Some(sector.direction);
-        let (red, green, blue, alpha) = if highlighted {
-            FILL_HIGHLIGHT
-        } else {
-            FILL_BASE
-        };
         cr.new_path();
         cr.move_to(cx, cy);
         cr.arc(cx, cy, RING_OUTER, start, end);
         cr.close_path();
-        cr.set_source_rgba(red, green, blue, alpha);
         let _ = cr.fill();
     }
+}
+
+/// Fills the highlight wedge centred on `angle`, the host having animated
+/// the slide from the previous sector, so selection glides instead of
+/// jumping.
+fn paint_highlight(cr: &Context, cx: f64, cy: f64, count: usize, angle: f64, alpha: f64) {
+    if alpha <= 0.0 || count == 0 {
+        return;
+    }
+    let Ok(sectors) = u32::try_from(count) else {
+        return;
+    };
+    let half = std::f64::consts::PI / f64::from(sectors);
+    let (red, green, blue, base) = FILL_HIGHLIGHT;
+    cr.set_source_rgba(red, green, blue, base * alpha);
+    cr.new_path();
+    cr.move_to(cx, cy);
+    cr.arc(cx, cy, RING_OUTER, angle - half, angle + half);
+    cr.close_path();
+    let _ = cr.fill();
+}
+
+/// Draws the aim needle: a tapered accent line from near the centre to the
+/// ring edge at the exact cursor angle, so the user always sees where they
+/// point inside a sector, plus a tip dot.
+fn paint_needle(cr: &Context, cx: f64, cy: f64, angle: f64) {
+    let (red, green, blue, alpha) = CHARGE_FILL;
+    cr.set_source_rgba(red, green, blue, alpha);
+    cr.set_line_width(NEEDLE_WIDTH);
+    cr.set_line_cap(LineCap::Round);
+    cr.new_path();
+    cr.move_to(
+        NEEDLE_INNER.mul_add(angle.cos(), cx),
+        NEEDLE_INNER.mul_add(angle.sin(), cy)
+    );
+    cr.line_to(
+        (RING_OUTER - NEEDLE_TIP_INSET).mul_add(angle.cos(), cx),
+        (RING_OUTER - NEEDLE_TIP_INSET).mul_add(angle.sin(), cy)
+    );
+    let _ = cr.stroke();
+    cr.new_sub_path();
+    cr.arc(
+        (RING_OUTER - NEEDLE_TIP_INSET).mul_add(angle.cos(), cx),
+        (RING_OUTER - NEEDLE_TIP_INSET).mul_add(angle.sin(), cy),
+        NEEDLE_TIP_RADIUS,
+        0.0,
+        std::f64::consts::TAU
+    );
+    let _ = cr.fill();
 }
 
 /// Strokes the hairline where each sector begins, keeping neighbours crisp

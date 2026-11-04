@@ -197,6 +197,56 @@ fn scene_charge_open_highlight_close_cycle() {
 }
 
 #[test]
+fn aim_updates_only_while_the_menu_is_open() {
+    let monitors = monitors();
+    let mut scene = PieScene::default();
+    scene.apply(
+        &PieEvent::Aim {
+            angle: 1.0
+        },
+        &monitors
+    );
+    assert_eq!(scene.aim, None, "an aim without a menu is ignored");
+    scene.apply(
+        &PieEvent::Charge {
+            anchor: (100, 200)
+        },
+        &monitors
+    );
+    scene.apply(
+        &PieEvent::Aim {
+            angle: 1.0
+        },
+        &monitors
+    );
+    assert_eq!(scene.aim, None, "a charge ring has nothing to aim at");
+    scene.apply(
+        &PieEvent::Open {
+            anchor:  (100, 200),
+            sectors: vec![PieSector {
+                direction: GestureDirection::Up,
+                label:     "Up".to_string()
+            }]
+        },
+        &monitors
+    );
+    scene.apply(
+        &PieEvent::Aim {
+            angle: 1.5
+        },
+        &monitors
+    );
+    assert_eq!(scene.aim, Some(1.5), "the open menu tracks the exact aim");
+    scene.apply(
+        &PieEvent::Close {
+            committed: None
+        },
+        &monitors
+    );
+    assert_eq!(scene.aim, None, "closing forgets the aim");
+}
+
+#[test]
 fn scene_ignores_events_without_a_charge() {
     let monitors = monitors();
     let mut scene = PieScene::default();

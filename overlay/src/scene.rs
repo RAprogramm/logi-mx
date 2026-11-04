@@ -263,7 +263,9 @@ pub struct PieScene {
     /// Bound sectors advertised when the pie opened.
     pub sectors:   Vec<PieSector>,
     /// Selected sector, `None` while nothing is highlighted.
-    pub highlight: Option<GestureDirection>
+    pub highlight: Option<GestureDirection>,
+    /// Exact cursor aim in radians, last streamed by the daemon.
+    pub aim:       Option<f64>
 }
 
 impl PieScene {
@@ -311,6 +313,13 @@ impl PieScene {
             } => {
                 if self.active && !self.charging {
                     self.highlight = *direction;
+                }
+            }
+            PieEvent::Aim {
+                angle
+            } => {
+                if self.active && !self.charging {
+                    self.aim = Some(*angle);
                 }
             }
             PieEvent::Close {

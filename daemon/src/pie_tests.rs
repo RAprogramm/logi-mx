@@ -297,19 +297,54 @@ fn open_and_highlight_fire_only_on_change() {
                     sector(GestureDirection::Right),
                 ]
             },
+            PieEvent::Aim {
+                angle: 0.0
+            },
             PieEvent::Highlight {
                 direction: Some(GestureDirection::Right)
             }
         ],
-        "the second identical tick must not repeat Charge, Open or Highlight"
+        "the second identical tick must not repeat Charge, Open, Aim or Highlight"
     );
     pie.on_tick(ms(t0, 320));
     pie.on_tick(ms(t0, 330));
+    let events = drain(&mut rx);
+    assert_eq!(events.len(), 2, "one aim step and one highlight change");
+    let expected = -std::f64::consts::FRAC_PI_2;
+    assert!(
+        matches!(events[0], PieEvent::Aim { angle } if (angle - expected).abs() < 1e-9),
+        "the needle follows the cursor to the up direction"
+    );
     assert_eq!(
-        drain(&mut rx),
-        vec![PieEvent::Highlight {
+        events[1],
+        PieEvent::Highlight {
             direction: Some(GestureDirection::Up)
-        }]
+        }
+    );
+}
+
+#[test]
+fn aim_follows_the_cursor_and_ignores_tiny_moves() {
+    let (mut pie, mut rx) = scripted(
+        &[(0, 0), (100, 0), (100, 3), (100, 20)],
+        vec![key_gesture(GestureDirection::Up)]
+    );
+    let t0 = Instant::now();
+    pie.on_press(t0);
+    pie.on_tick(ms(t0, 300));
+    pie.on_tick(ms(t0, 310));
+    drain(&mut rx);
+    pie.on_tick(ms(t0, 320));
+    assert!(
+        drain(&mut rx).is_empty(),
+        "a cursor move under the epsilon keeps the stream silent"
+    );
+    pie.on_tick(ms(t0, 330));
+    let events = drain(&mut rx);
+    assert_eq!(events.len(), 1, "a real move republishes the needle");
+    assert!(
+        matches!(events[0], PieEvent::Aim { angle } if (angle - 0.197).abs() < 0.01),
+        "the needle carries the exact cursor angle"
     );
 }
 

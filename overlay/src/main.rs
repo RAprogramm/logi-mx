@@ -28,9 +28,10 @@ use gtk4::{
     prelude::*, style_context_add_provider_for_display
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use logi_mx_daemon::pie::{HOLD_DELAY, PieEvent};
+use logi_mx_daemon::pie::{HOLD_DELAY, PieEvent, direction_angle};
+use logi_mx_driver::devices::GestureDirection;
 use logi_mx_overlay::{
-    draw,
+    draw::{self, Motion},
     scene::{MonitorGeom, PieScene},
     stream
 };
@@ -56,6 +57,11 @@ thread_local! {
     static PIE_HOOK: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
 }
 
+/// Duration of the highlight slide between sectors.
+const HL_ANIM: Duration = Duration::from_millis(120);
+/// Exponential smoothing time constant of the aim needle, seconds.
+const NEEDLE_TAU: f64 = 0.04;
+
 /// Renderer state shared by the draw callbacks and the wake hook.
 #[derive(Default)]
 struct Stage {
@@ -63,7 +69,85 @@ struct Stage {
     monitors:       Vec<MonitorGeom>,
     charge_started: Option<Instant>,
     open_started:   Option<Instant>,
-    fading:         Option<(PieScene, Instant)>
+    fading:         Option<(PieScene, Instant)>,
+    needle:         Option<(f64, Instant)>,
+    highlight:      Option<HlAnim>,
+    last_hl:        Option<GestureDirection>
+}
+
+/// One slide of the highlight wedge between sector centres.
+#[derive(Debug, Clone, Copy)]
+struct HlAnim {
+    from:    Option<f64>,
+    to:      Option<GestureDirection>,
+    started: Instant
+}
+
+impl Stage {
+    /// Smoothed needle and highlight positions for this frame: the needle
+    /// glides exponentially towards the exact aim, the highlight wedge
+    /// slides between sector centres over [`HL_ANIM`].
+    fn motion(&mut self) -> Motion {
+        let now = Instant::now();
+        let target = self
+            .scene
+            .aim
+            .or_else(|| self.scene.highlight.and_then(direction_angle));
+        let needle = match (self.needle, target) {
+            (Some((current, previous)), Some(target)) => {
+                let dt = now.duration_since(previous).as_secs_f64().clamp(0.0, 0.1);
+                let step = 1.0 - (-dt / NEEDLE_TAU).exp();
+                let next = wrap_diff(target - current).mul_add(step, current);
+                self.needle = Some((next, now));
+                Some(next)
+            }
+            (None, Some(target)) => {
+                self.needle = Some((target, now));
+                Some(target)
+            }
+            (held, None) => held.map(|(angle, _)| angle)
+        };
+        let highlight = match self.highlight {
+            Some(anim) => {
+                let t = ease_out(fraction(anim.started.elapsed(), HL_ANIM));
+                let to = anim.to.and_then(direction_angle);
+                let wedge = match (anim.from, to) {
+                    (Some(from), Some(to)) => Some((wrap_diff(to - from).mul_add(t, from), 1.0)),
+                    (None, Some(to)) => Some((to, t)),
+                    (Some(from), None) => Some((from, 1.0 - t)),
+                    (None, None) => None
+                };
+                if anim.started.elapsed() >= HL_ANIM {
+                    self.highlight = None;
+                }
+                wedge.or_else(|| to.map(|angle| (angle, 1.0)))
+            }
+            None => self
+                .scene
+                .highlight
+                .and_then(direction_angle)
+                .map(|angle| (angle, 1.0))
+        };
+        Motion {
+            needle,
+            highlight
+        }
+    }
+
+    /// The angle the highlight wedge currently paints, mid-slide if one runs.
+    fn current_hl_angle(&self) -> Option<f64> {
+        match self.highlight {
+            Some(anim) => {
+                let t = ease_out(fraction(anim.started.elapsed(), HL_ANIM));
+                let to = anim.to.and_then(direction_angle)?;
+                Some(
+                    anim.from
+                        .map_or(to, |from| wrap_diff(to - from).mul_add(t, from))
+                )
+            }
+            None => self.scene.highlight.and_then(direction_angle)
+        }
+    }
 }
 
 /// Runs the overlay application, or exits with an error when no graphical
@@ -115,7 +199,10 @@ fn build_overlay(app: &Application) {
         monitors:       monitors.iter().map(|(_, geom)| *geom).collect(),
         charge_started: None,
         open_started:   None,
-        fading:         None
+        fading:         None,
+        needle:         None,
+        highlight:      None,
+        last_hl:        None
     }));
     let queue = Arc::new(Mutex::new(Vec::<PieEvent>::new()));
     let connected = Arc::new(AtomicBool::new(false));
@@ -166,7 +253,7 @@ fn monitor_window(
     area.set_can_target(false);
     let draw_stage = Rc::clone(stage);
     area.set_draw_func(move |_area, cr, _width, _height| {
-        let stage = draw_stage.borrow();
+        let mut stage = draw_stage.borrow_mut();
         if stage.scene.is_active() {
             let progress = if stage.scene.charging {
                 stage
@@ -177,11 +264,13 @@ fn monitor_window(
                     .open_started
                     .map_or(1.0, |start| fraction(start.elapsed(), OPEN_ANIM))
             };
-            draw::render(cr, index, &stage.scene, progress);
-        } else if let Some((snapshot, started)) = stage.fading.as_ref() {
+            let motion = stage.motion();
+            draw::render(cr, index, &stage.scene, progress, &motion);
+        } else if let Some((snapshot, started)) = stage.fading.clone() {
             let progress = fraction(started.elapsed(), EXIT_ANIM);
             if progress < 1.0 {
-                draw::render_exit(cr, index, snapshot, progress);
+                let motion = stage.motion();
+                draw::render_exit(cr, index, &snapshot, progress, &motion);
             }
         }
     });
@@ -245,12 +334,16 @@ fn install_hook(
         {
             let now = Instant::now();
             let stage_ref = &mut *stage.borrow_mut();
+            let previous_hl = stage_ref.current_hl_angle();
             let Stage {
                 scene,
                 monitors,
                 charge_started,
                 open_started,
-                fading
+                fading,
+                needle,
+                highlight,
+                last_hl
             } = stage_ref;
             for event in &events {
                 match event {
@@ -259,6 +352,9 @@ fn install_hook(
                     } => {
                         *charge_started = Some(now);
                         *fading = None;
+                        *needle = None;
+                        *highlight = None;
+                        *last_hl = None;
                     }
                     PieEvent::Open {
                         ..
@@ -266,6 +362,9 @@ fn install_hook(
                         *charge_started = None;
                         *open_started = Some(now);
                         *fading = None;
+                        *needle = None;
+                        *highlight = None;
+                        *last_hl = None;
                     }
                     PieEvent::Close {
                         ..
@@ -278,15 +377,29 @@ fn install_hook(
                     }
                     PieEvent::Highlight {
                         ..
+                    }
+                    | PieEvent::Aim {
+                        ..
                     } => {}
                 }
                 scene.apply(event, monitors);
+            }
+            if scene.highlight != *last_hl {
+                *highlight = Some(HlAnim {
+                    from:    previous_hl,
+                    to:      scene.highlight,
+                    started: now
+                });
+                *last_hl = scene.highlight;
             }
             if !connected.load(Ordering::Relaxed) && scene.is_active() {
                 scene.reset();
                 *fading = None;
                 *charge_started = None;
                 *open_started = None;
+                *needle = None;
+                *highlight = None;
+                *last_hl = None;
             }
         }
         if changed {
@@ -316,11 +429,6 @@ fn arm_animation(
     glib::timeout_add_local(ANIM_TICK, move || {
         let alive = {
             let mut st = stage_tick.borrow_mut();
-            let menu_alive = st.scene.is_active()
-                && (st.scene.charging
-                    || st
-                        .open_started
-                        .is_some_and(|start| start.elapsed() < OPEN_ANIM));
             let fade_alive = st
                 .fading
                 .as_ref()
@@ -328,7 +436,7 @@ fn arm_animation(
             if !fade_alive {
                 st.fading = None;
             }
-            menu_alive || fade_alive
+            st.scene.is_active() || fade_alive
         };
         if !alive {
             flag.set(false);
@@ -371,4 +479,15 @@ fn fraction(elapsed: Duration, total: Duration) -> f64 {
         return 1.0;
     }
     (elapsed.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0)
+}
+
+/// Cubic ease-out, fast start and a soft landing.
+fn ease_out(progress: f64) -> f64 {
+    let inverse = 1.0 - progress;
+    (inverse * inverse).mul_add(-inverse, 1.0)
+}
+
+/// Wraps an angle difference into `-π..=π`, the shorter way around.
+fn wrap_diff(delta: f64) -> f64 {
+    (delta + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
 }

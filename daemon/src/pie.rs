@@ -67,7 +67,7 @@ pub struct PieSector {
 /// click), `Highlight` marks every sector change while open (wheel swipe or
 /// cursor), and `Close` ends the visual — exactly once per `Charge` or
 /// `Open`, whichever engaged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PieEvent {
     /// A hold is charging at `anchor`; the overlay fills a thin ring.
     Charge {
@@ -86,6 +86,12 @@ pub enum PieEvent {
         /// Selected sector, `None` while the cursor sits inside the gate.
         direction: Option<GestureDirection>
     },
+    /// The cursor aim angle moved, so the overlay can point a needle at the
+    /// exact direction instead of only at whole sectors.
+    Aim {
+        /// Radians in screen coordinates, 0 along +x, clockwise (y down).
+        angle: f64
+    },
     /// The pie closed; `committed` is the fired direction, if any.
     Close {
         /// Direction fired on release, `None` for a cancel or unbound sector.
@@ -102,6 +108,10 @@ pub const HOLD_DELAY: Duration = Duration::from_millis(250);
 /// Matches the GNOME default `gtk-double-click-time`; the tap's own action
 /// is deferred by this window so the two never fire together.
 pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
+
+/// Smallest cursor angle change, in radians, that republishes the aim
+/// needle; keeps the stream near 60 fps without flooding it.
+const AIM_EPS: f64 = 0.05;
 
 /// What a released hold leaves for the host to settle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,7 +311,8 @@ pub struct PieRuntime {
     charge_since: Option<Instant>,
     last_tap:     Option<Instant>,
     open:         bool,
-    highlight:    Option<GestureDirection>
+    highlight:    Option<GestureDirection>,
+    last_aim:     Option<f64>
 }
 
 impl Default for PieRuntime {
@@ -341,7 +352,8 @@ impl PieRuntime {
             charge_since: None,
             last_tap:     None,
             open:         false,
-            highlight:    None
+            highlight:    None,
+            last_aim:     None
         }
     }
 
@@ -483,6 +495,16 @@ impl PieRuntime {
         if !beyond_radius(vector.0, vector.1, gate) {
             return;
         }
+        let angle = f64::from(vector.1).atan2(f64::from(vector.0));
+        if self
+            .last_aim
+            .is_none_or(|previous| (angle - previous).abs() > AIM_EPS)
+        {
+            self.last_aim = Some(angle);
+            self.send(PieEvent::Aim {
+                angle
+            });
+        }
         let sector = sector_among(vector.0, vector.1, &self.sectors);
         if sector != self.highlight {
             self.highlight = sector;
@@ -501,7 +523,18 @@ impl PieRuntime {
     ///
     /// * `direction` - The direction the swipe accumulator just committed.
     pub fn on_swipe(&mut self, direction: GestureDirection) {
-        if !self.open || self.highlight == Some(direction) {
+        if !self.open {
+            return;
+        }
+        if let Some(centre) = direction_angle(direction)
+            && self.last_aim != Some(centre)
+        {
+            self.last_aim = Some(centre);
+            self.send(PieEvent::Aim {
+                angle: centre
+            });
+        }
+        if self.highlight == Some(direction) {
             return;
         }
         self.highlight = Some(direction);
@@ -567,6 +600,7 @@ impl PieRuntime {
         self.charge_since = None;
         self.open = false;
         self.highlight = None;
+        self.last_aim = None;
     }
 
     fn focused_app(&self) -> Option<String> {
