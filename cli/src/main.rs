@@ -238,8 +238,22 @@ fn main() -> Result<()> {
         Commands::Buttons {
             config
         } => {
-            cmd_buttons()?;
-            if config { show_button_config() } else { Ok(()) }
+            let listed = cmd_buttons();
+            if !config {
+                return listed;
+            }
+            // The daemon answers GetButtons even while the mouse is
+            // disconnected, so the stored mappings print regardless of
+            // whether the live device listing succeeded.
+            let stored = show_button_config();
+            match (listed, stored) {
+                (Ok(()), stored) => stored,
+                (Err(listing), Ok(())) => {
+                    warn!("device listing failed: {listing}");
+                    Ok(())
+                }
+                (Err(_), Err(stored)) => Err(stored)
+            }
         }
         Commands::Set {
             setting
@@ -481,7 +495,7 @@ fn cmd_set(setting: SetCommands) -> Result<()> {
                 warn!(
                     "the divert was written without a running daemon; the control stays diverted \
                      and produces no events until a daemon pumps it or `logi-mx set button \
-                     {control_id:#06x} --divert false` clears it"
+                     {control_id:#06x}` clears it"
                 );
             }
             Ok(())
@@ -608,6 +622,17 @@ fn systemctl(args: &[&str]) -> Result<std::process::ExitStatus> {
         .map_err(|e| AppError::internal("Failed to run systemctl").with_source(e))
 }
 
+/// Asks systemd to re-read the user unit files, reporting a refusal.
+fn reload_units() -> Result<()> {
+    let status = systemctl(&["daemon-reload"])?;
+    if !status.success() {
+        return Err(AppError::internal(
+            "systemd did not reload the unit files; run `systemctl --user daemon-reload` manually"
+        ));
+    }
+    Ok(())
+}
+
 fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
     let home =
         std::env::var("HOME").map_err(|e| AppError::internal("HOME not set").with_source(e))?;
@@ -641,7 +666,7 @@ fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
                 })?;
             }
 
-            let _ = systemctl(&["daemon-reload"]);
+            reload_units()?;
             let socket = systemctl(&["enable", "--now", "logi-mx-daemon.socket"])?;
             if !socket.success() {
                 return Err(AppError::internal("Failed to enable daemon socket"));
@@ -654,19 +679,31 @@ fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
             if overlay.success() {
                 println!("Autostart installed and daemon and overlay started.");
             } else {
-                warn!(
-                    "the overlay service did not start; install the logi-mx-overlay binary to ~/.local/bin"
-                );
-                println!("Autostart installed and daemon started; the overlay needs its binary.");
+                let binary = std::path::Path::new(&home).join(".local/bin/logi-mx-overlay");
+                if binary.is_file() {
+                    warn!(
+                        "the overlay service did not start although its binary is installed; \
+                         check `systemctl --user status logi-mx-overlay.service`"
+                    );
+                } else {
+                    warn!(
+                        "the overlay service did not start; install the logi-mx-overlay binary \
+                         to ~/.local/bin"
+                    );
+                }
+                println!("Autostart installed and daemon started; the overlay did not start.");
             }
         }
         AutostartCommands::Uninstall => {
             for (name, _) in units.iter().rev() {
-                if service_dir.join(name).is_file() {
-                    let status = systemctl(&["disable", "--now", name])?;
-                    if !status.success() {
-                        return Err(AppError::internal(format!("Failed to disable {name}")));
-                    }
+                // Disable even when no local unit file exists: the unit may
+                // be enabled from the packaged /usr/lib/systemd/user copy.
+                // A failure without a local file means systemd never knew
+                // the unit, which is nothing to undo.
+                let local = service_dir.join(name).is_file();
+                let status = systemctl(&["disable", "--now", name])?;
+                if !status.success() && local {
+                    return Err(AppError::internal(format!("Failed to disable {name}")));
                 }
                 match std::fs::remove_file(service_dir.join(name)) {
                     Ok(()) => {}
@@ -678,7 +715,7 @@ fn cmd_autostart(action: &AutostartCommands) -> Result<()> {
                     }
                 }
             }
-            let _ = systemctl(&["daemon-reload"]);
+            reload_units()?;
             println!("Autostart removed.");
         }
         AutostartCommands::Status => {
@@ -814,14 +851,19 @@ fn button_action_line(action: &Action) -> String {
 /// Prints the stored thumb button software remap: the global map and every
 /// per-application profile; unbound buttons print as `native`.
 fn show_button_config() -> Result<()> {
-    let Some(Response::ButtonsConfig {
-        buttons,
-        profiles
-    }) = try_request(&Request::GetButtons)
-    else {
-        return Err(AppError::internal(
-            "Daemon is not reachable; start it with `systemctl --user start logi-mx-daemon`"
-        ));
+    let (buttons, profiles) = match try_request(&Request::GetButtons) {
+        Some(Response::ButtonsConfig {
+            buttons,
+            profiles
+        }) => (buttons, profiles),
+        Some(Response::Error {
+            message
+        }) => return Err(AppError::internal(message)),
+        _ => {
+            return Err(AppError::internal(
+                "Daemon is not reachable; start it with `systemctl --user start logi-mx-daemon`"
+            ));
+        }
     };
     let mut out = Out::new();
     out.line(format_args!("Thumb button remap:"))?;
@@ -840,7 +882,20 @@ fn show_button_config() -> Result<()> {
     for app in apps {
         out.line(format_args!("[{app}]"))?;
         for button in [ButtonId::Back, ButtonId::Forward] {
-            render(&profiles[app], button, &mut out)?;
+            let profile = &profiles[app];
+            // A button the profile omits falls back to the global binding
+            // at runtime, so print that binding and mark it inherited.
+            let inherited = !profile.contains_key(&button);
+            let action = profile
+                .get(&button)
+                .or_else(|| buttons.get(&button))
+                .map_or_else(|| "native".to_string(), button_action_line);
+            let mark = if inherited && action != "native" {
+                " (global)"
+            } else {
+                ""
+            };
+            out.line(format_args!("  {button:?}: {action}{mark}"))?;
         }
     }
     out.finish()
@@ -851,13 +906,18 @@ fn show_button_config() -> Result<()> {
 /// Each line pairs the replayable chord with the binding's human label; the
 /// chords are what `Action::Keypress` stores when a gesture adopts a bind.
 fn cmd_keybinds() -> Result<()> {
-    let Some(Response::Keybinds {
-        entries
-    }) = try_request(&Request::GetKeybinds)
-    else {
-        return Err(AppError::internal(
-            "Daemon is not reachable; start it with `systemctl --user start logi-mx-daemon`"
-        ));
+    let entries = match try_request(&Request::GetKeybinds) {
+        Some(Response::Keybinds {
+            entries
+        }) => entries,
+        Some(Response::Error {
+            message
+        }) => return Err(AppError::internal(message)),
+        _ => {
+            return Err(AppError::internal(
+                "Daemon is not reachable; start it with `systemctl --user start logi-mx-daemon`"
+            ));
+        }
     };
     let mut out = Out::new();
     out.line(format_args!("Hyprland keybinds: {}", entries.len()))?;

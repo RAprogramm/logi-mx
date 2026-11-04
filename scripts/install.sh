@@ -30,6 +30,38 @@ run_user_systemctl() {
   fi
 }
 
+# True when the script runs as root for a different target user; user-scoped
+# files must then be handed over or the user cannot edit them later.
+needs_chown() {
+  [ "$(id -u)" -eq 0 ] && [ "${TARGET_USER}" != "root" ]
+}
+
+# Create a directory; directories newly created by the script (including the
+# missing parents install -d produces) are owned by the target user.
+install_dir() {
+  local dir="$1"
+  local missing=()
+  local probe="$dir"
+  while [ ! -d "$probe" ] && [ "$probe" != "/" ]; do
+    missing+=("$probe")
+    probe="$(dirname "$probe")"
+  done
+  install -d "$dir"
+  if needs_chown && [ "${#missing[@]}" -gt 0 ]; then
+    local created
+    for created in "${missing[@]}"; do
+      chown "${TARGET_USER}:" "$created"
+    done
+  fi
+}
+
+# Hand freshly written user-scoped files to the target user.
+chown_files() {
+  if needs_chown; then
+    chown "${TARGET_USER}:" "$@"
+  fi
+}
+
 echo "=== logi-mx installer ==="
 echo "Building (${BUILD})..."
 cargo build --manifest-path "${ROOT_DIR}/Cargo.toml" --"${BUILD}"
@@ -72,7 +104,7 @@ if [ "${HAS_DISPLAY}" -eq 1 ]; then
   echo "Desktop detected: installing tray/UI integration."
 fi
 
-install -d "${APPLICATIONS_DIR}"
+install_dir "${APPLICATIONS_DIR}"
 cat > "${APPLICATIONS_DIR}/logi-mx-ui.desktop" <<DESKTOP
 [Desktop Entry]
 Name=Logitech MX Configuration
@@ -81,10 +113,11 @@ Type=Application
 Icon=input-mouse
 Categories=Settings;HardwareSettings;
 DESKTOP
+chown_files "${APPLICATIONS_DIR}/logi-mx-ui.desktop"
 
 # Autostart daemon (enabled by default for professional UX)
 if [ "${AUTO_START:-yes}" != "no" ]; then
-  install -d "${AUTOSTART_DIR}"
+  install_dir "${AUTOSTART_DIR}"
   cat > "${AUTOSTART_DIR}/logi-mx-daemon.desktop" <<DESKTOP
 [Desktop Entry]
 Name=Logitech MX Daemon
@@ -92,28 +125,36 @@ Exec=${BIN_DIR}/logi-mx-daemon
 Type=Application
 X-GNOME-Autostart-enabled=true
 DESKTOP
+  chown_files "${AUTOSTART_DIR}/logi-mx-daemon.desktop"
   echo "  autostart enabled"
 fi
 
 # systemd user units
 if command -v systemctl >/dev/null 2>&1; then
-  install -d "${USER_BIN_DIR}"
+  install_dir "${USER_BIN_DIR}"
   install -m 0755 "${BIN_SRC}/logi-mx-daemon" "${USER_BIN_DIR}/logi-mx-daemon"
   install -m 0755 "${BIN_SRC}/logi-mx-overlay" "${USER_BIN_DIR}/logi-mx-overlay"
-  install -d "${SYSTEMD_USER_DIR}"
+  install_dir "${SYSTEMD_USER_DIR}"
   install -m 0644 "${ROOT_DIR}/logi-mx-daemon.service" "${SYSTEMD_USER_DIR}/logi-mx-daemon.service"
   install -m 0644 "${ROOT_DIR}/logi-mx-daemon.socket" "${SYSTEMD_USER_DIR}/logi-mx-daemon.socket"
   install -m 0644 "${ROOT_DIR}/overlay/logi-mx-overlay.service" "${SYSTEMD_USER_DIR}/logi-mx-overlay.service"
   # user units always run the binaries from the target user's ~/.local/bin
   sed -i "s#^ExecStart=.*#ExecStart=%h/.local/bin/logi-mx-daemon#" "${SYSTEMD_USER_DIR}/logi-mx-daemon.service"
   sed -i "s#^ExecStart=.*#ExecStart=%h/.local/bin/logi-mx-overlay#" "${SYSTEMD_USER_DIR}/logi-mx-overlay.service"
+  chown_files "${USER_BIN_DIR}/logi-mx-daemon" "${USER_BIN_DIR}/logi-mx-overlay" \
+    "${SYSTEMD_USER_DIR}/logi-mx-daemon.service" "${SYSTEMD_USER_DIR}/logi-mx-daemon.socket" \
+    "${SYSTEMD_USER_DIR}/logi-mx-overlay.service"
   run_user_systemctl daemon-reload 2>/dev/null || true
   if run_user_systemctl enable --now logi-mx-daemon.socket logi-mx-daemon.service 2>/dev/null; then
     echo "  systemd user service and socket installed and enabled"
   else
     echo "  warning: could not enable systemd user units. As ${TARGET_USER}, run: systemctl --user enable --now logi-mx-daemon.socket logi-mx-daemon.service"
   fi
-  run_user_systemctl enable --now logi-mx-overlay.service 2>/dev/null || true
+  if run_user_systemctl enable --now logi-mx-overlay.service 2>/dev/null; then
+    echo "  overlay service enabled"
+  else
+    echo "  warning: could not enable the overlay service. As ${TARGET_USER}, run: systemctl --user enable --now logi-mx-overlay.service"
+  fi
 fi
 
 # Hyprland integration (window rules + overlay keybind), offered once
