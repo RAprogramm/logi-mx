@@ -19,11 +19,13 @@ fn open_event_round_trips_through_a_stream_line() {
         sectors: vec![
             PieSector {
                 direction: GestureDirection::Up,
-                label:     "Up".to_string()
+                label:     "Up".to_string(),
+                command:   None
             },
             PieSector {
                 direction: GestureDirection::UpLeft,
-                label:     "UpLeft".to_string()
+                label:     "UpLeft".to_string(),
+                command:   None
             },
         ]
     };

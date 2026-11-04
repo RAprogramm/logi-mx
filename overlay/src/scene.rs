@@ -250,7 +250,7 @@ pub fn truncate_label(label: &str, max_chars: usize) -> String {
 /// );
 /// assert!(!scene.is_active(), "a Close without a charge stays inert");
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct PieScene {
     /// Whether a charge ring or a pie is currently painted on some monitor.
     pub active:    bool,
@@ -265,7 +265,24 @@ pub struct PieScene {
     /// Selected sector, `None` while nothing is highlighted.
     pub highlight: Option<GestureDirection>,
     /// Exact cursor aim in radians, last streamed by the daemon.
-    pub aim:       Option<f64>
+    pub aim:       Option<f64>,
+    /// Scale factor of the monitor carrying the pie, for crisp icon decode.
+    pub scale:     i32
+}
+
+impl Default for PieScene {
+    fn default() -> Self {
+        Self {
+            active:    false,
+            charging:  false,
+            monitor:   0,
+            anchor:    (0.0, 0.0),
+            sectors:   Vec::new(),
+            highlight: None,
+            aim:       None,
+            scale:     1
+        }
+    }
 }
 
 impl PieScene {
@@ -292,6 +309,7 @@ impl PieScene {
                     self.charging = true;
                     self.monitor = index;
                     self.anchor = logical_anchor(*anchor, &monitors[index]);
+                    self.scale = monitors[index].scale.max(1);
                 }
                 None => self.reset()
             },
@@ -304,6 +322,7 @@ impl PieScene {
                     self.active = true;
                     self.monitor = index;
                     self.anchor = logical_anchor(*anchor, &monitors[index]);
+                    self.scale = monitors[index].scale.max(1);
                     self.sectors.clone_from(sectors);
                 }
                 None => self.reset()

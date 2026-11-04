@@ -32,6 +32,7 @@ use logi_mx_daemon::pie::{HOLD_DELAY, PieEvent, direction_angle};
 use logi_mx_driver::devices::GestureDirection;
 use logi_mx_overlay::{
     draw::{self, Motion},
+    icons::{ICON_SIZE, IconCache},
     scene::{MonitorGeom, PieScene},
     stream
 };
@@ -59,6 +60,9 @@ thread_local! {
 
 /// Duration of the highlight slide between sectors.
 const HL_ANIM: Duration = Duration::from_millis(120);
+/// Delay between startup and the desktop-entry index warm-up, so the first
+/// menu opening only pays for icon decoding.
+const INDEX_WARM_MS: u64 = 250;
 /// Exponential smoothing time constant of the aim needle, seconds.
 const NEEDLE_TAU: f64 = 0.04;
 
@@ -72,7 +76,8 @@ struct Stage {
     fading:         Option<(PieScene, Instant)>,
     needle:         Option<(f64, Instant)>,
     highlight:      Option<HlAnim>,
-    last_hl:        Option<GestureDirection>
+    last_hl:        Option<GestureDirection>,
+    icons:          IconCache
 }
 
 /// One slide of the highlight wedge between sector centres.
@@ -202,7 +207,8 @@ fn build_overlay(app: &Application) {
         fading:         None,
         needle:         None,
         highlight:      None,
-        last_hl:        None
+        last_hl:        None,
+        icons:          IconCache::new()
     }));
     let queue = Arc::new(Mutex::new(Vec::<PieEvent>::new()));
     let connected = Arc::new(AtomicBool::new(false));
@@ -211,6 +217,11 @@ fn build_overlay(app: &Application) {
     for (index, (monitor, geom)) in monitors.iter().enumerate() {
         areas.push(monitor_window(app, monitor, *geom, index, &stage));
     }
+
+    glib::timeout_add_local_once(Duration::from_millis(INDEX_WARM_MS), {
+        let stage = Rc::clone(&stage);
+        move || stage.borrow_mut().icons.warm_index()
+    });
 
     install_hook(
         stage,
@@ -265,12 +276,12 @@ fn monitor_window(
                     .map_or(1.0, |start| fraction(start.elapsed(), OPEN_ANIM))
             };
             let motion = stage.motion();
-            draw::render(cr, index, &stage.scene, progress, &motion);
+            draw::render(cr, index, &stage.scene, progress, &motion, &stage.icons);
         } else if let Some((snapshot, started)) = stage.fading.clone() {
             let progress = fraction(started.elapsed(), EXIT_ANIM);
             if progress < 1.0 {
                 let motion = stage.motion();
-                draw::render_exit(cr, index, &snapshot, progress, &motion);
+                draw::render_exit(cr, index, &snapshot, progress, &motion, &stage.icons);
             }
         }
     });
@@ -343,7 +354,8 @@ fn install_hook(
                 fading,
                 needle,
                 highlight,
-                last_hl
+                last_hl,
+                icons
             } = stage_ref;
             for event in &events {
                 match event {
@@ -383,6 +395,13 @@ fn install_hook(
                     } => {}
                 }
                 scene.apply(event, monitors);
+            }
+            if events
+                .iter()
+                .any(|event| matches!(event, PieEvent::Open { .. }))
+            {
+                let px = ICON_SIZE.saturating_mul(scene.scale.max(1));
+                icons.warm(&scene.sectors, px);
             }
             if scene.highlight != *last_hl {
                 *highlight = Some(HlAnim {

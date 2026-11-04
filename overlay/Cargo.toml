@@ -21,3 +21,4 @@ logi-mx-daemon = { path = "../daemon", default-features = false }
 gtk4.workspace = true
 gtk4-layer-shell = "0.8"
 serde_json.workspace = true
+gio-unix = "0.22"

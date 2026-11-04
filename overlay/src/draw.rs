@@ -13,7 +13,10 @@
 
 use gtk4::cairo::{Context, FontSlant, FontWeight, LineCap, RadialGradient};
 
-use crate::scene::{PieScene, truncate_label, wedge_for};
+use crate::{
+    icons::{self, ICON_SIZE, IconCache},
+    scene::{PieScene, truncate_label, wedge_for}
+};
 
 /// Smoothed motion values the host computes per frame: where the aim needle
 /// points and where the highlight wedge currently sits with its opacity.
@@ -55,6 +58,13 @@ const LABEL_SIZE: f64 = 12.0;
 const LABEL_MAX_CHARS: usize = 12;
 /// Fraction of the ring band where labels sit, between inner and outer edge.
 const LABEL_BAND: f64 = 0.55;
+/// Sector icon side in logical pixels, mirroring [`ICON_SIZE`].
+const ICON_SIDE: f64 = ICON_SIZE as f64;
+/// Gap between a sector icon and its label.
+const ICON_GAP: f64 = 3.0;
+/// Half the icon-plus-gap block, the offset label and icon keep from the
+/// band centre so the pair reads as one block.
+const ICON_BLOCK: f64 = f64::midpoint(ICON_SIDE, ICON_GAP);
 /// Scale the menu starts its bloom at, growing out of the charge ring.
 const BLOOM_FROM: f64 = 0.30;
 /// Overshoot of the springy bloom, in units of the remaining scale.
@@ -100,6 +110,7 @@ const SHADOW_ALPHA: f64 = 0.32;
 /// * `progress` - Linear animation progress in `0..=1`: how far the charge ring
 ///   has filled while charging, or how far the menu has bloomed.
 /// * `motion` - Smoothed needle and highlight positions for this frame.
+/// * `icons` - Cached sector icons resolved from the bound commands.
 ///
 /// # Examples
 ///
@@ -116,7 +127,8 @@ pub fn render(
     monitor_index: usize,
     scene: &PieScene,
     progress: f64,
-    motion: &Motion
+    motion: &Motion,
+    icons: &IconCache
 ) {
     if !targets(monitor_index, scene) {
         return;
@@ -129,7 +141,7 @@ pub fn render(
     }
     let scale = (1.0 - BLOOM_FROM).mul_add(ease_out_back(progress), BLOOM_FROM);
     let alpha = (progress / BLOOM_FADE).min(1.0);
-    paint_bloomed(cr, cx, cy, scene, scale, alpha, motion);
+    paint_bloomed(cr, scene, scale, alpha, motion, icons);
 }
 
 /// Paints the exit of a menu that already closed: shrinking away and fading
@@ -142,21 +154,22 @@ pub fn render(
 /// * `scene` - Snapshot of the menu as it was when it closed.
 /// * `progress` - Linear exit progress in `0..=1`.
 /// * `motion` - Needle and highlight positions frozen at close.
+/// * `icons` - Cached sector icons resolved from the bound commands.
 pub fn render_exit(
     cr: &Context,
     monitor_index: usize,
     scene: &PieScene,
     progress: f64,
-    motion: &Motion
+    motion: &Motion,
+    icons: &IconCache
 ) {
     if !targets(monitor_index, scene) {
         return;
     }
-    let (cx, cy) = scene.anchor;
     let eased = progress.clamp(0.0, 1.0);
     let eased = eased * eased;
     let scale = (EXIT_TO - 1.0).mul_add(eased, 1.0);
-    paint_bloomed(cr, cx, cy, scene, scale, 1.0 - eased, motion);
+    paint_bloomed(cr, scene, scale, 1.0 - eased, motion, icons);
 }
 
 /// Whether a scene should be painted on a given monitor window.
@@ -180,13 +193,13 @@ pub const fn targets(monitor_index: usize, scene: &PieScene) -> bool {
 /// object.
 fn paint_bloomed(
     cr: &Context,
-    cx: f64,
-    cy: f64,
     scene: &PieScene,
     scale: f64,
     alpha: f64,
-    motion: &Motion
+    motion: &Motion,
+    icons: &IconCache
 ) {
+    let (cx, cy) = scene.anchor;
     let _ = cr.save();
     cr.translate(cx, cy);
     cr.scale(scale, scale);
@@ -202,7 +215,7 @@ fn paint_bloomed(
         paint_needle(cr, cx, cy, angle);
     }
     paint_outline(cr, cx, cy);
-    paint_labels(cr, cx, cy, scene);
+    paint_labels(cr, cx, cy, scene, icons);
     paint_dot(cr, cx, cy);
     let _ = cr.pop_group_to_source();
     let _ = cr.paint_with_alpha(alpha);
@@ -353,27 +366,44 @@ fn paint_outline(cr: &Context, cx: f64, cy: f64) {
 }
 
 /// Draws one centred label per bound sector, mid-band in its wedge.
-fn paint_labels(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
+/// Draws one content block per bound sector, mid-band in its wedge: the
+/// application icon when the command resolved to one, the truncated label
+/// under it, or just the label centred when there is no icon.
+fn paint_labels(cr: &Context, cx: f64, cy: f64, scene: &PieScene, icons: &IconCache) {
     cr.select_font_face(LABEL_FONT, FontSlant::Normal, FontWeight::Normal);
     cr.set_font_size(LABEL_SIZE);
-    let (red, green, blue, alpha) = TEXT;
-    cr.set_source_rgba(red, green, blue, alpha);
     let radius = (RING_OUTER - RING_INNER).mul_add(LABEL_BAND, RING_INNER);
     let count = scene.sectors.len();
+    let scale = f64::from(scene.scale.max(1));
+    let px = ICON_SIZE.saturating_mul(scene.scale.max(1));
     for sector in &scene.sectors {
         let Some((start, end)) = wedge_for(sector.direction, count) else {
             continue;
         };
         let middle = f64::midpoint(start, end);
+        let bx = radius.mul_add(middle.cos(), cx);
+        let by = radius.mul_add(middle.sin(), cy);
         let label = truncate_label(&sector.label, LABEL_MAX_CHARS);
+        let icon = icons.surface(sector.command.as_deref(), px);
+        if let Some(surface) = icon {
+            let icon_cy = if label.is_empty() {
+                by
+            } else {
+                by - ICON_BLOCK
+            };
+            icons::paint_icon(cr, surface, bx, icon_cy, scale);
+        }
         if label.is_empty() {
             continue;
         }
+        let label_cy = if icon.is_some() { by + ICON_BLOCK } else { by };
+        let (red, green, blue, alpha) = TEXT;
+        cr.set_source_rgba(red, green, blue, alpha);
         let Ok(extents) = cr.text_extents(&label) else {
             continue;
         };
-        let x = radius.mul_add(middle.cos(), cx) - extents.x_bearing() - extents.width() / 2.0;
-        let y = radius.mul_add(middle.sin(), cy) - extents.y_bearing() - extents.height() / 2.0;
+        let x = bx - extents.x_bearing() - extents.width() / 2.0;
+        let y = label_cy - extents.y_bearing() - extents.height() / 2.0;
         cr.move_to(x, y);
         let _ = cr.show_text(&label);
     }

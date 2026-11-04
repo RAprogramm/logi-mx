@@ -162,11 +162,13 @@ fn scene_charge_open_highlight_close_cycle() {
             sectors: vec![
                 PieSector {
                     direction: GestureDirection::Up,
-                    label:     "Up".to_string()
+                    label:     "Up".to_string(),
+                    command:   None
                 },
                 PieSector {
                     direction: GestureDirection::DownLeft,
-                    label:     "DownLeft".to_string()
+                    label:     "DownLeft".to_string(),
+                    command:   None
                 },
             ]
         },
@@ -225,7 +227,8 @@ fn aim_updates_only_while_the_menu_is_open() {
             anchor:  (100, 200),
             sectors: vec![PieSector {
                 direction: GestureDirection::Up,
-                label:     "Up".to_string()
+                label:     "Up".to_string(),
+                command:   None
             }]
         },
         &monitors
@@ -276,7 +279,8 @@ fn scene_open_outside_all_monitors_stays_inactive() {
             anchor:  (9999, 9999),
             sectors: vec![PieSector {
                 direction: GestureDirection::Up,
-                label:     "Up".to_string()
+                label:     "Up".to_string(),
+                command:   None
             }]
         },
         &monitors

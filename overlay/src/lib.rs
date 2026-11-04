@@ -18,5 +18,6 @@
 //! [`PieEvent`]: logi_mx_daemon::pie::PieEvent
 
 pub mod draw;
+pub mod icons;
 pub mod scene;
 pub mod stream;

@@ -57,7 +57,11 @@ pub struct PieSector {
     /// Direction this sector commits.
     pub direction: GestureDirection,
     /// Human summary of the bound action, e.g. `Meta+E` or `alacritty`.
-    pub label:     String
+    pub label:     String,
+    /// Raw shell command when the action launches a program, `None`
+    /// otherwise; the overlay resolves it into an application icon.
+    #[serde(default)]
+    pub command:   Option<String>
 }
 
 /// Short human summary of a bound action, painted on the pie sector.
@@ -278,11 +282,13 @@ fn wrapped_distance(angle: f64, centre: f64) -> f64 {
 /// let sectors = vec![
 ///     PieSector {
 ///         direction: GestureDirection::Up,
-///         label:     "Up".to_string()
+///         label:     "Up".to_string(),
+///         command:   None
 ///     },
 ///     PieSector {
 ///         direction: GestureDirection::Right,
-///         label:     "Right".to_string()
+///         label:     "Right".to_string(),
+///         command:   None
 ///     },
 /// ];
 /// assert_eq!(sector_among(0, -50, &sectors), Some(GestureDirection::Up));
@@ -698,9 +704,18 @@ impl PieRuntime {
         self.effective_bindings()
             .iter()
             .filter(|gesture| gesture.direction != GestureDirection::None)
-            .map(|gesture| PieSector {
-                direction: gesture.direction,
-                label:     action_summary(&gesture.action)
+            .map(|gesture| {
+                let command = match gesture.action.as_ref() {
+                    Action::Command {
+                        command
+                    } => Some(command.clone()),
+                    _ => None
+                };
+                PieSector {
+                    direction: gesture.direction,
+                    label: action_summary(&gesture.action),
+                    command
+                }
             })
             .collect()
     }

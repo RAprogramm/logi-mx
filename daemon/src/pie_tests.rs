@@ -78,7 +78,8 @@ fn ms(origin: Instant, millis: u64) -> Instant {
 fn sector(direction: GestureDirection) -> PieSector {
     PieSector {
         direction,
-        label: "A".to_string()
+        label: "A".to_string(),
+        command: None
     }
 }
 

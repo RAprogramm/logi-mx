@@ -58,9 +58,18 @@ impl WheelModel {
     fn sectors(&self) -> Vec<PieSector> {
         self.bindings
             .iter()
-            .map(|gesture| PieSector {
-                direction: gesture.direction,
-                label:     action_summary(&gesture.action)
+            .map(|gesture| {
+                let command = match gesture.action.as_ref() {
+                    Action::Command {
+                        command
+                    } => Some(command.clone()),
+                    _ => None
+                };
+                PieSector {
+                    direction: gesture.direction,
+                    label: action_summary(&gesture.action),
+                    command
+                }
             })
             .collect()
     }
@@ -625,11 +634,13 @@ mod tests {
         vec![
             PieSector {
                 direction: GestureDirection::Up,
-                label:     "Meta".to_string()
+                label:     "Meta".to_string(),
+                command:   None
             },
             PieSector {
                 direction: GestureDirection::Right,
-                label:     "A".to_string()
+                label:     "A".to_string(),
+                command:   None
             },
         ]
     }
