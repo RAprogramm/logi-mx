@@ -37,7 +37,7 @@ use std::{
     time::{Duration, Instant}
 };
 
-use logi_mx_driver::prelude::{Gesture, GestureDirection};
+use logi_mx_driver::prelude::{Action, Gesture, GestureDirection};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -56,8 +56,84 @@ pub use logi_mx_driver::config::PieConfig;
 pub struct PieSector {
     /// Direction this sector commits.
     pub direction: GestureDirection,
-    /// Human label, currently the direction name.
+    /// Human summary of the bound action, e.g. `Meta+E` or `alacritty`.
     pub label:     String
+}
+
+/// Short human summary of a bound action, painted on the pie sector.
+///
+/// Key sequences collapse to a combo (`Meta+E`), commands show the program
+/// name, and the remaining actions get a fixed name.
+///
+/// # Arguments
+///
+/// * `action` - The action bound to a gesture direction.
+///
+/// # Returns
+///
+/// A single-line label of at most 17 characters.
+///
+/// # Examples
+///
+/// ```
+/// use logi_mx_daemon::pie::action_summary;
+/// use logi_mx_driver::prelude::Action;
+///
+/// let keys = Action::Keypress {
+///     keys: vec!["KEY_LEFTMETA".to_string(), "KEY_E".to_string()]
+/// };
+/// assert_eq!(action_summary(&keys), "Meta+E");
+/// let cmd = Action::Command {
+///     command: "/usr/bin/alacritty --working-dir ~".to_string()
+/// };
+/// assert_eq!(action_summary(&cmd), "alacritty");
+/// ```
+#[must_use]
+pub fn action_summary(action: &Action) -> String {
+    match action {
+        Action::Keypress {
+            keys
+        } => keys
+            .iter()
+            .map(|key| pretty_key(key))
+            .collect::<Vec<String>>()
+            .join("+"),
+        Action::Command {
+            command
+        } => {
+            let first = command.split_whitespace().next().unwrap_or(command);
+            let base = first.rsplit('/').next().unwrap_or(first);
+            let mut summary: String = base.chars().take(16).collect();
+            if base.chars().count() > 16 {
+                summary.push('…');
+            }
+            summary
+        }
+        Action::Gestures {
+            ..
+        } => "Gestures".to_string(),
+        Action::ToggleSmartShift => "SmartShift".to_string(),
+        Action::None => String::new()
+    }
+}
+
+/// Renders one evdev key name as a short label: `KEY_LEFTMETA` becomes
+/// `Meta`, `KEY_F5` becomes `F5`, `KEY_A` becomes `A`.
+fn pretty_key(name: &str) -> String {
+    match name.trim_start_matches("KEY_") {
+        "LEFTMETA" | "RIGHTMETA" => "Meta".to_string(),
+        "LEFTCTRL" | "RIGHTCTRL" => "Ctrl".to_string(),
+        "LEFTSHIFT" | "RIGHTSHIFT" => "Shift".to_string(),
+        "LEFTALT" | "RIGHTALT" => "Alt".to_string(),
+        "SPACE" => "Space".to_string(),
+        core => {
+            let lower = core.to_lowercase();
+            let mut chars = lower.chars();
+            chars.next().map_or(String::new(), |c| {
+                c.to_uppercase().collect::<String>() + chars.as_str()
+            })
+        }
+    }
 }
 
 /// One event on the pie stream, mirroring the state machine transitions.
@@ -624,7 +700,7 @@ impl PieRuntime {
             .filter(|gesture| gesture.direction != GestureDirection::None)
             .map(|gesture| PieSector {
                 direction: gesture.direction,
-                label:     format!("{:?}", gesture.direction)
+                label:     action_summary(&gesture.action)
             })
             .collect()
     }
