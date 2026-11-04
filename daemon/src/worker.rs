@@ -13,9 +13,11 @@
 mod pool;
 mod rpc;
 
-#[cfg(feature = "tray")]
-use std::sync::{Arc, Mutex};
-use std::{sync::mpsc, thread::JoinHandle, time::Duration};
+use std::{
+    sync::{Arc, Mutex, mpsc},
+    thread::JoinHandle,
+    time::Duration
+};
 
 use logi_mx_driver::prelude::*;
 #[cfg(feature = "tray")]
@@ -52,15 +54,19 @@ pub enum DeviceEvent {
     Removed(String)
 }
 
+/// Handle of a running tray; an uninhabited stub without the `tray`
+/// feature, so the slot type — and every signature using it — stays
+/// uniform across feature combinations.
 #[cfg(feature = "tray")]
-type TrayHandle = ksni::Handle<crate::tray::LogiTrayIcon>;
-
-/// Tray slot updated after every status refresh; a unit slot without the
-/// tray feature.
-#[cfg(feature = "tray")]
-pub type TraySlot = Arc<Mutex<Option<TrayHandle>>>;
+pub type TrayHandle = ksni::Handle<crate::tray::LogiTrayIcon>;
 #[cfg(not(feature = "tray"))]
-pub type TraySlot = ();
+#[derive(Clone)]
+pub enum TrayHandle {}
+
+/// Tray slot updated after every status refresh. The type is the same with
+/// and without the `tray` feature — the slot simply never holds a handle
+/// then — so every signature using it stays uniform.
+pub type TraySlot = Arc<Mutex<Option<TrayHandle>>>;
 
 #[cfg(feature = "tray")]
 static RUNTIME_HANDLE: Mutex<Option<TokioHandle>> = Mutex::new(None);
@@ -134,7 +140,6 @@ pub struct Telemetry {
     pub anchor:  crate::live::SharedAnchor
 }
 
-#[cfg_attr(not(feature = "tray"), allow(clippy::trivially_copy_pass_by_ref))]
 fn run_device_worker(
     config: Config,
     rx: &mpsc::Receiver<DeviceEvent>,
@@ -163,9 +168,10 @@ fn run_device_worker(
     let mut policy = crate::notify::NoticePolicy::new();
 
     #[cfg(feature = "notify")]
-    refresh_and_notify(&mut manager, status, tray, &mut policy);
+    refresh_and_notify(&mut manager, status, &mut policy);
     #[cfg(not(feature = "notify"))]
-    refresh_and_notify(&mut manager, status, tray);
+    refresh_and_notify(&mut manager, status);
+    update_tray(tray);
     manager.for_each_cached_mut(|device| gestures.apply(device));
     if buttons.should_divert() {
         manager.for_each_cached_mut(|device| buttons.apply(device));
@@ -220,9 +226,10 @@ fn run_device_worker(
 
         if should_refresh {
             #[cfg(feature = "notify")]
-            refresh_and_notify(&mut manager, status, tray, &mut policy);
+            refresh_and_notify(&mut manager, status, &mut policy);
             #[cfg(not(feature = "notify"))]
-            refresh_and_notify(&mut manager, status, tray);
+            refresh_and_notify(&mut manager, status);
+            update_tray(tray);
             manager.for_each_cached_mut(|device| gestures.apply(device));
             if buttons.should_divert() {
                 manager.for_each_cached_mut(|device| buttons.apply(device));
@@ -277,19 +284,16 @@ fn sync_anchor(anchor: &crate::live::SharedAnchor, manager: &DevicePool) {
     *guard = path;
 }
 
-/// Refreshes the shared status, publishes user notices and updates the tray.
+/// Refreshes the shared status and publishes user notices.
 ///
 /// Reads through the pool's single device handle: a second handle on the
 /// same hidraw node would split the HID++ response stream and corrupt
 /// concurrent exchanges. Discovery happens through the pool too, so a
 /// device that appeared without a udev event still gets cached and
 /// configured. Runs on the worker thread; blocking HID++ I/O is expected.
-#[cfg_attr(not(feature = "tray"), allow(clippy::trivially_copy_pass_by_ref))]
 fn refresh_and_notify(
     manager: &mut DevicePool,
     status: &SharedStatus,
-    #[cfg(feature = "tray")] tray: &TraySlot,
-    #[cfg(not(feature = "tray"))] _tray: &TraySlot,
     #[cfg(feature = "notify")] policy: &mut crate::notify::NoticePolicy
 ) {
     let readings = manager
@@ -325,22 +329,27 @@ fn refresh_and_notify(
 
         crate::systemd::notify_status(&summary);
     }
+}
 
-    #[cfg(feature = "tray")]
-    {
-        let handle = tray
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let runtime = RUNTIME_HANDLE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        if let (Some(handle), Some(runtime)) = (handle, runtime) {
-            runtime.block_on(handle.update(|_| {}));
-        }
+/// Mirrors the latest status into the tray icon. Without the `tray` feature
+/// the slot never holds a handle, so the refresh is a no-op.
+#[cfg(feature = "tray")]
+fn update_tray(tray: &TraySlot) {
+    let handle = tray
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let runtime = RUNTIME_HANDLE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let (Some(handle), Some(runtime)) = (handle, runtime) {
+        runtime.block_on(handle.update(|_| {}));
     }
 }
+
+#[cfg(not(feature = "tray"))]
+const fn update_tray(_tray: &TraySlot) {}
 
 fn handle_rpc(
     request: RpcRequest,
@@ -405,10 +414,7 @@ mod tests {
         std::thread::Builder::new()
             .name("test-worker".to_string())
             .spawn(move || {
-                #[cfg(feature = "tray")]
                 let tray: super::TraySlot = Arc::new(Mutex::new(None));
-                #[cfg(not(feature = "tray"))]
-                let tray: super::TraySlot = ();
                 run_device_worker(
                     Config::default(),
                     &rx,
