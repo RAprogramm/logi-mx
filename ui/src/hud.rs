@@ -22,6 +22,7 @@ mod device;
 mod diagram;
 mod gestures;
 mod keybinds;
+mod pie;
 mod toasts;
 mod wheel;
 
@@ -60,6 +61,7 @@ use self::{
     device::{device_page, pointer_page},
     diagram::{attach_draw_callback, attach_leaders_draw, build_button_masks, to_layout},
     gestures::gestures_page,
+    pie::pie_page,
     toasts::Toasts,
     wheel::wheel_page
 };
@@ -830,15 +832,17 @@ fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
 
 /// Page specs shared by the stack and the segmented switcher: stack name,
 /// human label and symbolic icon.
-const PAGE_SPECS: [(&str, &str, &str); 5] = [
+const PAGE_SPECS: [(&str, &str, &str); 6] = [
     ("buttons", "Buttons", "input-mouse-symbolic"),
     ("gestures", "Gestures", "input-touchpad-symbolic"),
+    ("pie", "Pie", "media-record-symbolic"),
     ("wheel", "Wheel", "view-continuous-symbolic"),
     ("pointer", "Pointer", "preferences-desktop-input-symbolic"),
     ("device", "Device", "battery-symbolic")
 ];
 
-/// Builds the settings panel with the Device, Pointer, Wheel and Buttons pages.
+/// Builds the settings panel with the Buttons, Gestures, Pie, Wheel, Pointer
+/// and Device pages.
 fn create_panel(
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
@@ -868,6 +872,7 @@ fn create_panel(
             "Gestures",
             "input-touchpad-symbolic"
         ),
+        (pie_page(toasts), "pie", "Pie", "media-record-symbolic"),
         (
             wheel_page(toasts, widgets),
             "wheel",

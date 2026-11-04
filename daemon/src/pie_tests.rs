@@ -7,18 +7,18 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering}
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant}
 };
 
 use logi_mx_driver::prelude::{Action, Gesture, GestureDirection, GestureMode};
-use tokio::sync::broadcast::{error::TryRecvError, Receiver};
+use tokio::sync::broadcast::{Receiver, error::TryRecvError};
 
 use super::{
-    action_summary, direction_angle, sector_among, PieEvent, PieRelease, PieRuntime, PieSector,
-    DOUBLE_CLICK_WINDOW, HOLD_DELAY,
+    DOUBLE_CLICK_WINDOW, HOLD_DELAY, PieEvent, PieRelease, PieRuntime, PieSector, action_summary,
+    direction_angle, sector_among
 };
 
 fn key_gesture(direction: GestureDirection) -> Gesture {
@@ -26,16 +26,16 @@ fn key_gesture(direction: GestureDirection) -> Gesture {
         direction,
         mode: GestureMode::OnRelease,
         action: Box::new(Action::Keypress {
-            keys: vec!["KEY_A".to_string()],
-        }),
+            keys: vec!["KEY_A".to_string()]
+        })
     }
 }
 
 fn enabled_config() -> super::PieConfig {
     super::PieConfig {
-        enabled: true,
+        enabled:           true,
         activation_radius: 40,
-        dead_zone: 12,
+        dead_zone:         12
     }
 }
 
@@ -78,7 +78,7 @@ fn ms(origin: Instant, millis: u64) -> Instant {
 fn sector(direction: GestureDirection) -> PieSector {
     PieSector {
         direction,
-        label: "A".to_string(),
+        label: "A".to_string()
     }
 }
 
@@ -89,19 +89,19 @@ fn action_summary_renders_combos_commands_and_names() {
             "KEY_LEFTCTRL".to_string(),
             "KEY_LEFTSHIFT".to_string(),
             "KEY_Z".to_string(),
-        ],
+        ]
     };
     assert_eq!(action_summary(&keys), "Ctrl+Shift+Z");
     let cmd = Action::Command {
-        command: "firefox https://example.com".to_string(),
+        command: "firefox https://example.com".to_string()
     };
     assert_eq!(action_summary(&cmd), "firefox");
     let path = Action::Command {
-        command: "/usr/lib/firefox/firefox".to_string(),
+        command: "/usr/lib/firefox/firefox".to_string()
     };
     assert_eq!(action_summary(&path), "firefox");
     let long = Action::Command {
-        command: "a-very-long-program-name-that-exceeds-sixteen".to_string(),
+        command: "a-very-long-program-name-that-exceeds-sixteen".to_string()
     };
     assert_eq!(action_summary(&long), "a-very-long-prog…");
     assert_eq!(action_summary(&Action::ToggleSmartShift), "SmartShift");
@@ -214,7 +214,9 @@ fn press_charges_and_a_held_button_opens_after_the_delay() {
     pie.on_press(t0);
     assert_eq!(
         drain(&mut rx),
-        vec![PieEvent::Charge { anchor: (100, 100) }]
+        vec![PieEvent::Charge {
+            anchor: (100, 100)
+        }]
     );
     pie.on_tick(ms(t0, 100));
     assert!(
@@ -225,7 +227,7 @@ fn press_charges_and_a_held_button_opens_after_the_delay() {
     assert_eq!(
         drain(&mut rx),
         vec![PieEvent::Open {
-            anchor: (100, 100),
+            anchor:  (100, 100),
             sectors: vec![sector(GestureDirection::Up)]
         }]
     );
@@ -242,8 +244,12 @@ fn tap_closes_the_charge_and_reports_charging() {
     assert_eq!(
         drain(&mut rx),
         vec![
-            PieEvent::Charge { anchor: (100, 100) },
-            PieEvent::Close { committed: None },
+            PieEvent::Charge {
+                anchor: (100, 100)
+            },
+            PieEvent::Close {
+                committed: None
+            },
         ]
     );
     assert!(!pie.is_open());
@@ -253,7 +259,7 @@ fn tap_closes_the_charge_and_reports_charging() {
 fn double_click_opens_without_charging_again() {
     let (mut pie, mut rx) = scripted(
         &[(100, 100), (100, 100)],
-        vec![key_gesture(GestureDirection::Up)],
+        vec![key_gesture(GestureDirection::Up)]
     );
     let t0 = Instant::now();
     pie.on_press(t0);
@@ -265,7 +271,7 @@ fn double_click_opens_without_charging_again() {
     assert_eq!(
         drain(&mut rx),
         vec![PieEvent::Open {
-            anchor: (100, 100),
+            anchor:  (100, 100),
             sectors: vec![sector(GestureDirection::Up)]
         }]
     );
@@ -284,7 +290,12 @@ fn a_press_after_the_window_charges_again() {
         !pie.is_open(),
         "a stale tap no longer counts as a double click"
     );
-    assert_eq!(drain(&mut rx), vec![PieEvent::Charge { anchor: (0, 0) }]);
+    assert_eq!(
+        drain(&mut rx),
+        vec![PieEvent::Charge {
+            anchor: (0, 0)
+        }]
+    );
 }
 
 #[test]
@@ -302,15 +313,19 @@ fn open_and_highlight_fire_only_on_change() {
     assert_eq!(
         drain(&mut rx),
         vec![
-            PieEvent::Charge { anchor: (0, 0) },
+            PieEvent::Charge {
+                anchor: (0, 0)
+            },
             PieEvent::Open {
-                anchor: (0, 0),
+                anchor:  (0, 0),
                 sectors: vec![
                     sector(GestureDirection::Up),
                     sector(GestureDirection::Right),
                 ]
             },
-            PieEvent::Aim { angle: 0.0 },
+            PieEvent::Aim {
+                angle: 0.0
+            },
             PieEvent::Highlight {
                 direction: Some(GestureDirection::Right)
             }
@@ -338,7 +353,7 @@ fn open_and_highlight_fire_only_on_change() {
 fn aim_follows_the_cursor_and_ignores_tiny_moves() {
     let (mut pie, mut rx) = scripted(
         &[(0, 0), (100, 0), (100, 3), (100, 20)],
-        vec![key_gesture(GestureDirection::Up)],
+        vec![key_gesture(GestureDirection::Up)]
     );
     let t0 = Instant::now();
     pie.on_press(t0);
@@ -363,7 +378,7 @@ fn aim_follows_the_cursor_and_ignores_tiny_moves() {
 fn release_over_bound_sector_commits_and_closes() {
     let (mut pie, mut rx) = scripted(
         &[(0, 0), (0, -100)],
-        vec![key_gesture(GestureDirection::Up)],
+        vec![key_gesture(GestureDirection::Up)]
     );
     let t0 = Instant::now();
     pie.on_press(t0);
@@ -438,7 +453,9 @@ fn swipe_over_unbound_direction_closes_without_commit() {
     assert_eq!(pie.on_release(ms(t0, 400)), PieRelease::Opened(None));
     assert_eq!(
         drain(&mut rx).last(),
-        Some(&PieEvent::Close { committed: None })
+        Some(&PieEvent::Close {
+            committed: None
+        })
     );
 }
 
@@ -513,7 +530,9 @@ fn cancel_closes_a_charging_ring() {
     pie.on_cancel();
     assert_eq!(
         drain(&mut rx).last(),
-        Some(&PieEvent::Close { committed: None })
+        Some(&PieEvent::Close {
+            committed: None
+        })
     );
     assert!(!pie.is_open());
     assert_eq!(pie.on_release(ms(t0, 100)), PieRelease::Idle);
@@ -532,7 +551,9 @@ fn cancel_closes_an_open_pie_and_resets() {
     pie.on_cancel();
     assert_eq!(
         drain(&mut rx).last(),
-        Some(&PieEvent::Close { committed: None })
+        Some(&PieEvent::Close {
+            committed: None
+        })
     );
     assert!(!pie.is_open());
     assert_eq!(pie.on_release(ms(t0, 400)), PieRelease::Idle);
@@ -571,8 +592,8 @@ fn profile_overrides_replace_global_sectors() {
         ],
         HashMap::from([(
             "firefox".to_string(),
-            vec![key_gesture(GestureDirection::Up)],
-        )]),
+            vec![key_gesture(GestureDirection::Up)]
+        )])
     );
     let focus = pie.focus.clone();
     *focus
