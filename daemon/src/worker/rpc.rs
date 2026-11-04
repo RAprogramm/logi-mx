@@ -15,6 +15,7 @@ fn apply_gestures(manager: &DevicePool, gestures: &mut GestureRuntime) {
     let (enabled, bindings, profiles) = manager.gesture_config();
     gestures.set_config(enabled, bindings, profiles);
     gestures.set_pie_config(manager.pie_config());
+    gestures.set_pie_profiles(manager.pie_profiles());
     manager.for_each_cached_mut(|device| gestures.apply(device));
 }
 
@@ -48,19 +49,18 @@ const fn rejection(message: String) -> ipc::Response {
     }
 }
 
-/// Rejects pie tuning the menu cannot act on.
+/// Rejects a pie ring the menu cannot act on, checked against the current
+/// tuning so the gate rules and the slot cap are validated in one place.
 ///
-/// A non-positive activation radius is meaningless, and a dead zone larger
-/// than the activation radius keeps the pointer inside the gate forever:
-/// pointing could never select a sector, only the wheel still could.
-fn pie_rejection(activation_radius: i32, dead_zone: i32) -> Option<String> {
-    if activation_radius < 1 || dead_zone < 0 {
-        return Some(
-            "pie activation radius must be positive and the dead zone not negative".to_string()
-        );
+/// More than [`PieConfig::MAX_SLOTS`] wedges would be too thin to hit;
+/// fewer than [`PieConfig::MIN_SLOTS`] simply never opens and is legal to
+/// store so a half-configured ring survives a restart.
+fn ring_rejection(config: &PieConfig, sectors: &[PieSlot]) -> Option<String> {
+    PieConfig {
+        sectors: sectors.to_vec(),
+        ..config.clone()
     }
-    (dead_zone > activation_radius)
-        .then(|| "pie dead zone must not exceed the activation radius".to_string())
+    .rejection()
 }
 
 /// Rejects everything but the two thumb side buttons: the firmware buttons
@@ -83,6 +83,47 @@ fn upsert_binding(
         mode,
         action: Box::new(action.clone())
     });
+}
+
+/// Whether the request edits the pie menu: tuning, global ring or profiles.
+const fn is_pie_request(request: &ipc::Request) -> bool {
+    matches!(
+        request,
+        ipc::Request::SetPie { .. }
+            | ipc::Request::SetPieSectors { .. }
+            | ipc::Request::SetAppPieSectors { .. }
+            | ipc::Request::RemoveAppPieProfile { .. }
+    )
+}
+
+/// Validates a pie edit against the stored tuning before it is persisted.
+///
+/// The gate rules ride along from the stored configuration so a ring edit
+/// cannot smuggle an unusable gate, and the slot cap keeps every wedge wide
+/// enough to hit. Returns the rejection message, `None` when the edit is
+/// legal.
+fn pie_edit_rejection(manager: &DevicePool, request: &ipc::Request) -> Option<String> {
+    let current = manager.pie_config();
+    match request {
+        ipc::Request::SetPie {
+            enabled,
+            activation_radius,
+            dead_zone
+        } => PieConfig {
+            enabled: *enabled,
+            activation_radius: *activation_radius,
+            dead_zone: *dead_zone,
+            ..current
+        }
+        .rejection(),
+        ipc::Request::SetPieSectors {
+            sectors
+        }
+        | ipc::Request::SetAppPieSectors {
+            sectors, ..
+        } => ring_rejection(&current, sectors),
+        _ => None
+    }
 }
 
 /// Handles the configuration-only gesture requests that never touch the
@@ -166,12 +207,14 @@ pub(super) fn handle_gesture_request(
             profiles.remove(app_id);
             manager.set_gestures(enabled, bindings, profiles)
         }
-        ipc::Request::SetPie {
-            activation_radius,
-            dead_zone,
-            ..
-        } => {
-            if let Some(message) = pie_rejection(*activation_radius, *dead_zone) {
+        ipc::Request::GetPie => {
+            return Some(ipc::Response::PieSettings {
+                config:   manager.pie_config(),
+                profiles: manager.pie_profiles()
+            });
+        }
+        _ if is_pie_request(request) => {
+            if let Some(message) = pie_edit_rejection(manager, request) {
                 return Some(rejection(message));
             }
             manager.set_pie_request(request)
@@ -296,6 +339,50 @@ fn handle_device_read(
     }))
 }
 
+/// Copies one successful pie setting into the stored device configuration,
+/// returning whether the configuration changed.
+fn apply_pie_setting(device: &mut DeviceConfig, request: &ipc::Request) -> bool {
+    match request {
+        ipc::Request::SetPie {
+            enabled,
+            activation_radius,
+            dead_zone
+        } => {
+            device.pie = PieConfig {
+                enabled: *enabled,
+                activation_radius: *activation_radius,
+                dead_zone: *dead_zone,
+                ..device.pie.clone()
+            };
+        }
+        ipc::Request::SetPieSectors {
+            sectors
+        } => device.pie.sectors.clone_from(sectors),
+        ipc::Request::SetAppPieSectors {
+            app_id,
+            sectors
+        } => {
+            if sectors.is_empty() {
+                device.pie_profiles.remove(app_id);
+            } else {
+                device
+                    .pie_profiles
+                    .entry(app_id.clone())
+                    .or_default()
+                    .sectors
+                    .clone_from(sectors);
+            }
+        }
+        ipc::Request::RemoveAppPieProfile {
+            app_id
+        } => {
+            device.pie_profiles.remove(app_id);
+        }
+        _ => return false
+    }
+    true
+}
+
 /// Copies one successful device setting from its request into the stored
 /// configuration, returning whether the configuration changed.
 ///
@@ -364,18 +451,7 @@ pub(super) fn apply_setting(config: &mut Config, request: &ipc::Request) -> bool
         } => {
             device.button_profiles.remove(app_id);
         }
-        ipc::Request::SetPie {
-            enabled,
-            activation_radius,
-            dead_zone
-        } => {
-            device.pie = PieConfig {
-                enabled: *enabled,
-                activation_radius: *activation_radius,
-                dead_zone: *dead_zone,
-                ..device.pie.clone()
-            };
-        }
+        _ if is_pie_request(request) => return apply_pie_setting(device, request),
         _ => return false
     }
     true
@@ -524,17 +600,70 @@ mod tests {
     }
 
     #[test]
-    fn test_pie_rejection_bounds_the_gate_inside_the_radius() {
-        assert!(pie_rejection(40, 12).is_none());
-        assert!(pie_rejection(40, 0).is_none(), "a zero gate is legal");
-        assert!(pie_rejection(40, 40).is_none(), "equal radii are legal");
+    fn ring_rejection_checks_the_gate_and_the_slot_cap() {
+        let base = PieConfig::default();
+        let slots = |count: usize| (0..count).map(|_| PieSlot::default()).collect::<Vec<_>>();
+        assert!(ring_rejection(&base, &slots(2)).is_none());
+        assert!(ring_rejection(&base, &slots(8)).is_none());
         assert!(
-            pie_rejection(40, 41).is_some(),
-            "the gate may not swallow the ring"
+            ring_rejection(&base, &slots(9)).is_some(),
+            "nine wedges are too thin to hit"
         );
-        assert!(pie_rejection(0, 0).is_some(), "a zero radius opens nothing");
-        assert!(pie_rejection(-1, 0).is_some());
-        assert!(pie_rejection(40, -1).is_some());
+        assert!(
+            ring_rejection(&base, &[]).is_none(),
+            "an empty ring is legal to store"
+        );
+        let wide_gate = PieConfig {
+            activation_radius: 40,
+            dead_zone: 41,
+            ..PieConfig::default()
+        };
+        assert!(
+            ring_rejection(&wide_gate, &slots(4)).is_some(),
+            "the stored gate rules ride along with the ring check"
+        );
+    }
+
+    #[test]
+    fn apply_setting_writes_pie_rings_and_profiles() {
+        let mut config = Config::default();
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetPieSectors {
+                sectors: (0..4).map(|_| PieSlot::default()).collect()
+            }
+        ));
+        assert_eq!(config.devices[0].pie.sectors.len(), 4);
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetAppPieSectors {
+                app_id:  "minecraft".to_string(),
+                sectors: (0..6).map(|_| PieSlot::default()).collect()
+            }
+        ));
+        assert_eq!(config.devices[0].pie_profiles["minecraft"].sectors.len(), 6);
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::SetAppPieSectors {
+                app_id:  "minecraft".to_string(),
+                sectors: Vec::new()
+            }
+        ));
+        assert!(
+            !config.devices[0].pie_profiles.contains_key("minecraft"),
+            "an empty app ring deletes the profile instead of shadowing the global one"
+        );
+
+        assert!(apply_setting(
+            &mut config,
+            &ipc::Request::RemoveAppPieProfile {
+                app_id: "firefox".to_string()
+            }
+        ));
+        assert!(!config.devices[0].pie_profiles.contains_key("firefox"));
     }
 
     #[test]

@@ -10,8 +10,7 @@
 //! keeps the small state machine the overlay paints: nothing here touches
 //! GTK, sockets or the clock, so the whole mapping is unit-testable headless.
 
-use logi_mx_daemon::pie::{PieEvent, PieSector};
-use logi_mx_driver::devices::GestureDirection;
+use logi_mx_daemon::pie::{PieEvent, labels::PieSector};
 
 /// Logical geometry of one monitor, in Hyprland global coordinates.
 ///
@@ -222,10 +221,10 @@ pub struct PieScene {
     pub monitor:   usize,
     /// Anchor in logical pixels relative to that monitor.
     pub anchor:    (f64, f64),
-    /// Bound sectors advertised when the pie opened.
+    /// Sectors advertised when the pie opened, in wedge order.
     pub sectors:   Vec<PieSector>,
-    /// Selected sector, `None` while nothing is highlighted.
-    pub highlight: Option<GestureDirection>,
+    /// Selected wedge index, `None` while nothing is highlighted.
+    pub highlight: Option<usize>,
     /// Exact cursor aim in radians, last streamed by the daemon.
     pub aim:       Option<f64>,
     /// Scale factor of the monitor carrying the pie, for crisp icon decode.
@@ -290,10 +289,10 @@ impl PieScene {
                 None => self.reset()
             },
             PieEvent::Highlight {
-                direction
+                index
             } => {
                 if self.active && !self.charging {
-                    self.highlight = *direction;
+                    self.highlight = index.map(usize::from);
                 }
             }
             PieEvent::Aim {

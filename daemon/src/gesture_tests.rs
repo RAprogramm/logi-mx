@@ -142,6 +142,22 @@ fn test_runtime_press_and_release_move_the_live_bit() {
 }
 
 #[test]
+fn test_pie_tick_drains_the_wheel_counter_while_closed() {
+    use std::sync::atomic::Ordering;
+
+    let mut runtime = GestureRuntime::default();
+    let wheel = crate::live::new_wheel_tap();
+    wheel.store(360, Ordering::Relaxed);
+    runtime.attach_wheel(std::sync::Arc::clone(&wheel));
+    runtime.on_pie_tick(Instant::now());
+    assert_eq!(
+        wheel.load(Ordering::Relaxed),
+        0,
+        "a closed pie must swallow the scroll so it never jumps the next ring"
+    );
+}
+
+#[test]
 fn test_runtime_ignores_other_diverted_controls() {
     let mut runtime = GestureRuntime::default();
     runtime.on_gesture_edge(false);

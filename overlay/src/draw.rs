@@ -12,7 +12,7 @@
 //! on every theme and compositor.
 
 use gtk4::cairo::{Context, FontSlant, FontWeight, LineCap, RadialGradient};
-use logi_mx_daemon::pie::wedge_for;
+use logi_mx_daemon::pie::geometry::wedge_for;
 
 use crate::{
     icons::{self, ICON_SIZE, IconCache},
@@ -76,8 +76,11 @@ const BLOOM_OVERSHOOT: f64 = 0.55;
 const BLOOM_FADE: f64 = 0.40;
 /// Scale the menu shrinks to as it exits.
 const EXIT_TO: f64 = 0.90;
-/// Translucent dark fill of an unbound-highlighted sector.
+/// Translucent dark fill of a bound sector.
 const FILL_BASE: (f64, f64, f64, f64) = (0.07, 0.08, 0.10, 0.80);
+/// Dimmer fill of an empty slot: visible so the ring shows its full shape,
+/// quiet enough to read as "nothing here".
+const FILL_EMPTY: (f64, f64, f64, f64) = (0.05, 0.06, 0.07, 0.42);
 /// Accent fill of the highlighted sector.
 const FILL_HIGHLIGHT: (f64, f64, f64, f64) = (53.0 / 255.0, 132.0 / 255.0, 228.0 / 255.0, 0.88);
 /// Thin ring outline colour.
@@ -263,16 +266,15 @@ fn paint_charge(cr: &Context, cx: f64, cy: f64, progress: f64) {
     let _ = cr.stroke();
 }
 
-/// Fills every bound sector in the base colour; wedges tile the full circle,
-/// so no gap is left between sections regardless of how many directions are
-/// bound. The highlight is a separate sliding wedge.
+/// Fills every wedge of the equal ring: bound slots in the base colour,
+/// empty slots dimmed, so the ring always shows its full shape. The
+/// highlight is a separate sliding wedge.
 fn paint_sectors(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
-    let (red, green, blue, alpha) = FILL_BASE;
-    cr.set_source_rgba(red, green, blue, alpha);
-    for sector in &scene.sectors {
-        let Some((start, end)) = wedge_for(sector.direction, &scene.sectors) else {
-            continue;
-        };
+    let count = scene.sectors.len();
+    for (index, sector) in scene.sectors.iter().enumerate() {
+        let (start, end) = wedge_for(index, count);
+        let (red, green, blue, alpha) = if sector.bound { FILL_BASE } else { FILL_EMPTY };
+        cr.set_source_rgba(red, green, blue, alpha);
         cr.new_path();
         cr.move_to(cx, cy);
         cr.arc(cx, cy, RING_OUTER, start, end);
@@ -326,20 +328,11 @@ fn paint_needle(cr: &Context, cx: f64, cy: f64, angle: f64) {
     let _ = cr.fill();
 }
 
-/// Half-width of the highlighted sector's cell, so the sliding wedge covers
-/// exactly the sector it lands on; an even split is the fallback while no
-/// sector is highlighted.
+/// Half-width of a wedge cell: every wedge spans the same share of the
+/// circle, so the sliding wedge always covers exactly the one it lands on.
 fn highlight_half(scene: &PieScene) -> f64 {
-    scene
-        .highlight
-        .and_then(|direction| wedge_for(direction, &scene.sectors))
-        .map_or_else(
-            || {
-                u32::try_from(scene.sectors.len().max(1))
-                    .map_or(0.0, |count| std::f64::consts::PI / f64::from(count))
-            },
-            |(start, end)| (end - start) / 2.0
-        )
+    let count = u32::try_from(scene.sectors.len().max(1)).unwrap_or(1);
+    std::f64::consts::PI / f64::from(count)
 }
 
 /// Strokes the hairline where each sector begins, keeping neighbours crisp
@@ -348,10 +341,9 @@ fn paint_separators(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
     let (red, green, blue, alpha) = SEPARATOR;
     cr.set_source_rgba(red, green, blue, alpha);
     cr.set_line_width(SEPARATOR_WIDTH);
-    for sector in &scene.sectors {
-        let Some((start, _)) = wedge_for(sector.direction, &scene.sectors) else {
-            continue;
-        };
+    let count = scene.sectors.len();
+    for index in 0..count {
+        let (start, _) = wedge_for(index, count);
         cr.new_path();
         cr.move_to(
             RING_INNER.mul_add(start.cos(), cx),
@@ -378,20 +370,22 @@ fn paint_outline(cr: &Context, cx: f64, cy: f64) {
     let _ = cr.stroke();
 }
 
-/// Draws one centred label per bound sector, mid-band in its wedge.
-/// Draws one content block per bound sector, mid-band in its wedge: the
+/// Draws one content block per bound slot, mid-band in its wedge: the
 /// application icon when the command resolved to one, the truncated label
-/// under it, or just the label centred when there is no icon.
+/// under it, or just the label centred when there is no icon. Empty slots
+/// stay bare.
 fn paint_labels(cr: &Context, cx: f64, cy: f64, scene: &PieScene, icons: &IconCache) {
     cr.select_font_face(LABEL_FONT, FontSlant::Normal, FontWeight::Normal);
     cr.set_font_size(LABEL_SIZE);
     let radius = (RING_OUTER - RING_INNER).mul_add(LABEL_BAND, RING_INNER);
     let scale = f64::from(scene.scale.max(1));
     let px = ICON_SIZE.saturating_mul(scene.scale.max(1));
-    for sector in &scene.sectors {
-        let Some((start, end)) = wedge_for(sector.direction, &scene.sectors) else {
+    let count = scene.sectors.len();
+    for (index, sector) in scene.sectors.iter().enumerate() {
+        if !sector.bound {
             continue;
-        };
+        }
+        let (start, end) = wedge_for(index, count);
         let middle = f64::midpoint(start, end);
         let bx = radius.mul_add(middle.cos(), cx);
         let by = radius.mul_add(middle.sin(), cy);

@@ -46,6 +46,9 @@ struct DpiButton {
     held:     bool
 }
 
+/// High-resolution wheel ticks per physical detent, the kernel's unit.
+const WHEEL_DETENT: i32 = 120;
+
 /// Wires the [`SwipeAccumulator`] to configured bindings and the key injector.
 ///
 /// Owns the divert lifecycle: the gesture button is diverted when a device
@@ -65,6 +68,8 @@ pub struct GestureRuntime {
     live:               SharedLiveState,
     hub:                Option<LiveHub>,
     pie:                PieRuntime,
+    wheel:              Option<crate::live::SharedWheelTap>,
+    wheel_left:         i32,
     accumulator:        SwipeAccumulator,
     injector:           Injector,
     last_commit:        Option<GestureDirection>,
@@ -129,9 +134,35 @@ impl GestureRuntime {
         self.pie.set_config(config);
     }
 
+    /// Replaces the per-application pie profiles from a configuration
+    /// change.
+    pub fn set_pie_profiles(&mut self, profiles: HashMap<String, PieProfile>) {
+        self.pie.set_pie_profiles(profiles);
+    }
+
+    /// Attaches the evdev wheel counter so scrolling can cycle the open
+    /// pie's highlighted wedge.
+    pub fn attach_wheel(&mut self, wheel: crate::live::SharedWheelTap) {
+        self.wheel = Some(wheel);
+    }
+
     /// Advances the pie state machine one poll while the gesture button is
     /// held; the worker loop calls this beside the notification pump.
+    ///
+    /// Consumes the shared wheel counter first: while the ring is open every
+    /// full detent cycles the selection; while it is not, the counter is
+    /// drained so stale scrolling never jumps the freshly bloomed menu.
     pub fn on_pie_tick(&mut self, now: Instant) {
+        if let Some(wheel) = &self.wheel {
+            let total = wheel
+                .swap(0, Ordering::Relaxed)
+                .saturating_add(self.wheel_left);
+            let detents = total / WHEEL_DETENT;
+            self.wheel_left = total % WHEEL_DETENT;
+            if detents != 0 && self.pie.is_open() {
+                self.pie.on_scroll(detents);
+            }
+        }
         self.pie.on_tick(now);
     }
 
@@ -319,20 +350,29 @@ impl GestureRuntime {
         self.on_wheel_mode_edge(pressed.contains(&control_id::SMARTSHIFT_TOGGLE), device);
     }
 
-    /// Folds one raw-XY report into the swipe accumulator and fires the
-    /// direction it commits, if any. A committed direction also lights up
-    /// the matching pie sector, so the wheel selects without moving the
-    /// mouse.
+    /// Folds one raw-XY report into the swipe accumulator.
+    ///
+    /// One hold is exactly one mechanism: while the pie ring is open, a
+    /// committed direction only selects the wedge it falls into. Before the
+    /// ring opens the same commit is an expert mark — it fires the
+    /// directional binding and cancels the menu for this hold, so the two
+    /// never compete within one press.
     pub fn on_raw_xy(&mut self, dx: i16, dy: i16) {
-        if let Some(dir) =
-            self.accumulator
-                .accumulate(i32::from(dx), i32::from(dy), Instant::now())
-        {
-            debug!("swipe committed: {dir:?}");
-            self.last_commit = Some(dir);
+        let Some(dir) = self
+            .accumulator
+            .accumulate(i32::from(dx), i32::from(dy), Instant::now())
+        else {
+            return;
+        };
+        if self.pie.is_open() {
+            debug!("pie select: {dir:?}");
             self.pie.on_swipe(dir);
-            self.fire(dir, Some(GestureMode::OnPress));
+            return;
         }
+        debug!("swipe committed: {dir:?}");
+        self.pie.on_cancel();
+        self.last_commit = Some(dir);
+        self.fire(dir, Some(GestureMode::OnPress));
     }
 
     /// Tracks the gesture button edge: press opens the swipe accumulator,
@@ -436,11 +476,11 @@ impl GestureRuntime {
         let swipe_commit = self.last_commit.take();
         let settled = self.accumulator.end();
         match release {
-            PieRelease::Opened(Some(dir)) => {
-                self.fire_committed(dir);
+            PieRelease::Committed(Some(action)) => {
+                self.execute(&action, "pie");
                 return;
             }
-            PieRelease::Opened(None) => return,
+            PieRelease::Committed(None) => return,
             PieRelease::Charging => {
                 if settled == Some(GestureDirection::None) && swipe_commit.is_none() {
                     self.pending_click = Some(now);
@@ -470,29 +510,7 @@ impl GestureRuntime {
             if mode.is_some_and(|wanted| gesture.mode != wanted) {
                 continue;
             }
-            self.execute(&gesture.action, direction);
-        }
-    }
-
-    /// Fires the committed pie sector from the bindings captured at press,
-    /// so a focus change while the menu is open cannot swap the action the
-    /// user saw advertised for that sector.
-    ///
-    /// # Arguments
-    ///
-    /// * `direction` - The sector the release commits.
-    fn fire_committed(&mut self, direction: GestureDirection) {
-        let snapshot: Vec<Gesture> = self
-            .pie
-            .press_gestures()
-            .iter()
-            .filter(|gesture| {
-                gesture.direction == direction && gesture.mode == GestureMode::OnRelease
-            })
-            .cloned()
-            .collect();
-        for gesture in &snapshot {
-            self.execute(&gesture.action, direction);
+            self.execute(&gesture.action, &format!("{direction:?}"));
         }
     }
 
@@ -501,13 +519,13 @@ impl GestureRuntime {
     /// # Arguments
     ///
     /// * `action` - The bound action.
-    /// * `direction` - The direction whose binding fired, for logs.
-    fn execute(&mut self, action: &Action, direction: GestureDirection) {
+    /// * `source` - What fired it (a direction or "pie"), for logs.
+    fn execute(&mut self, action: &Action, source: &str) {
         match action {
             Action::Keypress {
                 keys
             } => match self.injector.press_sequence(keys) {
-                Ok(()) => info!("gesture fired {direction:?} -> {}", keys.join("+")),
+                Ok(()) => info!("gesture fired {source} -> {}", keys.join("+")),
                 Err(e) if !self.injection_warned => {
                     self.injection_warned = true;
                     warn!("gesture injection failed: {e}");
@@ -517,7 +535,7 @@ impl GestureRuntime {
             Action::Command {
                 command
             } => {
-                info!("gesture fired {direction:?} -> command {command:?}");
+                info!("gesture fired {source} -> command {command:?}");
                 spawn_detached("gesture-command", command);
             }
             _ => {

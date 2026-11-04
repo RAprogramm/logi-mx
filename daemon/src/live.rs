@@ -13,7 +13,7 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicI32},
     thread,
     time::{Duration, Instant}
 };
@@ -34,6 +34,18 @@ const RESCAN_DELAY: Duration = Duration::from_secs(2);
 /// The tap prefers the evdev node belonging to the same physical device, so
 /// a second Logitech pointer can never hijack the telemetry.
 pub type SharedAnchor = Arc<Mutex<Option<PathBuf>>>;
+
+/// Counter accumulating high-resolution wheel deltas observed by the tap.
+///
+/// The worker consumes it each poll while the pie ring is open, so scrolling
+/// cycles the highlighted wedge without the compositor seeing the wheel.
+pub type SharedWheelTap = Arc<AtomicI32>;
+
+/// Creates an empty wheel tap counter.
+#[must_use]
+pub fn new_wheel_tap() -> SharedWheelTap {
+    Arc::new(AtomicI32::new(0))
+}
 
 /// Creates an empty anchor slot.
 #[must_use]
@@ -253,12 +265,16 @@ fn stream(
     device: &mut Device,
     accumulator: &mut TelemetryAccumulator,
     hub: &LiveHub,
-    state: &crate::ipc::SharedLiveState
+    state: &crate::ipc::SharedLiveState,
+    wheel: &SharedWheelTap
 ) -> std::io::Result<()> {
     use std::sync::atomic::Ordering;
 
     loop {
         for event in device.fetch_events()? {
+            if event.event_type() == EventType::RELATIVE && event.code() == REL_WHEEL_HI_RES {
+                wheel.fetch_add(event.value(), Ordering::Relaxed);
+            }
             if let Some(mut frame) = accumulator.apply(&event) {
                 state.last_buttons.store(frame.buttons, Ordering::Relaxed);
                 frame.buttons |= state.virtual_bits.load(Ordering::Relaxed);
@@ -269,7 +285,12 @@ fn stream(
 }
 
 /// Attaches to the mouse and streams frames until the device detaches.
-fn pump(hub: &LiveHub, state: &crate::ipc::SharedLiveState, anchor: &SharedAnchor) {
+fn pump(
+    hub: &LiveHub,
+    state: &crate::ipc::SharedLiveState,
+    anchor: &SharedAnchor,
+    wheel: &SharedWheelTap
+) {
     let Some((path, name)) = find_mouse(anchor) else {
         debug!("live telemetry: MX Master event node not found");
         thread::sleep(RESCAN_DELAY);
@@ -284,7 +305,7 @@ fn pump(hub: &LiveHub, state: &crate::ipc::SharedLiveState, anchor: &SharedAncho
     info!("live telemetry attached to {name} ({path:?})");
 
     let mut accumulator = TelemetryAccumulator::new();
-    if let Err(e) = stream(&mut device, &mut accumulator, hub, state) {
+    if let Err(e) = stream(&mut device, &mut accumulator, hub, state, wheel) {
         info!("live telemetry detached from {name}: {e}");
     }
     state
@@ -293,9 +314,14 @@ fn pump(hub: &LiveHub, state: &crate::ipc::SharedLiveState, anchor: &SharedAncho
 }
 
 /// Runs the evdev tap until the process exits.
-pub fn run(hub: &LiveHub, state: &crate::ipc::SharedLiveState, anchor: &SharedAnchor) {
+pub fn run(
+    hub: &LiveHub,
+    state: &crate::ipc::SharedLiveState,
+    anchor: &SharedAnchor,
+    wheel: &SharedWheelTap
+) {
     loop {
-        pump(hub, state, anchor);
+        pump(hub, state, anchor, wheel);
     }
 }
 

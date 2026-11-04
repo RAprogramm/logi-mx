@@ -104,25 +104,14 @@ pub fn spawn_device_worker(
     config: Config,
     status: SharedStatus,
     tray: TraySlot,
-    live: ipc::SharedLiveState,
-    hub: ipc::LiveHub,
-    pie_hub: crate::pie::PieHub,
-    anchor: crate::live::SharedAnchor
+    telemetry: Telemetry
 ) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
 {
     let (tx, rx) = mpsc::channel();
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
-        .spawn(move || {
-            let telemetry = Telemetry {
-                live,
-                hub,
-                pie_hub,
-                anchor
-            };
-            run_device_worker(config, &rx, &status, &tray, telemetry);
-        })
+        .spawn(move || run_device_worker(config, &rx, &status, &tray, telemetry))
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
@@ -139,7 +128,9 @@ pub struct Telemetry {
     /// Pie event fan-out the radial menu publishes on.
     pub pie_hub: crate::pie::PieHub,
     /// Hidraw path slot the live tap uses to pick the matching event node.
-    pub anchor:  crate::live::SharedAnchor
+    pub anchor:  crate::live::SharedAnchor,
+    /// Wheel counter the live tap fills and the open pie consumes.
+    pub wheel:   crate::live::SharedWheelTap
 }
 
 fn run_device_worker(
@@ -153,11 +144,13 @@ fn run_device_worker(
         live,
         hub,
         pie_hub,
-        anchor
+        anchor,
+        wheel
     } = telemetry;
     let mut gestures = GestureRuntime::from_config(&config);
     gestures.attach_live(live.clone(), hub.clone());
     gestures.attach_pie(pie_hub);
+    gestures.attach_wheel(wheel);
     let mut buttons = ButtonRuntime::from_config(&config);
     buttons.attach_live(live, hub);
     let focus = crate::focus::new_shared();
@@ -422,7 +415,8 @@ mod tests {
                         live: ipc::SharedLiveState::default(),
                         hub: live_hub,
                         pie_hub,
-                        anchor: crate::live::new_anchor()
+                        anchor: crate::live::new_anchor(),
+                        wheel: crate::live::new_wheel_tap()
                     }
                 );
             })

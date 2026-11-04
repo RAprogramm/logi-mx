@@ -189,6 +189,14 @@ pub struct PieSlot {
     pub label:  Option<String>
 }
 
+impl PieSlot {
+    /// Whether this slot holds an action the ring can fire.
+    #[must_use]
+    pub const fn is_bound(&self) -> bool {
+        !matches!(self.action, None | Some(Action::None))
+    }
+}
+
 /// Per-application pie menu overriding the global ring while its window
 /// class is focused.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -46,7 +46,7 @@ use udev::MonitorBuilder;
 use crate::tray::spawn_tray;
 use crate::{
     status::{DeviceStatus, SharedStatus},
-    worker::{DeviceEvent, spawn_device_worker}
+    worker::{DeviceEvent, Telemetry, spawn_device_worker}
 };
 
 type Result<T> = std::result::Result<T, AppError>;
@@ -185,14 +185,20 @@ fn new_pie_hub() -> pie::PieHub {
 }
 
 /// Attaches the evdev tap thread to an existing fan-out.
-fn spawn_live_tap(hub: &ipc::LiveHub, state: &ipc::SharedLiveState, anchor: &live::SharedAnchor) {
+fn spawn_live_tap(
+    hub: &ipc::LiveHub,
+    state: &ipc::SharedLiveState,
+    anchor: &live::SharedAnchor,
+    wheel: &live::SharedWheelTap
+) {
     if let Err(e) = std::thread::Builder::new()
         .name("logi-mx-live".to_string())
         .spawn({
             let hub = hub.clone();
             let state = Arc::clone(state);
             let anchor = Arc::clone(anchor);
-            move || live::run(&hub, &state, &anchor)
+            let wheel = Arc::clone(wheel);
+            move || live::run(&hub, &state, &anchor, &wheel)
         })
     {
         warn!("Failed to spawn live telemetry thread: {e}. Live HUD disabled.");
@@ -251,19 +257,20 @@ async fn run() -> Result<()> {
 
     let (live_hub, live_state) = new_live_state();
     let live_anchor = live::new_anchor();
+    let wheel_tap = live::new_wheel_tap();
     let pie_hub = new_pie_hub();
 
-    let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(
-        config,
-        Arc::clone(&status),
-        tray_handle.clone(),
-        Arc::clone(&live_state),
-        live_hub.clone(),
-        pie_hub.clone(),
-        Arc::clone(&live_anchor)
-    )?;
+    let telemetry = Telemetry {
+        live:    Arc::clone(&live_state),
+        hub:     live_hub.clone(),
+        pie_hub: pie_hub.clone(),
+        anchor:  Arc::clone(&live_anchor),
+        wheel:   Arc::clone(&wheel_tap)
+    };
+    let (device_tx, rpc_tx, worker_handle) =
+        spawn_device_worker(config, Arc::clone(&status), tray_handle.clone(), telemetry)?;
 
-    spawn_live_tap(&live_hub, &live_state, &live_anchor);
+    spawn_live_tap(&live_hub, &live_state, &live_anchor, &wheel_tap);
 
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {

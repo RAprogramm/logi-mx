@@ -25,7 +25,7 @@ use gtk4::{
     },
     glib::{self, object::Cast}
 };
-use logi_mx_daemon::pie::PieSector;
+use logi_mx_daemon::pie::labels::PieSector;
 
 /// Nominal sector icon size in logical pixels.
 pub const ICON_SIZE: i32 = 34;

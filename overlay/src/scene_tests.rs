@@ -4,10 +4,19 @@
 //! Unit tests for the pure renderer state: monitor mapping, label
 //! truncation and the scene state machine.
 
-use logi_mx_daemon::pie::{PieEvent, PieSector};
-use logi_mx_driver::devices::GestureDirection;
+use logi_mx_daemon::pie::{PieEvent, labels::PieSector};
 
 use super::{MonitorGeom, PieScene, anchor_monitor, logical_anchor, truncate_label};
+
+/// One wedge of a streamed ring, addressed by its index.
+fn sector(index: u8, label: &str, bound: bool) -> PieSector {
+    PieSector {
+        index,
+        label: label.to_string(),
+        command: None,
+        bound
+    }
+}
 
 /// A scale-2 primary (1920×1080 logical) plus a scale-1 secondary placed
 /// to its right, mirroring the maintainer's live layout.
@@ -90,30 +99,19 @@ fn scene_charge_open_highlight_close_cycle() {
     assert_eq!(scene.anchor, (100.0, 200.0));
     scene.apply(
         &PieEvent::Highlight {
-            direction: Some(GestureDirection::Up)
+            index: Some(0)
         },
         &monitors
     );
     assert_eq!(
         scene.highlight, None,
-        "a highlight cannot select a sector while charging"
+        "a highlight cannot select a wedge while charging"
     );
 
     scene.apply(
         &PieEvent::Open {
             anchor:  (100, 200),
-            sectors: vec![
-                PieSector {
-                    direction: GestureDirection::Up,
-                    label:     "Up".to_string(),
-                    command:   None
-                },
-                PieSector {
-                    direction: GestureDirection::DownLeft,
-                    label:     "DownLeft".to_string(),
-                    command:   None
-                },
-            ]
+            sectors: vec![sector(0, "Meta+E", true), sector(1, "", false)]
         },
         &monitors
     );
@@ -125,15 +123,15 @@ fn scene_charge_open_highlight_close_cycle() {
 
     scene.apply(
         &PieEvent::Highlight {
-            direction: Some(GestureDirection::DownLeft)
+            index: Some(1)
         },
         &monitors
     );
-    assert_eq!(scene.highlight, Some(GestureDirection::DownLeft));
+    assert_eq!(scene.highlight, Some(1), "the empty wedge highlights too");
 
     scene.apply(
         &PieEvent::Close {
-            committed: Some(GestureDirection::DownLeft)
+            committed: Some(0)
         },
         &monitors
     );
@@ -168,11 +166,7 @@ fn aim_updates_only_while_the_menu_is_open() {
     scene.apply(
         &PieEvent::Open {
             anchor:  (100, 200),
-            sectors: vec![PieSector {
-                direction: GestureDirection::Up,
-                label:     "Up".to_string(),
-                command:   None
-            }]
+            sectors: vec![sector(0, "Meta+E", true), sector(1, "E", true)]
         },
         &monitors
     );
@@ -198,7 +192,7 @@ fn scene_ignores_events_without_a_charge() {
     let mut scene = PieScene::default();
     scene.apply(
         &PieEvent::Highlight {
-            direction: Some(GestureDirection::Up)
+            index: Some(0)
         },
         &monitors
     );
@@ -206,7 +200,7 @@ fn scene_ignores_events_without_a_charge() {
     assert_eq!(scene.highlight, None);
     scene.apply(
         &PieEvent::Close {
-            committed: Some(GestureDirection::Up)
+            committed: Some(0)
         },
         &monitors
     );
@@ -220,11 +214,7 @@ fn scene_open_outside_all_monitors_stays_inactive() {
     scene.apply(
         &PieEvent::Open {
             anchor:  (9999, 9999),
-            sectors: vec![PieSector {
-                direction: GestureDirection::Up,
-                label:     "Up".to_string(),
-                command:   None
-            }]
+            sectors: vec![sector(0, "Meta+E", true), sector(1, "E", true)]
         },
         &monitors
     );

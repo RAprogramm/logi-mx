@@ -28,8 +28,7 @@ use gtk4::{
     prelude::*, style_context_add_provider_for_display
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use logi_mx_daemon::pie::{HOLD_DELAY, PieEvent, direction_angle};
-use logi_mx_driver::devices::GestureDirection;
+use logi_mx_daemon::pie::{HOLD_DELAY, PieEvent, geometry::wedge_angle};
 use logi_mx_overlay::{
     draw::{self, Motion},
     icons::{ICON_SIZE, IconCache},
@@ -76,15 +75,15 @@ struct Stage {
     fading:         Option<(PieScene, Instant)>,
     needle:         Option<(f64, Instant)>,
     highlight:      Option<HlAnim>,
-    last_hl:        Option<GestureDirection>,
+    last_hl:        Option<usize>,
     icons:          IconCache
 }
 
-/// One slide of the highlight wedge between sector centres.
+/// One slide of the highlight wedge between wedge centres.
 #[derive(Debug, Clone, Copy)]
 struct HlAnim {
     from:    Option<f64>,
-    to:      Option<GestureDirection>,
+    to:      Option<f64>,
     started: Instant
 }
 
@@ -94,10 +93,7 @@ impl Stage {
     /// slides between sector centres over [`HL_ANIM`].
     fn motion(&mut self) -> Motion {
         let now = Instant::now();
-        let target = self
-            .scene
-            .aim
-            .or_else(|| self.scene.highlight.and_then(direction_angle));
+        let target = self.scene.aim.or_else(|| self.hl_angle());
         let needle = match (self.needle, target) {
             (Some((current, previous)), Some(target)) => {
                 let dt = now.duration_since(previous).as_secs_f64().clamp(0.0, 0.1);
@@ -115,7 +111,7 @@ impl Stage {
         let highlight = match self.highlight {
             Some(anim) => {
                 let t = ease_out(fraction(anim.started.elapsed(), HL_ANIM));
-                let to = anim.to.and_then(direction_angle);
+                let to = anim.to;
                 let wedge = match (anim.from, to) {
                     (Some(from), Some(to)) => Some((wrap_diff(to - from).mul_add(t, from), 1.0)),
                     (None, Some(to)) => Some((to, t)),
@@ -127,11 +123,7 @@ impl Stage {
                 }
                 wedge.or_else(|| to.map(|angle| (angle, 1.0)))
             }
-            None => self
-                .scene
-                .highlight
-                .and_then(direction_angle)
-                .map(|angle| (angle, 1.0))
+            None => self.hl_angle().map(|angle| (angle, 1.0))
         };
         Motion {
             needle,
@@ -144,14 +136,21 @@ impl Stage {
         match self.highlight {
             Some(anim) => {
                 let t = ease_out(fraction(anim.started.elapsed(), HL_ANIM));
-                let to = anim.to.and_then(direction_angle)?;
+                let to = anim.to?;
                 Some(
                     anim.from
                         .map_or(to, |from| wrap_diff(to - from).mul_add(t, from))
                 )
             }
-            None => self.scene.highlight.and_then(direction_angle)
+            None => self.hl_angle()
         }
+    }
+
+    /// Centre angle of the highlighted wedge, `None` while nothing is lit.
+    fn hl_angle(&self) -> Option<f64> {
+        self.scene
+            .highlight
+            .map(|index| wedge_angle(index, self.scene.sectors.len().max(1)))
     }
 }
 
@@ -456,9 +455,12 @@ fn install_hook(
                 icons.warm(&scene.sectors, px);
             }
             if scene.highlight != *last_hl {
+                let to = scene
+                    .highlight
+                    .map(|index| wedge_angle(index, scene.sectors.len().max(1)));
                 *highlight = Some(HlAnim {
-                    from:    previous_hl,
-                    to:      scene.highlight,
+                    from: previous_hl,
+                    to,
                     started: now
                 });
                 *last_hl = scene.highlight;

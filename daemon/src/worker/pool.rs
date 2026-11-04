@@ -273,6 +273,14 @@ impl DevicePool {
             .map_or_else(PieConfig::default, |device| device.pie.clone())
     }
 
+    /// The stored per-application pie profiles of the first device entry.
+    pub(super) fn pie_profiles(&self) -> HashMap<String, PieProfile> {
+        self.config
+            .devices
+            .first()
+            .map_or_else(HashMap::new, |device| device.pie_profiles.clone())
+    }
+
     /// Mirrors a pie menu tuning request into the stored configuration and
     /// persists it, so the tuning survives a daemon restart.
     ///

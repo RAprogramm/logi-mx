@@ -6,9 +6,8 @@
 
 use logi_mx_daemon::{
     ipc::Response,
-    pie::{PieEvent, PieSector}
+    pie::{PieEvent, labels::PieSector}
 };
-use logi_mx_driver::devices::GestureDirection;
 
 use super::decode_line;
 
@@ -18,14 +17,16 @@ fn open_event_round_trips_through_a_stream_line() {
         anchor:  (1920, 540),
         sectors: vec![
             PieSector {
-                direction: GestureDirection::Up,
-                label:     "Up".to_string(),
-                command:   None
+                index:   0,
+                label:   "Meta+E".to_string(),
+                command: None,
+                bound:   true
             },
             PieSector {
-                direction: GestureDirection::UpLeft,
-                label:     "UpLeft".to_string(),
-                command:   None
+                index:   1,
+                label:   String::new(),
+                command: None,
+                bound:   false
             },
         ]
     };
@@ -34,26 +35,26 @@ fn open_event_round_trips_through_a_stream_line() {
 }
 
 #[test]
-fn highlight_with_null_direction_decodes() {
-    let line = r#"{"Pie":{"Highlight":{"direction":null}}}"#;
+fn highlight_with_null_index_decodes() {
+    let line = r#"{"Pie":{"Highlight":{"index":null}}}"#;
     assert_eq!(
         decode_line(line),
         Some(PieEvent::Highlight {
-            direction: None
+            index: None
         })
     );
 }
 
 #[test]
-fn close_with_committed_direction_decodes() {
+fn close_with_committed_index_decodes() {
     let line = serde_json::to_string(&Response::Pie(PieEvent::Close {
-        committed: Some(GestureDirection::DownRight)
+        committed: Some(3)
     }))
     .unwrap_or_default();
     assert_eq!(
         decode_line(&line),
         Some(PieEvent::Close {
-            committed: Some(GestureDirection::DownRight)
+            committed: Some(3)
         })
     );
 }

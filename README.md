@@ -148,7 +148,13 @@ Automatic ratchet-to-free-spin transition:
 - Battery monitoring with charge level and level bar
 - Easy-Switch host switching (`logi-mx set host <index>`)
 - Button divert control (`logi-mx set button <id> --divert`)
-- Gesture support (4 directions: up, down, left, right)
+- Gesture support (8 directions with per-application overrides)
+- Radial pie menu on the diverted gesture button: hold to charge a ring that
+  blooms into 2–8 equal wedges at the cursor — one per installed slot, the
+  first at twelve o'clock; point, swipe or scroll to select, release to fire;
+  a swipe that commits before the ring opens is an expert mark that fires the
+  swipe binding instead; quick tap keeps the click binding, double click
+  opens the menu at once; per-application rings let a game carry its own wheel
 - Button remapping stored in configuration (wire-level reprogramming in development)
 - Daemon with system tray integration and auto-refresh
 - Desktop notifications (freedesktop D-Bus): connect/disconnect, low and
@@ -171,25 +177,25 @@ Automatic ratchet-to-free-spin transition:
 - Daemon with udev hotplug and automatic config application
 - GTK4/libadwaita GUI
 - Automatic device discovery (no hardcoded receiver slot)
+- Software gesture recognition with a Wayland overlay (charge ring, pie menu,
+  highlight animations)
+- Radial pie menu with per-slot commands, keybind picks and per-application
+  rings, configured from the HUD Pie page
+- Per-application profiles for gestures, buttons and pie rings
 
 **Configured but not yet applied on the wire:**
-- Button remapping and gestures (stored in `~/.config/logi-mx.toml`; HID++
+- Button remapping (stored in `~/.config/logi-mx.toml`; HID++
   ReprogControls reprogramming is in development)
 - Hi-res scroll inversion
 
 **In Development:**
 - Wire-level button reprogramming (HID++ 0x1B04)
-- Enhanced gesture system with visual feedback
 - Mode-shift button configuration
-- Per-application profiles
 - Macro recording and playback
-- UI gesture configuration interface
 
 **Planned:**
 - Diagonal gesture support
-- Gesture animations and visual indicators
 - Smart Actions (multi-step workflows)
-- Application-specific button mappings
 - Profile switching per workspace
 - Cloud profile synchronization
 

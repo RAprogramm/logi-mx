@@ -12,7 +12,7 @@ use std::{path::PathBuf, sync::mpsc, time::Duration};
 
 use logi_mx_driver::prelude::{
     Action, ButtonId, Gesture, GestureDirection, GestureMode, HiResScrollConfig, PieConfig,
-    ReprogControl, SmartShiftConfig
+    PieProfile, PieSlot, ReprogControl, SmartShiftConfig
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -62,7 +62,7 @@ impl RpcSender {
     ///
     /// # Errors
     ///
-    /// [`masterror::AppError::Internal`] when the worker thread has shut
+    /// [`masterror::AppError`] (internal) when the worker thread has shut
     /// down and its event receiver is gone.
     pub fn dispatch(&self, request: RpcRequest) -> Result<(), masterror::AppError> {
         self.events
@@ -270,6 +270,27 @@ pub enum Request {
         /// Radius inside which no sector highlights, in pixels.
         dead_zone:         i32
     },
+    /// Replace the global pie ring; the menu shows exactly as many equal
+    /// wedges as there are slots. Persists to config.
+    SetPieSectors {
+        /// Ring slots in wedge order: index 0 at 12 o'clock, clockwise.
+        sectors: Vec<PieSlot>
+    },
+    /// Replace the pie ring of one application profile; persists to config.
+    SetAppPieSectors {
+        /// Hyprland window class the profile applies to.
+        app_id:  String,
+        /// Ring slots in wedge order.
+        sectors: Vec<PieSlot>
+    },
+    /// Delete a per-application pie profile entirely; persists.
+    RemoveAppPieProfile {
+        /// Hyprland window class.
+        app_id: String
+    },
+    /// Read the pie menu state: global tuning with its ring and every
+    /// per-application profile.
+    GetPie,
     /// Read the software button remaps: global map and per-app profiles.
     GetButtons,
     /// Bind an action to a thumb side button globally; persists to config.
@@ -379,6 +400,13 @@ pub enum Response {
         profiles: std::collections::HashMap<String, Vec<Gesture>>,
         /// Radial pie menu tuning.
         pie:      PieConfig
+    },
+    /// `GetPie` reply.
+    PieSettings {
+        /// Global pie tuning including its ring slots.
+        config:   PieConfig,
+        /// Per-application rings keyed by window class.
+        profiles: std::collections::HashMap<String, PieProfile>
     },
     /// `GetButtons` reply.
     ButtonsConfig {
