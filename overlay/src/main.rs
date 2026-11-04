@@ -44,7 +44,9 @@ const SHELL_NAMESPACE: &str = "logi-mx-pie";
 const OVERLAY_CSS: &str =
     "window.logi-mx-pie, window.logi-mx-pie > * { background: none transparent; }";
 /// Duration of the open bloom animation.
-const OPEN_ANIM: Duration = Duration::from_millis(140);
+const OPEN_ANIM: Duration = Duration::from_millis(190);
+/// Duration of the close fade-out, shorter than the entrance by design.
+const EXIT_ANIM: Duration = Duration::from_millis(120);
 /// Repaint cadence while an animation runs (~60 fps).
 const ANIM_TICK: Duration = Duration::from_millis(16);
 
@@ -60,7 +62,8 @@ struct Stage {
     scene:          PieScene,
     monitors:       Vec<MonitorGeom>,
     charge_started: Option<Instant>,
-    open_started:   Option<Instant>
+    open_started:   Option<Instant>,
+    fading:         Option<(PieScene, Instant)>
 }
 
 /// Runs the overlay application, or exits with an error when no graphical
@@ -111,7 +114,8 @@ fn build_overlay(app: &Application) {
         scene:          PieScene::default(),
         monitors:       monitors.iter().map(|(_, geom)| *geom).collect(),
         charge_started: None,
-        open_started:   None
+        open_started:   None,
+        fading:         None
     }));
     let queue = Arc::new(Mutex::new(Vec::<PieEvent>::new()));
     let connected = Arc::new(AtomicBool::new(false));
@@ -163,16 +167,23 @@ fn monitor_window(
     let draw_stage = Rc::clone(stage);
     area.set_draw_func(move |_area, cr, _width, _height| {
         let stage = draw_stage.borrow();
-        let progress = if stage.scene.charging {
-            stage
-                .charge_started
-                .map_or(0.0, |start| fraction(start.elapsed(), HOLD_DELAY))
-        } else {
-            stage
-                .open_started
-                .map_or(1.0, |start| ease_out(fraction(start.elapsed(), OPEN_ANIM)))
-        };
-        draw::render(cr, index, &stage.scene, progress);
+        if stage.scene.is_active() {
+            let progress = if stage.scene.charging {
+                stage
+                    .charge_started
+                    .map_or(0.0, |start| fraction(start.elapsed(), HOLD_DELAY))
+            } else {
+                stage
+                    .open_started
+                    .map_or(1.0, |start| fraction(start.elapsed(), OPEN_ANIM))
+            };
+            draw::render(cr, index, &stage.scene, progress);
+        } else if let Some((snapshot, started)) = stage.fading.as_ref() {
+            let progress = fraction(started.elapsed(), EXIT_ANIM);
+            if progress < 1.0 {
+                draw::render_exit(cr, index, snapshot, progress);
+            }
+        }
     });
     window.set_child(Some(&area));
     window.present();
@@ -238,22 +249,30 @@ fn install_hook(
                 scene,
                 monitors,
                 charge_started,
-                open_started
+                open_started,
+                fading
             } = stage_ref;
             for event in &events {
                 match event {
                     PieEvent::Charge {
                         ..
-                    } => *charge_started = Some(now),
+                    } => {
+                        *charge_started = Some(now);
+                        *fading = None;
+                    }
                     PieEvent::Open {
                         ..
                     } => {
                         *charge_started = None;
                         *open_started = Some(now);
+                        *fading = None;
                     }
                     PieEvent::Close {
                         ..
                     } => {
+                        if scene.is_active() && !scene.charging {
+                            *fading = Some((scene.clone(), now));
+                        }
                         *charge_started = None;
                         *open_started = None;
                     }
@@ -265,6 +284,7 @@ fn install_hook(
             }
             if !connected.load(Ordering::Relaxed) && scene.is_active() {
                 scene.reset();
+                *fading = None;
                 *charge_started = None;
                 *open_started = None;
             }
@@ -295,12 +315,20 @@ fn arm_animation(
     let flag = Rc::clone(running);
     glib::timeout_add_local(ANIM_TICK, move || {
         let alive = {
-            let st = stage_tick.borrow();
-            st.scene.is_active()
+            let mut st = stage_tick.borrow_mut();
+            let menu_alive = st.scene.is_active()
                 && (st.scene.charging
                     || st
                         .open_started
-                        .is_some_and(|start| start.elapsed() < OPEN_ANIM))
+                        .is_some_and(|start| start.elapsed() < OPEN_ANIM));
+            let fade_alive = st
+                .fading
+                .as_ref()
+                .is_some_and(|(_, started)| started.elapsed() < EXIT_ANIM);
+            if !fade_alive {
+                st.fading = None;
+            }
+            menu_alive || fade_alive
         };
         if !alive {
             flag.set(false);
@@ -343,10 +371,4 @@ fn fraction(elapsed: Duration, total: Duration) -> f64 {
         return 1.0;
     }
     (elapsed.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0)
-}
-
-/// Cubic ease-out, fast start and a soft landing.
-fn ease_out(progress: f64) -> f64 {
-    let inverse = 1.0 - progress;
-    (inverse * inverse).mul_add(-inverse, 1.0)
 }

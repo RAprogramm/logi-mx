@@ -6,42 +6,53 @@
 //! The renderer draws only what the daemon streamed: while a hold charges, a
 //! thin ring fills clockwise around the anchor; once the menu opens, the
 //! bound sectors tile the full circle around the logical anchor, the
-//! highlighted sector wears the accent colour, and the whole menu blooms in
-//! with a short scale-and-fade animation. Colours are fixed constants so the
-//! ring looks identical on every theme and compositor.
+//! highlighted sector wears the accent colour, and the whole menu blooms out
+//! of the charge ring with a springy overshoot and leaves with a quick
+//! shrink-and-fade. Colours are fixed constants so the ring looks identical
+//! on every theme and compositor.
 
-use gtk4::cairo::{Context, FontSlant, FontWeight, LineCap};
+use gtk4::cairo::{Context, FontSlant, FontWeight, LineCap, RadialGradient};
 
 use crate::scene::{PieScene, truncate_label, wedge_for};
 
 /// Inner ring radius in logical pixels, mirroring the daemon dead zone.
-pub const RING_INNER: f64 = 24.0;
+pub const RING_INNER: f64 = 18.0;
 /// Outer ring radius in logical pixels.
-pub const RING_OUTER: f64 = 150.0;
+pub const RING_OUTER: f64 = 104.0;
 /// Radius of the thin charge ring in logical pixels.
-const CHARGE_RADIUS: f64 = 34.0;
+const CHARGE_RADIUS: f64 = 26.0;
 /// Stroke width of the charge ring.
-const CHARGE_WIDTH: f64 = 5.0;
+const CHARGE_WIDTH: f64 = 4.0;
 /// Centre dot radius in logical pixels.
-const CENTER_DOT: f64 = 4.0;
+const CENTER_DOT: f64 = 3.5;
 /// Stroke width of the ring outline.
-const OUTLINE_WIDTH: f64 = 1.5;
+const OUTLINE_WIDTH: f64 = 1.0;
+/// Stroke width of the hairline between neighbouring sectors.
+const SEPARATOR_WIDTH: f64 = 1.0;
 /// Font family for sector labels.
 const LABEL_FONT: &str = "Sans";
 /// Sector label size in logical pixels.
-const LABEL_SIZE: f64 = 14.0;
+const LABEL_SIZE: f64 = 12.0;
 /// Maximum label length before truncation with an ellipsis.
 const LABEL_MAX_CHARS: usize = 12;
 /// Fraction of the ring band where labels sit, between inner and outer edge.
-const LABEL_BAND: f64 = 0.5;
-/// Scale the menu starts its bloom at, growing to 1.0.
-const BLOOM_FROM: f64 = 0.80;
+const LABEL_BAND: f64 = 0.55;
+/// Scale the menu starts its bloom at, growing out of the charge ring.
+const BLOOM_FROM: f64 = 0.30;
+/// Overshoot of the springy bloom, in units of the remaining scale.
+const BLOOM_OVERSHOOT: f64 = 0.55;
+/// Fraction of the bloom spent fading in, so the menu is opaque early.
+const BLOOM_FADE: f64 = 0.40;
+/// Scale the menu shrinks to as it exits.
+const EXIT_TO: f64 = 0.90;
 /// Translucent dark fill of an unbound-highlighted sector.
-const FILL_BASE: (f64, f64, f64, f64) = (0.07, 0.08, 0.10, 0.78);
+const FILL_BASE: (f64, f64, f64, f64) = (0.07, 0.08, 0.10, 0.80);
 /// Accent fill of the highlighted sector.
-const FILL_HIGHLIGHT: (f64, f64, f64, f64) = (53.0 / 255.0, 132.0 / 255.0, 228.0 / 255.0, 0.85);
+const FILL_HIGHLIGHT: (f64, f64, f64, f64) = (53.0 / 255.0, 132.0 / 255.0, 228.0 / 255.0, 0.88);
 /// Thin ring outline colour.
-const OUTLINE: (f64, f64, f64, f64) = (0.91, 0.93, 0.96, 0.35);
+const OUTLINE: (f64, f64, f64, f64) = (0.91, 0.93, 0.96, 0.30);
+/// Hairline between neighbouring sectors.
+const SEPARATOR: (f64, f64, f64, f64) = (0.02, 0.03, 0.04, 0.55);
 /// Sector label text colour.
 const TEXT: (f64, f64, f64, f64) = (0.94, 0.96, 0.98, 0.95);
 /// Centre dot colour, the same accent as the highlight.
@@ -50,6 +61,12 @@ const DOT: (f64, f64, f64, f64) = (53.0 / 255.0, 132.0 / 255.0, 228.0 / 255.0, 0
 const CHARGE_TRACK: (f64, f64, f64, f64) = (0.92, 0.94, 0.97, 0.22);
 /// Accent of the charge fill, the same as the highlight.
 const CHARGE_FILL: (f64, f64, f64, f64) = (53.0 / 255.0, 132.0 / 255.0, 228.0 / 255.0, 0.95);
+/// Inner edge of the soft drop shadow, just inside the ring.
+const SHADOW_INNER: f64 = RING_OUTER - 6.0;
+/// Outer edge of the soft drop shadow.
+const SHADOW_OUTER: f64 = RING_OUTER + 16.0;
+/// Darkest alpha of the drop shadow.
+const SHADOW_ALPHA: f64 = 0.32;
 
 /// Paints the pie for one monitor window, if the scene targets it.
 ///
@@ -62,8 +79,8 @@ const CHARGE_FILL: (f64, f64, f64, f64) = (53.0 / 255.0, 132.0 / 255.0, 228.0 / 
 /// * `cr` - Cairo context of the monitor's drawing surface.
 /// * `monitor_index` - Index of this window's monitor in the scene layout.
 /// * `scene` - Current folded renderer state.
-/// * `progress` - Animation progress in `0..=1`: how far the charge ring has
-///   filled while charging, or how far the menu has bloomed once open.
+/// * `progress` - Linear animation progress in `0..=1`: how far the charge ring
+///   has filled while charging, or how far the menu has bloomed.
 ///
 /// # Examples
 ///
@@ -85,19 +102,29 @@ pub fn render(cr: &Context, monitor_index: usize, scene: &PieScene, progress: f6
         paint_charge(cr, cx, cy, progress);
         return;
     }
-    let _ = cr.save();
-    cr.translate(cx, cy);
-    let scale = (1.0 - BLOOM_FROM).mul_add(progress, BLOOM_FROM);
-    cr.scale(scale, scale);
-    cr.translate(-cx, -cy);
-    cr.push_group();
-    paint_sectors(cr, cx, cy, scene);
-    paint_outline(cr, cx, cy);
-    paint_labels(cr, cx, cy, scene);
-    paint_dot(cr, cx, cy);
-    let _ = cr.pop_group_to_source();
-    let _ = cr.paint_with_alpha(progress);
-    let _ = cr.restore();
+    let scale = (1.0 - BLOOM_FROM).mul_add(ease_out_back(progress), BLOOM_FROM);
+    let alpha = (progress / BLOOM_FADE).min(1.0);
+    paint_bloomed(cr, cx, cy, scene, scale, alpha);
+}
+
+/// Paints the exit of a menu that already closed: shrinking away and fading
+/// out with an accelerating ease-in.
+///
+/// # Arguments
+///
+/// * `cr` - Cairo context of the monitor's drawing surface.
+/// * `monitor_index` - Index of this window's monitor.
+/// * `scene` - Snapshot of the menu as it was when it closed.
+/// * `progress` - Linear exit progress in `0..=1`.
+pub fn render_exit(cr: &Context, monitor_index: usize, scene: &PieScene, progress: f64) {
+    if !targets(monitor_index, scene) {
+        return;
+    }
+    let (cx, cy) = scene.anchor;
+    let eased = progress.clamp(0.0, 1.0);
+    let eased = eased * eased;
+    let scale = (EXIT_TO - 1.0).mul_add(eased, 1.0);
+    paint_bloomed(cr, cx, cy, scene, scale, 1.0 - eased);
 }
 
 /// Whether a scene should be painted on a given monitor window.
@@ -113,6 +140,37 @@ pub fn render(cr: &Context, monitor_index: usize, scene: &PieScene, progress: f6
 #[must_use]
 pub const fn targets(monitor_index: usize, scene: &PieScene) -> bool {
     scene.is_active() && scene.monitor == monitor_index
+}
+
+/// Draws the menu at a given scale and opacity: shadow, sectors, hairlines,
+/// outline, labels and the centre dot, all inside one transform so the
+/// bloom and the exit move as a single object.
+fn paint_bloomed(cr: &Context, cx: f64, cy: f64, scene: &PieScene, scale: f64, alpha: f64) {
+    let _ = cr.save();
+    cr.translate(cx, cy);
+    cr.scale(scale, scale);
+    cr.translate(-cx, -cy);
+    cr.push_group();
+    paint_shadow(cr, cx, cy);
+    paint_sectors(cr, cx, cy, scene);
+    paint_separators(cr, cx, cy, scene);
+    paint_outline(cr, cx, cy);
+    paint_labels(cr, cx, cy, scene);
+    paint_dot(cr, cx, cy);
+    let _ = cr.pop_group_to_source();
+    let _ = cr.paint_with_alpha(alpha);
+    let _ = cr.restore();
+}
+
+/// Fills a soft radial halo behind the ring for depth.
+fn paint_shadow(cr: &Context, cx: f64, cy: f64) {
+    let gradient = RadialGradient::new(cx, cy, SHADOW_INNER, cx, cy, SHADOW_OUTER);
+    gradient.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, SHADOW_ALPHA);
+    gradient.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.0);
+    let _ = cr.set_source(&gradient);
+    cr.new_sub_path();
+    cr.arc(cx, cy, SHADOW_OUTER, 0.0, std::f64::consts::TAU);
+    let _ = cr.fill();
 }
 
 /// Draws the thin hold-gate ring: a faint track and an accent arc that fills
@@ -165,6 +223,30 @@ fn paint_sectors(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
     }
 }
 
+/// Strokes the hairline where each sector begins, keeping neighbours crisp
+/// without leaving empty gaps between them.
+fn paint_separators(cr: &Context, cx: f64, cy: f64, scene: &PieScene) {
+    let count = scene.sectors.len();
+    let (red, green, blue, alpha) = SEPARATOR;
+    cr.set_source_rgba(red, green, blue, alpha);
+    cr.set_line_width(SEPARATOR_WIDTH);
+    for sector in &scene.sectors {
+        let Some((start, _)) = wedge_for(sector.direction, count) else {
+            continue;
+        };
+        cr.new_path();
+        cr.move_to(
+            RING_INNER.mul_add(start.cos(), cx),
+            RING_INNER.mul_add(start.sin(), cy)
+        );
+        cr.line_to(
+            RING_OUTER.mul_add(start.cos(), cx),
+            RING_OUTER.mul_add(start.sin(), cy)
+        );
+        let _ = cr.stroke();
+    }
+}
+
 /// Strokes the inner and outer ring circles.
 fn paint_outline(cr: &Context, cx: f64, cy: f64) {
     let (red, green, blue, alpha) = OUTLINE;
@@ -212,4 +294,14 @@ fn paint_dot(cr: &Context, cx: f64, cy: f64) {
     cr.arc(cx, cy, CENTER_DOT, 0.0, std::f64::consts::TAU);
     cr.set_source_rgba(red, green, blue, alpha);
     let _ = cr.fill();
+}
+
+/// Ease-out-back: accelerates to the target and overshoots slightly before
+/// settling, the springy entrance recommended for scale animations.
+fn ease_out_back(progress: f64) -> f64 {
+    let c1 = BLOOM_OVERSHOOT;
+    let c3 = c1 + 1.0;
+    let shifted = progress - 1.0;
+    let squared = shifted * shifted;
+    c3.mul_add(shifted, c1).mul_add(squared, 1.0)
 }
