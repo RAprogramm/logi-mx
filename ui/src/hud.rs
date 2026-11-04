@@ -19,6 +19,7 @@
 
 mod buttons;
 mod device;
+mod diagnostics;
 mod diagram;
 mod gestures;
 mod keybinds;
@@ -59,6 +60,7 @@ use logi_mx_driver::devices::control_id;
 use self::{
     buttons::buttons_page,
     device::{device_page, pointer_page},
+    diagnostics::diagnostics_page,
     diagram::{attach_draw_callback, attach_leaders_draw, build_button_masks, to_layout},
     gestures::gestures_page,
     pie::pie_page,
@@ -576,6 +578,7 @@ fn build_hud(app: &Application) {
         LIVE_HOOK.with(|hook| *hook.borrow_mut() = None);
         SNAPSHOT_HOOK.with(|hook| *hook.borrow_mut() = None);
         buttons::clear_remap_hook();
+        diagnostics::clear_diag_hook();
         ROWS_REGISTRY.with(|rows| *rows.borrow_mut() = None);
         LEADERS_AREA.with(|area| *area.borrow_mut() = None);
         ACTIVE_WINDOW.with(|cell| *cell.borrow_mut() = None);
@@ -836,13 +839,14 @@ fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
 
 /// Page specs shared by the stack and the segmented switcher: stack name,
 /// human label and symbolic icon.
-const PAGE_SPECS: [(&str, &str, &str); 6] = [
+const PAGE_SPECS: [(&str, &str, &str); 7] = [
     ("buttons", "Buttons", "input-mouse-symbolic"),
     ("gestures", "Gestures", "input-touchpad-symbolic"),
     ("pie", "Pie", "media-record-symbolic"),
     ("wheel", "Wheel", "view-continuous-symbolic"),
     ("pointer", "Pointer", "preferences-desktop-input-symbolic"),
-    ("device", "Device", "battery-symbolic")
+    ("device", "Device", "battery-symbolic"),
+    ("diagnostics", "Diagnostics", "text-x-generic-symbolic")
 ];
 
 /// Builds the settings panel with the Buttons, Gestures, Pie, Wheel, Pointer
@@ -894,6 +898,12 @@ fn create_panel(
             "device",
             "Device",
             "battery-symbolic"
+        ),
+        (
+            diagnostics_page(toasts),
+            "diagnostics",
+            "Diagnostics",
+            "text-x-generic-symbolic"
         )
     ];
     for (page, name, title, _) in pages {

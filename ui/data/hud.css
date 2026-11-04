@@ -163,3 +163,14 @@ scrolledwindow.hud-page overshoot {
     background-image: none;
     box-shadow: none;
 }
+
+textview.diag-log,
+textview.diag-log text {
+    background-color: alpha(#0d1117, 0.55);
+    color: #c9d1d9;
+    caret-color: #58a6ff;
+}
+
+textview.diag-log text {
+    padding: 10px 12px;
+}
