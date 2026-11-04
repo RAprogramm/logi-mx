@@ -536,7 +536,7 @@ pub fn open_live_stream() -> std::io::Result<std::os::unix::net::UnixStream> {
     dead_code,
     reason = "client helper; the logi-mx-overlay crate consumes the pie stream"
 )]
-pub fn open_pie_stream() -> std::io::Result<std::os::unix::net::UnixStream> {
+pub fn open_pie_stream() -> std::io::Result<std::io::BufReader<std::os::unix::net::UnixStream>> {
     use std::{
         io::{BufRead as _, BufReader, Write as _},
         os::unix::net::UnixStream
@@ -552,10 +552,11 @@ pub fn open_pie_stream() -> std::io::Result<std::os::unix::net::UnixStream> {
     stream.write_all(&payload)?;
     stream.flush()?;
 
+    let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    BufReader::new(&stream).read_line(&mut line)?;
+    reader.read_line(&mut line)?;
     match serde_json::from_str::<Response>(line.trim()) {
-        Ok(Response::PieReady) => Ok(stream),
+        Ok(Response::PieReady) => Ok(reader),
         _ => Err(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "daemon refused pie stream"

@@ -174,9 +174,7 @@ fn run_device_worker(
     refresh_and_notify(&mut manager, status);
     update_tray(tray);
     manager.for_each_cached_mut(|device| gestures.apply(device));
-    if buttons.should_divert() {
-        manager.for_each_cached_mut(|device| buttons.apply(device));
-    }
+    manager.for_each_cached_mut(|device| buttons.apply(device));
     let mut last_refresh = std::time::Instant::now();
 
     loop {

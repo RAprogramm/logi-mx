@@ -47,6 +47,20 @@ pub struct DeviceStatus {
     pub error:                Option<String>
 }
 
+impl DeviceStatus {
+    /// Human-readable battery text for tray titles and menus: omits the
+    /// retained percentage when the latest read failed, so a stale number
+    /// never rides along an `Unknown` status.
+    #[must_use]
+    pub fn battery_display(&self) -> String {
+        if self.battery_status == "Unknown" {
+            "Battery: unknown".to_string()
+        } else {
+            format!("Battery: {}% ({})", self.battery_level, self.battery_status)
+        }
+    }
+}
+
 impl Default for DeviceStatus {
     fn default() -> Self {
         Self {

@@ -186,8 +186,10 @@ fn test_chord_press_fires_once_and_release_is_quiet() {
     assert!(!live_bit(&runtime, BTN_BIT_FORWARD));
 }
 
+/// The edge decision resolves to the configured command; the detached
+/// launch itself lives in `execute` and is covered by the daemon smoke run.
 #[test]
-fn test_command_press_fires_detached() {
+fn test_command_press_resolves_to_command_effect() {
     let mut runtime = ButtonRuntime::default();
     runtime.set_config(
         HashMap::from([(

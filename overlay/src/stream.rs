@@ -130,9 +130,8 @@ fn run(queue: &Arc<Mutex<Vec<PieEvent>>>, connected: &Arc<AtomicBool>, wake: &Wa
 }
 
 /// Reads lines from one live socket into the queue until it drops.
-fn pump(socket: UnixStream, queue: &Arc<Mutex<Vec<PieEvent>>>, wake: &Wake) {
-    let _ = socket.set_read_timeout(Some(POLL_TIMEOUT));
-    let mut reader = BufReader::new(socket);
+fn pump(mut reader: BufReader<UnixStream>, queue: &Arc<Mutex<Vec<PieEvent>>>, wake: &Wake) {
+    let _ = reader.get_ref().set_read_timeout(Some(POLL_TIMEOUT));
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {

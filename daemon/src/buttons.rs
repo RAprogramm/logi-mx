@@ -185,6 +185,12 @@ impl ButtonRuntime {
     pub fn apply(&mut self, device: &mut MxMaster3s) {
         let back = self.needs_divert(ButtonId::Back);
         let forward = self.needs_divert(ButtonId::Forward);
+        if !back {
+            self.release_injected(ButtonId::Back);
+        }
+        if !forward {
+            self.release_injected(ButtonId::Forward);
+        }
         if divert_one(device, control_for(ButtonId::Back), back, &mut self.back) {
             self.set_live_bit(BTN_BIT_BACK, false);
         }
@@ -201,6 +207,8 @@ impl ButtonRuntime {
     /// Undiverts every diverted thumb control before a device drop or
     /// daemon exit and clears the live bits it owns.
     pub fn detach(&mut self, device: &mut MxMaster3s) {
+        self.release_injected(ButtonId::Back);
+        self.release_injected(ButtonId::Forward);
         if undivert_one(device, control_for(ButtonId::Back), &mut self.back) {
             self.set_live_bit(BTN_BIT_BACK, false);
         }
@@ -305,6 +313,18 @@ impl ButtonRuntime {
         }
     }
 
+    /// Releases a native press the virtual mouse still holds. The firmware
+    /// release no longer reaches the daemon once the control is undiverted,
+    /// so the injected press would hang until the daemon exits.
+    fn release_injected(&mut self, button: ButtonId) {
+        if self.slot(button).injected {
+            self.slot_mut(button).injected = false;
+            if let Err(e) = self.injector.release_button(button) {
+                self.warn_injection(e);
+            }
+        }
+    }
+
     fn warn_injection(&mut self, error: impl std::fmt::Display) {
         if !self.injection_warned {
             self.injection_warned = true;
@@ -378,6 +398,7 @@ fn divert_one(device: &mut MxMaster3s, cid: u16, wanted: bool, slot: &mut ThumbB
         undivert_one(device, cid, slot)
     } else {
         debug!("control {cid:#06x} stays native");
+        let _ = device.set_control_divert(cid, false, false);
         false
     }
 }

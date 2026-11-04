@@ -221,8 +221,9 @@ impl Tray for LogiTrayIcon {
             format!("MX Master 3S - Error: {error}")
         } else if snapshot.connected {
             format!(
-                "MX Master 3S - Battery: {}% ({}), DPI: {}",
-                snapshot.battery_level, snapshot.battery_status, snapshot.dpi
+                "MX Master 3S - {}, DPI: {}",
+                snapshot.battery_display(),
+                snapshot.dpi
             )
         } else {
             "MX Master 3S - Disconnected".to_string()
@@ -308,10 +309,7 @@ impl LogiTrayIcon {
     fn device_menu_items(status: &DeviceStatus) -> Vec<MenuItem<Self>> {
         vec![
             StandardItem {
-                label: format!(
-                    "Battery: {}% ({})",
-                    status.battery_level, status.battery_status
-                ),
+                label: status.battery_display(),
                 icon_name: "battery".into(),
                 activate: Box::new(|_| {}),
                 enabled: false,

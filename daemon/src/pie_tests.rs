@@ -21,6 +21,17 @@ use super::{
     action_summary, direction_angle, sector_among, sectors_from
 };
 
+/// Builds a key-chord gesture bound to a named evdev key.
+fn key_named(direction: GestureDirection, key: &str) -> Gesture {
+    Gesture {
+        direction,
+        mode: GestureMode::OnRelease,
+        action: Box::new(Action::Keypress {
+            keys: vec![key.to_string()]
+        })
+    }
+}
+
 fn key_gesture(direction: GestureDirection) -> Gesture {
     Gesture {
         direction,
@@ -594,7 +605,7 @@ fn profile_overrides_replace_global_sectors() {
         ],
         HashMap::from([(
             "firefox".to_string(),
-            vec![key_gesture(GestureDirection::Up)]
+            vec![key_named(GestureDirection::Up, "KEY_B")]
         )])
     );
     let focus = pie.focus.clone();
@@ -606,7 +617,11 @@ fn profile_overrides_replace_global_sectors() {
         sectors_from(&pie.effective_bindings()),
         vec![
             sector(GestureDirection::Right),
-            sector(GestureDirection::Up),
+            PieSector {
+                direction: GestureDirection::Up,
+                label:     "B".to_string(),
+                command:   None
+            },
         ],
         "the profile entry replaces the global binding for its direction"
     );
