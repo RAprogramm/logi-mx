@@ -51,7 +51,10 @@ pub enum DeviceEvent {
     /// A hidraw device appeared; open and configure it.
     Added(String),
     /// A hidraw device disappeared; drop its handle.
-    Removed(String)
+    Removed(String),
+    /// An IPC request awaits the worker's device state; handling it wakes
+    /// the poll instead of waiting for the next idle tick.
+    Rpc(RpcRequest)
 }
 
 /// Handle of a running tray; an uninhabited stub without the `tray`
@@ -108,7 +111,6 @@ pub fn spawn_device_worker(
 ) -> std::result::Result<(mpsc::Sender<DeviceEvent>, RpcSender, JoinHandle<()>), masterror::AppError>
 {
     let (tx, rx) = mpsc::channel();
-    let (rpc_tx, rpc_rx) = mpsc::channel();
 
     let handle = std::thread::Builder::new()
         .name("logi-mx-device-worker".to_string())
@@ -119,13 +121,13 @@ pub fn spawn_device_worker(
                 pie_hub,
                 anchor
             };
-            run_device_worker(config, &rx, &rpc_rx, &status, &tray, telemetry);
+            run_device_worker(config, &rx, &status, &tray, telemetry);
         })
         .map_err(|e| {
             masterror::AppError::internal("Failed to spawn device worker thread").with_source(e)
         })?;
 
-    Ok((tx, rpc_tx, handle))
+    Ok((tx.clone(), RpcSender::new(tx), handle))
 }
 
 /// Output sinks a device worker publishes telemetry to.
@@ -143,7 +145,6 @@ pub struct Telemetry {
 fn run_device_worker(
     config: Config,
     rx: &mpsc::Receiver<DeviceEvent>,
-    rpc_rx: &mpsc::Receiver<RpcRequest>,
     status: &SharedStatus,
     tray: &TraySlot,
     telemetry: Telemetry
@@ -181,10 +182,6 @@ fn run_device_worker(
     loop {
         crate::systemd::mark_worker_beat();
 
-        while let Ok(req) = rpc_rx.try_recv() {
-            handle_rpc(req, &mut manager, &mut gestures, &mut buttons);
-        }
-
         let poll = if gestures.is_holding() || gestures.has_pending_click() {
             GESTURE_POLL
         } else {
@@ -206,6 +203,10 @@ fn run_device_worker(
                 });
                 manager.handle_device_removed(&path);
                 true
+            }
+            Ok(DeviceEvent::Rpc(req)) => {
+                handle_rpc(req, &mut manager, &mut gestures, &mut buttons);
+                false
             }
             Err(mpsc::RecvTimeoutError::Timeout) => last_refresh.elapsed() >= REFRESH_INTERVAL,
             Err(mpsc::RecvTimeoutError::Disconnected) => break
@@ -406,7 +407,6 @@ mod tests {
     #[test]
     fn test_worker_exits_on_channel_disconnect() {
         let (tx, rx) = mpsc::channel::<DeviceEvent>();
-        let (_rpc_tx, rpc_rx) = mpsc::channel::<RpcRequest>();
         drop(tx);
         let (live_hub, _live_sink) = tokio::sync::broadcast::channel(1);
         let (pie_hub, _pie_sink) = tokio::sync::broadcast::channel(1);
@@ -418,7 +418,6 @@ mod tests {
                 run_device_worker(
                     Config::default(),
                     &rx,
-                    &rpc_rx,
                     &Arc::new(Mutex::new(DeviceStatus::default())),
                     &tray,
                     super::Telemetry {
@@ -438,15 +437,27 @@ mod tests {
     fn test_device_event_variants() {
         let added = DeviceEvent::Added("/dev/hidraw2".to_string());
         let removed = DeviceEvent::Removed("/dev/hidraw2".to_string());
+        let (responder, _receiver) = tokio::sync::oneshot::channel();
+        let rpc = DeviceEvent::Rpc(RpcRequest {
+            request: ipc::Request::Ping,
+            responder
+        });
 
         match added {
             DeviceEvent::Added(path) => assert_eq!(path, "/dev/hidraw2"),
-            DeviceEvent::Removed(_) => panic!("Expected Added event")
+            DeviceEvent::Removed(_) | DeviceEvent::Rpc(_) => panic!("Expected Added event")
         }
 
         match removed {
             DeviceEvent::Removed(path) => assert_eq!(path, "/dev/hidraw2"),
-            DeviceEvent::Added(_) => panic!("Expected Removed event")
+            DeviceEvent::Added(_) | DeviceEvent::Rpc(_) => panic!("Expected Removed event")
+        }
+
+        match rpc {
+            DeviceEvent::Rpc(req) => {
+                assert!(matches!(req.request, ipc::Request::Ping));
+            }
+            _ => panic!("Expected Rpc event")
         }
     }
 }

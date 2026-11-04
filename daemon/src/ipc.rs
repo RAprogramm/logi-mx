@@ -23,6 +23,7 @@ use crate::{
 };
 
 /// RPC envelope forwarded to the worker thread.
+#[derive(Debug)]
 pub struct RpcRequest {
     /// Client request.
     pub request:   Request,
@@ -30,8 +31,45 @@ pub struct RpcRequest {
     pub responder: oneshot::Sender<Response>
 }
 
-/// Channel for RPC requests.
-pub type RpcSender = mpsc::Sender<RpcRequest>;
+/// Gate that hands RPC requests to the device worker as device events.
+///
+/// Sending through the worker's event channel wakes its poll immediately,
+/// so a pending RPC is answered without waiting for the next idle tick.
+#[derive(Clone)]
+pub struct RpcSender {
+    events: mpsc::Sender<crate::worker::DeviceEvent>
+}
+
+impl RpcSender {
+    /// Wraps the device worker's event sender.
+    #[must_use]
+    pub const fn new(events: mpsc::Sender<crate::worker::DeviceEvent>) -> Self {
+        Self {
+            events
+        }
+    }
+
+    /// Enqueues `request` on the worker's event queue.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - RPC envelope carrying the client's response channel.
+    ///
+    /// # Returns
+    ///
+    /// `Ok` while the worker still accepts events; the request is dropped
+    /// once the worker has exited.
+    ///
+    /// # Errors
+    ///
+    /// [`masterror::AppError::Internal`] when the worker thread has shut
+    /// down and its event receiver is gone.
+    pub fn dispatch(&self, request: RpcRequest) -> Result<(), masterror::AppError> {
+        self.events
+            .send(crate::worker::DeviceEvent::Rpc(request))
+            .map_err(|_| masterror::AppError::internal("IPC worker channel closed"))
+    }
+}
 
 /// Fan-out channel carrying live input telemetry to subscribed clients.
 pub type LiveHub = tokio::sync::broadcast::Sender<LiveFrame>;
@@ -749,9 +787,7 @@ async fn handle_client(
         responder: tx
     };
 
-    rpc_tx
-        .send(rpc)
-        .map_err(|_| masterror::AppError::internal("IPC worker channel closed"))?;
+    rpc_tx.dispatch(rpc)?;
 
     let response = timeout(IPC_TIMEOUT, rx)
         .await
