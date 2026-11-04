@@ -17,6 +17,10 @@ use gtk4::{
     Box as GtkBox, EventControllerKey, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow,
     SearchEntry, SelectionMode, Window, glib
 };
+
+/// One rendered page of the chooser: the entries whose rows exist right now,
+/// in list order, so row activation maps back to the right binding.
+type Shown = Rc<RefCell<Vec<KeybindEntry>>>;
 use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
 use libadwaita::prelude::*;
 use logi_mx_daemon::{
@@ -73,16 +77,16 @@ where
     status.set_wrap(true);
 
     let entries = Rc::new(load_entries(toast));
-    let filter = Rc::new(RefCell::new(String::new()));
     let on_pick: Rc<dyn Fn(Vec<String>)> = Rc::new(on_pick);
-    wire_filter(&list, &search, &filter);
-    populate(&list, &entries, &status);
+    let shown: Shown = Rc::new(RefCell::new(Vec::new()));
+    *shown.borrow_mut() = rebuild(&list, &entries, "", &status);
+    wire_search(&search, &list, &entries, &shown, &status);
 
     let scroll = ScrolledWindow::new();
     scroll.set_child(Some(&list));
     scroll.set_vexpand(true);
 
-    wire_activation(&list, &window, &entries, &on_pick);
+    wire_activation(&list, &window, &shown, &on_pick);
     wire_escape(&window);
 
     root.append(&search);
@@ -112,61 +116,105 @@ fn load_entries(toast: &Toasts) -> Vec<KeybindEntry> {
     }
 }
 
-/// Fills the list with one row per entry and writes the summary line.
-fn populate(list: &ListBox, entries: &[KeybindEntry], status: &Label) {
-    for entry in entries.iter().take(MAX_ROWS) {
+/// Rebuilds the list with a row per matching entry and writes the summary
+/// line. The search applies to the whole entry set before the row cap, so a
+/// binding beyond the cap stays reachable by typing its name.
+///
+/// # Arguments
+///
+/// * `list` - The chooser list to refill.
+/// * `entries` - Every fetched binding, in daemon order.
+/// * `needle` - Lower-cased search text; empty matches everything.
+/// * `status` - Summary line under the list.
+///
+/// # Returns
+///
+/// The entries that received rows, in list order.
+fn rebuild(
+    list: &ListBox,
+    entries: &[KeybindEntry],
+    needle: &str,
+    status: &Label
+) -> Vec<KeybindEntry> {
+    let matched: Vec<&KeybindEntry> = entries
+        .iter()
+        .filter(|entry| needle.is_empty() || entry.label.to_lowercase().contains(needle))
+        .collect();
+    let shown: Vec<KeybindEntry> = matched
+        .iter()
+        .take(MAX_ROWS)
+        .map(|entry| (*entry).clone())
+        .collect();
+    list.remove_all();
+    for entry in &shown {
         let label = Label::new(Some(&entry.label));
         label.set_xalign(0.0);
         let row = ListBoxRow::new();
         row.set_child(Some(&label));
         list.append(&row);
     }
-    let summary = match entries.len() {
-        0 => "No replayable keybinds reported".to_string(),
-        count if count > MAX_ROWS => {
-            format!("{count} keybinds · showing first {MAX_ROWS} · click or Enter to bind")
-        }
-        count => format!("{count} keybinds · click or Enter to bind · Esc to cancel")
-    };
-    status.set_text(&summary);
+    status.set_text(&summary_line(entries.len(), matched.len(), needle));
+    shown
 }
 
-/// Keeps the visible rows matching the search text, case-insensitively.
-fn wire_filter(list: &ListBox, search: &SearchEntry, filter: &Rc<RefCell<String>>) {
-    let filter_func = Rc::clone(filter);
-    list.set_filter_func(move |row: &ListBoxRow| {
-        let needle = filter_func.borrow().clone();
-        if needle.is_empty() {
-            return true;
-        }
-        row.child()
-            .and_then(|child| child.downcast::<Label>().ok())
-            .is_some_and(|label| label.text().to_lowercase().contains(&needle))
-    });
-    let filter_changed = Rc::clone(filter);
-    let list_changed = list.clone();
+/// Composes the chooser status line for one filter state.
+fn summary_line(total: usize, matched: usize, needle: &str) -> String {
+    let tail = "· click or Enter to bind · Esc to cancel";
+    if total == 0 {
+        return "No replayable keybinds reported".to_string();
+    }
+    if matched == 0 {
+        return format!("No keybind matches {needle:?} {tail}");
+    }
+    if matched > MAX_ROWS {
+        return format!("{matched} matching · showing first {MAX_ROWS} {tail}");
+    }
+    if needle.is_empty() {
+        return format!("{matched} keybinds {tail}");
+    }
+    format!("{matched} of {total} keybinds match {tail}")
+}
+
+/// Refills the list on every search change: rows exist only for matches,
+/// so the row cap never hides a searchable binding.
+fn wire_search(
+    search: &SearchEntry,
+    list: &ListBox,
+    entries: &Rc<Vec<KeybindEntry>>,
+    shown: &Shown,
+    status: &Label
+) {
+    let list_rebuild = list.clone();
+    let entries_rebuild = Rc::clone(entries);
+    let shown_rebuild = Rc::clone(shown);
+    let status_rebuild = status.clone();
     search.connect_search_changed(move |entry| {
-        *filter_changed.borrow_mut() = entry.text().trim().to_lowercase();
-        list_changed.invalidate_filter();
+        let needle = entry.text().trim().to_lowercase();
+        let next = rebuild(&list_rebuild, &entries_rebuild, &needle, &status_rebuild);
+        *shown_rebuild.borrow_mut() = next;
     });
 }
 
-/// Closes the chooser and hands the chosen chord to the caller.
+/// Closes the chooser and hands the chosen chord to the caller. Rows are
+/// looked up in the currently shown (filtered) entries, not the full set.
 fn wire_activation(
     list: &ListBox,
     window: &Window,
-    entries: &Rc<Vec<KeybindEntry>>,
+    shown: &Shown,
     on_pick: &Rc<dyn Fn(Vec<String>)>
 ) {
-    let entries_pick = Rc::clone(entries);
+    let shown_pick = Rc::clone(shown);
     let window_pick = window.clone();
     let on_pick_cb = Rc::clone(on_pick);
     list.connect_row_activated(move |_list, row| {
         let index = usize::try_from(row.index()).unwrap_or(usize::MAX);
-        let Some(entry) = entries_pick.get(index) else {
+        let Some(keys) = shown_pick
+            .borrow()
+            .get(index)
+            .map(|entry| entry.keys.clone())
+        else {
             return;
         };
-        let keys = entry.keys.clone();
         window_pick.close();
         on_pick_cb(keys);
     });

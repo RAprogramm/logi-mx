@@ -58,8 +58,14 @@ const ASSIGNMENT_CHOICES: [&str; 8] = [
 /// height in a single column.
 const TILE_ROW_MIN_HEIGHT: i32 = 48;
 
-/// Dropdown index matching the firmware remap stored for `control_id`:
-/// `0` (Native) when the control is unmapped or the daemon cannot answer.
+/// Dropdown index matching the firmware remap stored for `control_id`.
+///
+/// `Some(0)` means the firmware confirmed the control as native, `Some(n)`
+/// a known remap; `None` means the read failed or the stored target is not
+/// one this UI can name. Keeping the unknown case apart from Native matters:
+/// a tile that never saw its real remap must still send a restore when the
+/// user picks Native, or a firmware remap read failure would hide a mapping
+/// that stays active.
 ///
 /// This is device I/O — a round-trip that can take a second when the mouse
 /// has fallen asleep — so callers keep it off the main thread.
@@ -70,21 +76,31 @@ const TILE_ROW_MIN_HEIGHT: i32 = 48;
 ///
 /// # Returns
 ///
-/// The dropdown index into [`ASSIGNMENT_CHOICES`] for the stored remap.
-fn remap_index(control_id: u16) -> u32 {
-    ipc::try_request(&ipc::Request::GetButtonRemap {
+/// `Some` dropdown index into [`ASSIGNMENT_CHOICES`] when the firmware
+/// answered, `None` when the read failed or the target is unknown.
+fn remap_index(control_id: u16) -> Option<u32> {
+    let response = ipc::try_request(&ipc::Request::GetButtonRemap {
         control_id
-    })
-    .and_then(|response| match response {
-        Response::ButtonRemap {
-            target_cid, ..
-        } => Some(target_cid),
-        _ => None
-    })
-    .and_then(|target_cid| REMAP_TARGETS.iter().position(|(_, cid)| *cid == target_cid))
-    .and_then(|position| u32::try_from(position).ok())
-    .map_or(0, |position| position + 1)
+    })?;
+    let Response::ButtonRemap {
+        target_cid, ..
+    } = response
+    else {
+        return None;
+    };
+    if target_cid == 0 {
+        return Some(0);
+    }
+    REMAP_TARGETS
+        .iter()
+        .position(|(_, cid)| *cid == target_cid)
+        .and_then(|position| u32::try_from(position).ok())
+        .map(|position| position + 1)
 }
+
+/// `applied` marker for a tile whose firmware remap was never read: picking
+/// any entry, Native included, must reach the daemon.
+const UNKNOWN_APPLIED: u32 = u32::MAX;
 
 thread_local! {
     /// Main-context hook that applies remap results delivered by the loader
@@ -98,16 +114,17 @@ pub(super) fn clear_remap_hook() {
 }
 
 /// Shared slot for remap results delivered by the loader thread.
-type RemapSlot = Arc<Mutex<Option<Vec<(u16, u32)>>>>;
+type RemapSlot = Arc<Mutex<Option<Vec<(u16, Option<u32>)>>>>;
 
 /// Reads every tile's firmware remap off the main thread and paints the
 /// dropdowns once the first frame is up.
 ///
 /// The window must not wait on device I/O: the first read after the mouse
 /// sleeps costs about a second. A worker thread collects the plain
-/// `(control_id, index)` pairs, parks them in a shared slot and wakes the
-/// main context, where the hook applies each index only while the user has
-/// not touched that dropdown yet.
+/// `(control_id, outcome)` pairs, parks them in a shared slot and wakes the
+/// main context, where the hook applies each confirmed index only while the
+/// user has not touched that dropdown yet; a failed read leaves the tile
+/// unknown, so choosing Native still sends the restore.
 ///
 /// # Arguments
 ///
@@ -132,12 +149,12 @@ fn spawn_remap_loader(tiles: &RowMap) {
         let Some(results) = slot_hook.lock().ok().and_then(|mut guard| guard.take()) else {
             return;
         };
-        for (control_id, index) in results {
+        for (control_id, outcome) in results {
             for (cid, dropdown, applied) in &plan {
                 if *cid == control_id
-                    && index != 0
-                    && applied.get() == 0
+                    && applied.get() == UNKNOWN_APPLIED
                     && dropdown.selected() == 0
+                    && let Some(index) = outcome
                 {
                     applied.set(index);
                     dropdown.set_selected(index);
@@ -150,7 +167,7 @@ fn spawn_remap_loader(tiles: &RowMap) {
     if let Err(e) = thread::Builder::new()
         .name("remap-loader".to_string())
         .spawn(move || {
-            let results: Vec<(u16, u32)> = cids
+            let results: Vec<(u16, Option<u32>)> = cids
                 .into_iter()
                 .map(|control_id| (control_id, remap_index(control_id)))
                 .collect();
@@ -233,7 +250,7 @@ fn button_tile(
     let rows_assign = Rc::clone(rows);
     let drawing_assign = drawing.clone();
     let toast_assign = toast.clone();
-    let applied = Rc::new(Cell::new(0u32));
+    let applied = Rc::new(Cell::new(UNKNOWN_APPLIED));
     let applied_notify = Rc::clone(&applied);
     dropdown.connect_selected_notify(move |picker| {
         let index = picker.selected();
@@ -266,7 +283,8 @@ fn button_tile(
             );
             toast_assign.show(&message);
         } else {
-            picker.set_selected(applied_notify.get());
+            let revert = applied_notify.get();
+            picker.set_selected(if revert == UNKNOWN_APPLIED { 0 } else { revert });
             toast_assign.show("Daemon unavailable — change not applied");
         }
     });
@@ -477,10 +495,23 @@ struct RemapTile {
     entry:   Entry,
     kind:    DropDown,
     capture: Button,
-    hypr:    Button
+    hypr:    Button,
+    clear:   Button
 }
 
 impl RemapTile {
+    /// Locks or unlocks every control that would write to the daemon. Used
+    /// when the initial `GetButtons` read failed: without the stored state
+    /// the rows would show Native while real bindings stay active, and a
+    /// clear would delete a binding the user never saw.
+    fn set_editable(&self, editable: bool) {
+        self.kind.set_sensitive(editable);
+        self.capture.set_sensitive(editable);
+        self.hypr.set_sensitive(editable);
+        self.entry.set_sensitive(editable);
+        self.clear.set_sensitive(editable);
+    }
+
     /// Reflects a bound key sequence as monospace chips.
     fn set_keys(&self, keys: &[String]) {
         while let Some(child) = self.binding.first_child() {
@@ -588,8 +619,16 @@ fn refresh_scope_model(model: &gtk4::StringList, store: &ButtonStore) {
 
 /// Reloads every row from the store mappings of the current scope; the
 /// loading guard suppresses the IPC writes the programmatic picker updates
-/// would otherwise trigger.
-fn apply_scope(tiles: &RemapTiles, store: &StoreCell, loading: &Cell<bool>) {
+/// would otherwise trigger. A capture armed under the previous scope is
+/// disarmed: its chord must not land in a profile the user switched to
+/// before releasing the keys.
+fn apply_scope(
+    tiles: &RemapTiles,
+    store: &StoreCell,
+    loading: &Cell<bool>,
+    capture: &RemapCapture
+) {
+    disarm_capture(capture, tiles);
     loading.set(true);
     for (button, tile) in tiles.borrow().iter() {
         tile.apply(store.borrow().action(*button));
@@ -604,7 +643,8 @@ fn select_app_scope(
     model: &gtk4::StringList,
     picker: &DropDown,
     tiles: &RemapTiles,
-    loading: &Cell<bool>
+    loading: &Cell<bool>,
+    capture: &RemapCapture
 ) {
     let created = {
         let mut guard = store.borrow_mut();
@@ -624,7 +664,7 @@ fn select_app_scope(
     loading.set(true);
     picker.set_selected(index);
     loading.set(false);
-    apply_scope(tiles, store, loading);
+    apply_scope(tiles, store, loading, capture);
 }
 
 /// Arms the key capture for `button`, disarming any other pending capture.
@@ -668,6 +708,10 @@ fn wire_remap_kind(
                         tile.set_native();
                         loading_pick.set(false);
                     }
+                } else if let Some(tile) = tiles_pick.borrow().get(&button) {
+                    loading_pick.set(true);
+                    tile.apply(store_pick.borrow().action(button));
+                    loading_pick.set(false);
                 }
                 report(response, &toast_pick, "Native behaviour restored");
             }
@@ -830,7 +874,8 @@ fn remap_tile(
         entry,
         kind,
         capture: capture_btn,
-        hypr: hypr_btn
+        hypr: hypr_btn,
+        clear: clear_btn
     };
     loading.set(true);
     row.set_native();
@@ -845,6 +890,7 @@ fn remap_scope_bar(
     toast: &Toasts,
     store: &StoreCell,
     tiles: &RemapTiles,
+    capture: &RemapCapture,
     loading: &Rc<Cell<bool>>
 ) -> (PreferencesGroup, gtk4::StringList) {
     let group = PreferencesGroup::new();
@@ -881,6 +927,7 @@ fn remap_scope_bar(
 
     let store_pick = Rc::clone(store);
     let tiles_pick = Rc::clone(tiles);
+    let capture_pick = Rc::clone(capture);
     let model_pick = model.clone();
     let loading_pick = Rc::clone(loading);
     picker.connect_selected_notify(move |pick| {
@@ -895,12 +942,18 @@ fn remap_scope_bar(
             RemapScope::App(app)
         };
         store_pick.borrow_mut().scope = scope;
-        apply_scope(&tiles_pick, &store_pick, loading_pick.as_ref());
+        apply_scope(
+            &tiles_pick,
+            &store_pick,
+            loading_pick.as_ref(),
+            &capture_pick
+        );
     });
 
     let on_add: Rc<dyn Fn(String)> = {
         let store_add = Rc::clone(store);
         let tiles_add = Rc::clone(tiles);
+        let capture_add = Rc::clone(capture);
         let model_add = model.clone();
         let picker_add = picker.clone();
         let loading_add = Rc::clone(loading);
@@ -915,7 +968,8 @@ fn remap_scope_bar(
                 &model_add,
                 &picker_add,
                 &tiles_add,
-                loading_add.as_ref()
+                loading_add.as_ref(),
+                &capture_add
             );
         })
     };
@@ -928,6 +982,7 @@ fn remap_scope_bar(
         toast,
         store,
         tiles,
+        capture,
         loading,
         model: &model,
         picker,
@@ -943,6 +998,7 @@ struct ScopeHandles<'a> {
     toast:       &'a Toasts,
     store:       &'a StoreCell,
     tiles:       &'a RemapTiles,
+    capture:     &'a RemapCapture,
     loading:     &'a Rc<Cell<bool>>,
     model:       &'a gtk4::StringList,
     picker:      DropDown,
@@ -958,6 +1014,7 @@ fn wire_scope_profile_buttons(handles: ScopeHandles<'_>) {
         toast,
         store,
         tiles,
+        capture,
         loading,
         model,
         picker,
@@ -966,6 +1023,7 @@ fn wire_scope_profile_buttons(handles: ScopeHandles<'_>) {
     } = handles;
     let store_focus = Rc::clone(store);
     let tiles_focus = Rc::clone(tiles);
+    let capture_focus = Rc::clone(capture);
     let model_focus = model.clone();
     let picker_focus = picker.clone();
     let loading_focus = Rc::clone(loading);
@@ -980,7 +1038,8 @@ fn wire_scope_profile_buttons(handles: ScopeHandles<'_>) {
                 &model_focus,
                 &picker_focus,
                 &tiles_focus,
-                loading_focus.as_ref()
+                loading_focus.as_ref(),
+                &capture_focus
             ),
             _ => toast_focus.show("The desktop reported no focused window")
         }
@@ -988,6 +1047,7 @@ fn wire_scope_profile_buttons(handles: ScopeHandles<'_>) {
 
     let store_remove = Rc::clone(store);
     let tiles_remove = Rc::clone(tiles);
+    let capture_remove = Rc::clone(capture);
     let model_remove = model.clone();
     let picker_remove = picker;
     let loading_remove = Rc::clone(loading);
@@ -1013,7 +1073,12 @@ fn wire_scope_profile_buttons(handles: ScopeHandles<'_>) {
             loading_remove.set(true);
             picker_remove.set_selected(0);
             loading_remove.set(false);
-            apply_scope(&tiles_remove, &store_remove, loading_remove.as_ref());
+            apply_scope(
+                &tiles_remove,
+                &store_remove,
+                loading_remove.as_ref(),
+                &capture_remove
+            );
         }
         report(response, &toast_remove, "Profile removed");
     });
@@ -1123,7 +1188,7 @@ fn thumb_remap_section(toast: &Toasts, window: &ApplicationWindow) -> GtkBox {
     let tiles: RemapTiles = Rc::new(RefCell::new(HashMap::new()));
     let capture: RemapCapture = Rc::new(RefCell::new(None));
     let loading: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-    let (scope_group, scope_model) = remap_scope_bar(toast, &store, &tiles, &loading);
+    let (scope_group, scope_model) = remap_scope_bar(toast, &store, &tiles, &capture, &loading);
 
     let flow = FlowBox::new();
     flow.add_css_class("hud-tiles");
@@ -1151,7 +1216,12 @@ fn thumb_remap_section(toast: &Toasts, window: &ApplicationWindow) -> GtkBox {
             guard.profiles = profiles;
         }
         refresh_scope_model(&scope_model, &store.borrow());
-        apply_scope(&tiles, &store, &loading);
+        apply_scope(&tiles, &store, &loading, &capture);
+    } else {
+        toast.show("Could not read the stored remaps — editing is disabled");
+        for tile in tiles.borrow().values() {
+            tile.set_editable(false);
+        }
     }
 
     attach_remap_capture(window, &capture, &tiles, &store, &loading, toast);

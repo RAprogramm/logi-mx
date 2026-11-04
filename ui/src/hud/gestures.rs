@@ -278,8 +278,16 @@ fn refresh_scope_model(model: &gtk4::StringList, store: &GestureStore) {
 
 /// Reloads every tile from the store bindings of the current scope. Tile
 /// updates fire the mode picker, so the shared loading guard suppresses the
-/// resulting IPC writes while the tiles are being refilled.
-fn apply_scope(tiles: &GestureTiles, store: &StoreCell, loading: &Cell<bool>) {
+/// resulting IPC writes while the tiles are being refilled. A capture armed
+/// under the previous scope is disarmed: its chord must not land in the
+/// profile the user switched to before releasing the keys.
+fn apply_scope(
+    tiles: &GestureTiles,
+    store: &StoreCell,
+    loading: &Cell<bool>,
+    capture: &GestureCapture
+) {
+    disarm_capture(capture, tiles);
     let bindings = store.borrow().bindings().to_vec();
     loading.set(true);
     for (direction, tile) in tiles.borrow().iter() {
@@ -314,7 +322,8 @@ fn select_app_scope(
     model: &gtk4::StringList,
     picker: &DropDown,
     tiles: &GestureTiles,
-    loading: &Cell<bool>
+    loading: &Cell<bool>,
+    capture: &GestureCapture
 ) {
     let created = {
         let mut guard = store.borrow_mut();
@@ -334,7 +343,7 @@ fn select_app_scope(
     loading.set(true);
     picker.set_selected(index);
     loading.set(false);
-    apply_scope(tiles, store, loading);
+    apply_scope(tiles, store, loading, capture);
 }
 
 /// Builds one gesture tile: direction, current binding, action kind, fire
@@ -547,6 +556,16 @@ fn wire_moment_update(
         let response = ipc::try_request(&request);
         if matches!(response, Some(Response::Ok)) {
             store_pick.borrow_mut().record(direction, moment, action);
+        } else {
+            let previous = store_pick
+                .borrow()
+                .bindings()
+                .iter()
+                .find(|gesture| gesture.direction == direction)
+                .map_or(GestureMode::OnPress, |gesture| gesture.mode);
+            loading_pick.set(true);
+            picker.set_selected(u32::from(previous != GestureMode::OnPress));
+            loading_pick.set(false);
         }
         report(response, &toast_pick, "Gesture updated");
     });
@@ -568,6 +587,7 @@ fn gesture_scope_bar(
     toast: &Toasts,
     store: &StoreCell,
     tiles: &GestureTiles,
+    capture: &GestureCapture,
     loading: &Rc<Cell<bool>>
 ) -> (PreferencesGroup, gtk4::StringList) {
     let group = PreferencesGroup::new();
@@ -604,6 +624,7 @@ fn gesture_scope_bar(
 
     let store_pick = Rc::clone(store);
     let tiles_pick = Rc::clone(tiles);
+    let capture_pick = Rc::clone(capture);
     let model_pick = model.clone();
     let loading_pick = Rc::clone(loading);
     picker.connect_selected_notify(move |pick| {
@@ -618,12 +639,18 @@ fn gesture_scope_bar(
             BindingScope::App(app)
         };
         store_pick.borrow_mut().scope = scope;
-        apply_scope(&tiles_pick, &store_pick, loading_pick.as_ref());
+        apply_scope(
+            &tiles_pick,
+            &store_pick,
+            loading_pick.as_ref(),
+            &capture_pick
+        );
     });
 
     let on_add: Rc<dyn Fn(String)> = {
         let store_add = Rc::clone(store);
         let tiles_add = Rc::clone(tiles);
+        let capture_add = Rc::clone(capture);
         let model_add = model.clone();
         let picker_add = picker.clone();
         let loading_add = Rc::clone(loading);
@@ -638,7 +665,8 @@ fn gesture_scope_bar(
                 &model_add,
                 &picker_add,
                 &tiles_add,
-                loading_add.as_ref()
+                loading_add.as_ref(),
+                &capture_add
             );
         })
     };
@@ -652,6 +680,7 @@ fn gesture_scope_bar(
             toast,
             store,
             tiles,
+            capture,
             loading,
             model: &model,
             picker
@@ -668,6 +697,7 @@ struct ScopeHandles<'a> {
     toast:   &'a Toasts,
     store:   &'a StoreCell,
     tiles:   &'a GestureTiles,
+    capture: &'a GestureCapture,
     loading: &'a Rc<Cell<bool>>,
     model:   &'a gtk4::StringList,
     picker:  DropDown
@@ -685,12 +715,14 @@ fn wire_scope_profile_buttons(
         toast,
         store,
         tiles,
+        capture,
         loading,
         model,
         picker
     } = handles;
     let store_focus = Rc::clone(store);
     let tiles_focus = Rc::clone(tiles);
+    let capture_focus = Rc::clone(capture);
     let model_focus = model.clone();
     let picker_focus = picker.clone();
     let loading_focus = Rc::clone(loading);
@@ -705,7 +737,8 @@ fn wire_scope_profile_buttons(
                 &model_focus,
                 &picker_focus,
                 &tiles_focus,
-                loading_focus.as_ref()
+                loading_focus.as_ref(),
+                &capture_focus
             ),
             _ => toast_focus.show("The desktop reported no focused window")
         }
@@ -713,6 +746,7 @@ fn wire_scope_profile_buttons(
 
     let store_remove = Rc::clone(store);
     let tiles_remove = Rc::clone(tiles);
+    let capture_remove = Rc::clone(capture);
     let model_remove = model.clone();
     let loading_remove = Rc::clone(loading);
     let toast_remove = toast.clone();
@@ -737,7 +771,12 @@ fn wire_scope_profile_buttons(
             loading_remove.set(true);
             picker.set_selected(0);
             loading_remove.set(false);
-            apply_scope(&tiles_remove, &store_remove, loading_remove.as_ref());
+            apply_scope(
+                &tiles_remove,
+                &store_remove,
+                loading_remove.as_ref(),
+                &capture_remove
+            );
         }
         report(response, &toast_remove, "Profile removed");
     });
@@ -770,7 +809,7 @@ pub(super) fn gestures_page(toast: &Toasts, window: &ApplicationWindow) -> Scrol
     let capture: GestureCapture = Rc::new(RefCell::new(None));
     let store: StoreCell = Rc::new(RefCell::new(GestureStore::default()));
     let loading: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-    let (scope_group, scope_model) = gesture_scope_bar(toast, &store, &tiles, &loading);
+    let (scope_group, scope_model) = gesture_scope_bar(toast, &store, &tiles, &capture, &loading);
 
     let flow = FlowBox::new();
     flow.add_css_class("hud-tiles");
@@ -803,7 +842,7 @@ pub(super) fn gestures_page(toast: &Toasts, window: &ApplicationWindow) -> Scrol
             guard.profiles = profiles;
         }
         refresh_scope_model(&scope_model, &store.borrow());
-        apply_scope(&tiles, &store, &loading);
+        apply_scope(&tiles, &store, &loading, &capture);
     }
 
     let toast_enable = toast.clone();
