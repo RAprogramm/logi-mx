@@ -9,6 +9,7 @@ authors = ["RAprogramm <andrey.rozanov.vl@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/RAprogramm/logi-mx"
 rust-version = "1.99"
+publish = false
 
 [workspace.dependencies]
 logi-mx-driver = { path = "driver" }
