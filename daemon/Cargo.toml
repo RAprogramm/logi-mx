@@ -6,10 +6,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [features]
-default = ["tray"]
-tray = ["dep:ksni", "dep:gtk4"]
+default = ["tray", "notify"]
+tray = ["dep:ksni", "dep:resvg", "dep:usvg"]
+notify = ["dep:notify-rust"]
+codspeed = []
 
 [dependencies]
 logi-mx-driver.workspace = true
@@ -21,11 +24,23 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 udev.workspace = true
+evdev.workspace = true
 fslock = "0.2"
 libc = "0.2"
 ksni = { version = "0.3", optional = true }
-gtk4 = { workspace = true, optional = true }
+resvg = { workspace = true, optional = true }
+usvg = { workspace = true, optional = true }
+notify-rust = { workspace = true, optional = true }
+sd-notify = "0.5"
 
 [lib]
 name = "logi_mx_daemon"
 path = "src/lib.rs"
+
+[dev-dependencies]
+criterion.workspace = true
+codspeed-criterion-compat.workspace = true
+
+[[bench]]
+name = "hot"
+harness = false

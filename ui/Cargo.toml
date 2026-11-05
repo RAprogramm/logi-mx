@@ -6,11 +6,16 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [dependencies]
 logi-mx-driver.workspace = true
-logi-mx-daemon = { path = "../daemon", version = "0.5.0" }
+logi-mx-daemon = { path = "../daemon" }
 masterror.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true
+gtk4-layer-shell = "0.8"
+resvg.workspace = true
+usvg.workspace = true
+serde_json.workspace = true
 tracing.workspace = true

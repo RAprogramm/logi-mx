@@ -1,77 +1,32 @@
-// SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
-use std::io::Write as IoWrite;
+//! Command-line interface for the Logitech MX Master 3S.
+//!
+//! Every read/write command first tries the running daemon over IPC and falls
+//! back to direct HID++ device access when the daemon is unavailable.
 
-use clap::{Parser, Subcommand};
-use logi_mx_daemon::ipc::{Request, Response, try_request};
+use clap::Parser;
 use logi_mx_driver::prelude::*;
-use masterror::prelude::*;
-use tracing::{info, warn};
+use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-#[derive(Parser)]
-#[command(name = "logi-mx")]
-#[command(about = "Logitech MX series mouse configuration tool", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands
-}
+use crate::{
+    args::{Cli, Commands},
+    bindings::{cmd_gestures, cmd_keybinds, show_button_config},
+    queries::{cmd_battery, cmd_buttons, cmd_hosts, cmd_info},
+    service::{cmd_autostart, cmd_config, cmd_daemon},
+    settings::cmd_set,
+    setup::cmd_setup
+};
 
-#[derive(Subcommand)]
-enum Commands {
-    Info,
-
-    Battery,
-
-    Hosts,
-
-    Buttons,
-
-    Set {
-        #[command(subcommand)]
-        setting: SetCommands
-    },
-
-    Config {
-        #[command(subcommand)]
-        action: ConfigCommands
-    }
-}
-
-#[derive(Subcommand, Clone, Copy)]
-enum SetCommands {
-    Dpi {
-        value: u16
-    },
-
-    Smartshift {
-        #[arg(long)]
-        enabled: bool,
-
-        #[arg(long, default_value_t = 20)]
-        threshold: u8
-    },
-
-    Hires {
-        #[arg(long)]
-        enabled: bool,
-
-        #[arg(long)]
-        inverted: bool
-    }
-}
-
-#[derive(Subcommand)]
-enum ConfigCommands {
-    Show,
-
-    Edit,
-
-    Export { path: String },
-
-    Import { path: String }
-}
+mod args;
+mod bindings;
+mod out;
+mod queries;
+mod service;
+mod settings;
+mod setup;
 
 fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -85,417 +40,42 @@ fn main() -> Result<()> {
         Commands::Info => cmd_info(),
         Commands::Battery => cmd_battery(),
         Commands::Hosts => cmd_hosts(),
-        Commands::Buttons => cmd_buttons(),
+        Commands::Buttons {
+            config
+        } => {
+            let listed = cmd_buttons();
+            if !config {
+                return listed;
+            }
+            // The daemon answers GetButtons even while the mouse is
+            // disconnected, so the stored mappings print regardless of
+            // whether the live device listing succeeded.
+            let stored = show_button_config();
+            match (listed, stored) {
+                (Ok(()), stored) => stored,
+                (Err(listing), Ok(())) => {
+                    warn!("device listing failed: {listing}");
+                    Ok(())
+                }
+                (Err(_), Err(stored)) => Err(stored)
+            }
+        }
         Commands::Set {
             setting
         } => cmd_set(setting),
         Commands::Config {
             action
-        } => cmd_config(action)
+        } => cmd_config(action),
+        Commands::Autostart {
+            action
+        } => cmd_autostart(&action),
+        Commands::Daemon {
+            action
+        } => cmd_daemon(&action),
+        Commands::Gestures {
+            action
+        } => cmd_gestures(action.as_ref()),
+        Commands::Keybinds => cmd_keybinds(),
+        Commands::Setup => cmd_setup()
     }
-}
-
-fn cmd_info() -> Result<()> {
-    info!("Requesting device info...");
-
-    if let Some(Response::Info {
-        name,
-        dpi,
-        smartshift,
-        hires
-    }) = try_request(&Request::Info)
-    {
-        let stdout = std::io::stdout();
-        let mut out = std::io::BufWriter::new(stdout.lock());
-
-        out.write_all(b"Device Information:\n")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        writeln!(out, "  Name: {name}")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        writeln!(out, "  DPI: {dpi}")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        writeln!(
-            out,
-            "  SmartShift: {} (threshold: {})",
-            if smartshift.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            },
-            smartshift.threshold
-        )
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        writeln!(
-            out,
-            "  Hi-Res Scroll: {}",
-            if hires.enabled { "enabled" } else { "disabled" }
-        )
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        out.flush()
-            .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-        return Ok(());
-    }
-
-    warn!("Daemon unavailable, falling back to direct device access");
-    cmd_info_direct()
-}
-
-fn cmd_info_direct() -> Result<()> {
-    info!("Opening device...");
-
-    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-
-    let name = device.device_name()?;
-    let dpi = device.dpi()?;
-    let smartshift = device.smartshift()?;
-    let hires = device.hires_scroll()?;
-
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
-
-    out.write_all(b"Device Information:\n")
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    writeln!(out, "  Name: {name}")
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    writeln!(out, "  DPI: {dpi}")
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    writeln!(
-        out,
-        "  SmartShift: {} (threshold: {})",
-        if smartshift.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        },
-        smartshift.threshold
-    )
-    .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    writeln!(
-        out,
-        "  Hi-Res Scroll: {}",
-        if hires.enabled { "enabled" } else { "disabled" }
-    )
-    .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    out.flush()
-        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-    Ok(())
-}
-
-fn cmd_battery() -> Result<()> {
-    info!("Checking battery...");
-
-    if let Some(Response::Battery {
-        level,
-        status
-    }) = try_request(&Request::Battery)
-    {
-        let stdout = std::io::stdout();
-        let mut out = std::io::BufWriter::new(stdout.lock());
-
-        out.write_all(b"Battery Status:\n")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        writeln!(out, "  Level: {level}%")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        writeln!(out, "  Status: {status}")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        out.flush()
-            .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-        return Ok(());
-    }
-
-    warn!("Daemon unavailable, falling back to direct device access");
-    cmd_battery_direct()
-}
-
-fn cmd_battery_direct() -> Result<()> {
-    info!("Opening device...");
-
-    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-    let battery = device.battery_info()?;
-
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
-
-    out.write_all(b"Battery Status:\n")
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    writeln!(out, "  Level: {}%", battery.level)
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    writeln!(out, "  Status: {:?}", battery.status)
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    out.flush()
-        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-    Ok(())
-}
-
-fn cmd_hosts() -> Result<()> {
-    info!("Reading Easy-Switch host info...");
-
-    if let Some(Response::Hosts {
-        hosts,
-        current
-    }) = try_request(&Request::Hosts)
-    {
-        let stdout = std::io::stdout();
-        let mut out = std::io::BufWriter::new(stdout.lock());
-
-        out.write_all(b"Easy-Switch Hosts:\n")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        writeln!(out, "  Current host: {current} (zero-indexed)")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        writeln!(out, "  Supported hosts: {hosts}")
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        out.flush()
-            .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-        return Ok(());
-    }
-
-    warn!("Daemon unavailable, falling back to direct device access");
-    cmd_hosts_direct()
-}
-
-fn cmd_hosts_direct() -> Result<()> {
-    info!("Opening device...");
-
-    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-    let (hosts, current) = device.host_info()?;
-
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
-
-    out.write_all(b"Easy-Switch Hosts:\n")
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    writeln!(out, "  Current host: {current} (zero-indexed)")
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    writeln!(out, "  Supported hosts: {hosts}")
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    out.flush()
-        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-    Ok(())
-}
-
-fn cmd_buttons() -> Result<()> {
-    info!("Listing reprogrammable controls...");
-
-    if let Some(Response::Buttons {
-        controls
-    }) = try_request(&Request::Buttons)
-    {
-        let stdout = std::io::stdout();
-        let mut out = std::io::BufWriter::new(stdout.lock());
-
-        writeln!(out, "Reprogrammable Controls: {}", controls.len())
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        for control in controls {
-            writeln!(
-                out,
-                "  0x{:04X} {:<18} flags {:#04x}",
-                control.control_id,
-                control_id_name(control.control_id),
-                control.flags
-            )
-            .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        }
-        out.flush()
-            .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-        return Ok(());
-    }
-
-    warn!("Daemon unavailable, falling back to direct device access");
-    cmd_buttons_direct()
-}
-
-fn cmd_buttons_direct() -> Result<()> {
-    info!("Opening device...");
-
-    let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-    let controls = device.list_reprog_controls()?;
-
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
-
-    writeln!(out, "Reprogrammable Controls: {}", controls.len())
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-
-    for control in controls {
-        let (divert_flags, remap) = device.control_divert(control.control_id)?;
-        let diverted = divert_flags & 0x01 != 0;
-
-        writeln!(
-            out,
-            "  0x{:04X} {:<18} flags {:#04x} divert {}",
-            control.control_id,
-            control_id_name(control.control_id),
-            control.flags,
-            if diverted {
-                format!("on (remap {remap:#06x})")
-            } else {
-                "off".to_string()
-            }
-        )
-        .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-    }
-
-    out.flush()
-        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-    Ok(())
-}
-
-fn cmd_set(setting: SetCommands) -> Result<()> {
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
-
-    match setting {
-        SetCommands::Dpi {
-            value
-        } => {
-            info!("Setting DPI to {}...", value);
-            if try_request(&Request::SetDpi {
-                value
-            })
-            .is_some()
-            {
-                writeln!(out, "DPI set to {value}")
-                    .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-            } else {
-                warn!("Daemon unavailable, falling back to direct device access");
-                let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-                device.set_dpi(value)?;
-                writeln!(out, "DPI set to {value}")
-                    .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-            }
-        }
-        SetCommands::Smartshift {
-            enabled,
-            threshold
-        } => {
-            info!(
-                "Configuring SmartShift: enabled={}, threshold={}",
-                enabled, threshold
-            );
-            if try_request(&Request::SetSmartShift {
-                enabled,
-                threshold
-            })
-            .is_some()
-            {
-                writeln!(
-                    out,
-                    "SmartShift configured: {} (threshold: {})",
-                    if enabled { "enabled" } else { "disabled" },
-                    threshold
-                )
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-            } else {
-                warn!("Daemon unavailable, falling back to direct device access");
-                let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-                device.set_smartshift(SmartShiftConfig {
-                    enabled,
-                    threshold
-                })?;
-                writeln!(
-                    out,
-                    "SmartShift configured: {} (threshold: {})",
-                    if enabled { "enabled" } else { "disabled" },
-                    threshold
-                )
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-            }
-        }
-        SetCommands::Hires {
-            enabled,
-            inverted
-        } => {
-            info!(
-                "Configuring hi-res scroll: enabled={}, inverted={}",
-                enabled, inverted
-            );
-            if try_request(&Request::SetHires {
-                enabled,
-                inverted
-            })
-            .is_some()
-            {
-                writeln!(
-                    out,
-                    "Hi-res scroll: {}, inverted: {}",
-                    if enabled { "enabled" } else { "disabled" },
-                    if inverted { "yes" } else { "no" }
-                )
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-            } else {
-                warn!("Daemon unavailable, falling back to direct device access");
-                let mut device = MxMaster3s::open_bolt_receiver_discovered()?;
-                device.set_hires_scroll(HiResScrollConfig {
-                    enabled,
-                    inverted
-                })?;
-                writeln!(
-                    out,
-                    "Hi-res scroll: {}, inverted: {}",
-                    if enabled { "enabled" } else { "disabled" },
-                    if inverted { "yes" } else { "no" }
-                )
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-            }
-        }
-    }
-
-    out.flush()
-        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-    Ok(())
-}
-fn cmd_config(action: ConfigCommands) -> Result<()> {
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
-
-    match action {
-        ConfigCommands::Show => {
-            let config = load_config()?;
-            let toml_str = toml::to_string_pretty(&config)
-                .map_err(|e| AppError::internal("Failed to serialize config").with_source(e))?;
-            writeln!(out, "{toml_str}")
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        }
-        ConfigCommands::Edit => {
-            let config_path = config_path()?;
-            writeln!(out, "Config location: {}", config_path.display())
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-            out.write_all(b"Edit the file with your preferred editor\n")
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        }
-        ConfigCommands::Export {
-            path
-        } => {
-            let config = load_config()?;
-            let toml_str = toml::to_string_pretty(&config)
-                .map_err(|e| AppError::internal("Failed to serialize config").with_source(e))?;
-            std::fs::write(&path, toml_str)
-                .map_err(|e| AppError::internal("Failed to write config").with_source(e))?;
-            writeln!(out, "Config exported to {path}")
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        }
-        ConfigCommands::Import {
-            path
-        } => {
-            let config = load_config_from_path(std::path::Path::new(&path))?;
-            save_config(&config)?;
-
-            writeln!(out, "Config imported from {path}")
-                .map_err(|e| AppError::internal("Failed to write output").with_source(e))?;
-        }
-    }
-
-    out.flush()
-        .map_err(|e| AppError::internal("Failed to flush output").with_source(e))?;
-
-    Ok(())
 }

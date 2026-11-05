@@ -5,6 +5,7 @@ pub mod config;
 pub mod devices;
 pub mod error;
 pub mod hidpp;
+pub mod keys;
 
 pub mod prelude {
     pub use crate::{config::*, devices::*, error::*, hidpp::*};

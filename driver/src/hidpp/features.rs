@@ -108,13 +108,27 @@ pub enum DpiFunction {
     SetSensorDpi = 0x03
 }
 
-/// Functions exposed by the `SmartShift` feature (0x2110).
+/// Functions exposed by the legacy `SmartShift` feature (0x2110).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmartShiftFunction {
-    /// Reads the ratchet mode, auto-disengage threshold and default.
+    /// Reads the wheel mode, auto-disengage threshold and default.
     GetStatus = 0x00,
-    /// Applies the ratchet mode and auto-disengage threshold.
+    /// Applies the wheel mode and auto-disengage threshold.
     SetStatus = 0x01
+}
+
+/// Functions exposed by the `SmartShift Enhanced` feature (0x2111).
+///
+/// The MX Master 3 / 3S / 4 drive their `MagSpeed` wheel through this
+/// variant. Its function slots are shifted by one relative to the legacy
+/// 0x2110: function 0 is a capability query that acknowledges writes
+/// without applying them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmartShiftEnhancedFunction {
+    /// Reads the wheel mode, auto-disengage threshold and tunable torque.
+    GetStatus = 0x01,
+    /// Applies the wheel mode, auto-disengage threshold and torque.
+    SetStatus = 0x02
 }
 
 /// Functions exposed by the Hi-Res Wheel feature (0x2121).

@@ -36,6 +36,14 @@ jobs:
       - name: REUSE Compliance Check
         uses: fsfe/reuse-action@v6
 
+  readme-badges:
+    name: README Badges
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check static badges against the manifest
+        run: bash scripts/check-readme-badges.sh
+
   format:
     name: Format
     needs: [yaml-lint, reuse]
@@ -63,7 +71,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
@@ -87,7 +96,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+            base-devel rustup gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
           rustup default stable
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
@@ -120,7 +130,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+            base-devel rustup gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
           rustup default stable
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
@@ -156,14 +167,15 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release --all-features --workspace
 
   bench:
-    name: Benchmarks
+    name: Benchmarks (compile)
     needs: [clippy]
     runs-on: ubuntu-latest
     container:
@@ -178,11 +190,12 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
-      - name: Run benchmarks
-        run: cargo bench --all-features --workspace --no-fail-fast
+      - name: Compile benchmarks
+        run: cargo bench --all-features --workspace --no-run
 
   test:
     name: Test
@@ -200,7 +213,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
@@ -240,7 +254,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+            base-devel rustup gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
           rustup default stable
           rustup component add llvm-tools-preview
       - uses: actions/checkout@v6
@@ -326,7 +341,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --all-features --workspace
@@ -410,6 +426,14 @@ jobs:
           echo "version_bumped=true" >> $GITHUB_OUTPUT
           echo "New version: $NEW_VERSION"
 
+      - name: Install git-cliff
+        if: steps.bump.outputs.version_bumped == 'true'
+        # baptiste0928/cargo-install v3.5.0
+        uses: >-
+          baptiste0928/cargo-install@8195d4f734a149db85385bb4102b42efcd373759
+        with:
+          crate: git-cliff
+
       - name: Update files and create tag
         if: steps.bump.outputs.version_bumped == 'true'
         run: |
@@ -419,17 +443,59 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
-          DEP_PREFIX="logi-mx-driver = { path = \"driver\", version = "
-          sed -i \
-            "s|^${DEP_PREFIX}.*|${DEP_PREFIX}\"${NEW_VERSION}\" }|" \
-            Cargo.toml
           sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
 
-          git add Cargo.toml PKGBUILD
+          python3 - "$NEW_VERSION" <<'PYEOF'
+          import re, sys
+          new = sys.argv[1]
+          names = ("logi-mx", "logi-mx-driver", "logi-mx-daemon",
+                   "logi-mx-ui", "logi-mx-overlay")
+          text = open("Cargo.lock").read()
+          for name in names:
+              pat = r'(name = "%s"\nversion = ")[^"]*(")' % name
+              text = re.sub(pat, r"\g<1>" + new + r"\g<2>", text)
+          open("Cargo.lock", "w").write(text)
+          PYEOF
+
+          git add Cargo.toml Cargo.lock PKGBUILD
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git tag "v${NEW_VERSION}"
+
+          git-cliff --config cliff.toml -o CHANGELOG.md
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for ${NEW_VERSION}"
+          git tag -f "v${NEW_VERSION}"
+
           git push origin main
           git push origin "v${NEW_VERSION}"
+
+      - name: Pin the release archive checksum
+        if: steps.bump.outputs.version_bumped == 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          REPO="${GITHUB_REPOSITORY}"
+          URL="https://github.com/${REPO}/archive/v${NEW_VERSION}.tar.gz"
+          SHA=""
+          ARCHIVE=$(mktemp)
+          trap 'rm -f "$ARCHIVE"' EXIT
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsSL "$URL" -o "$ARCHIVE"; then
+              SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "$SHA" ]; then
+            echo "::warning::could not fetch ${URL};"
+            echo "PKGBUILD keeps its placeholder checksum"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          sed -i "s/^sha256sums=.*/sha256sums=('${SHA}')/" PKGBUILD
+          git add PKGBUILD
+          git commit -m "chore: update PKGBUILD checksum for v${NEW_VERSION}"
+          git push origin main
 
   # ============================================================================
   # RELEASE PIPELINE - runs after version bump OR on tag push
@@ -502,7 +568,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
       - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release-gate.outputs.version }}
@@ -523,6 +590,8 @@ jobs:
           cp target/release/logi-mx-ui release/
           cp 90-logi-mx.rules release/
           cp logi-mx-daemon.service release/
+          cp logi-mx-daemon.desktop release/
+          cp logi-mx-ui.desktop release/
           cp README.md LICENSE release/
           tar -czf "logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz" -C release .
       - name: Generate SHA-256 checksum
@@ -553,7 +622,9 @@ jobs:
         with:
           name: release-archive
       - name: Install git-cliff
-        uses: baptiste0928/cargo-install@v3
+        # baptiste0928/cargo-install v3.5.0
+        uses: >-
+          baptiste0928/cargo-install@8195d4f734a149db85385bb4102b42efcd373759
         with:
           crate: git-cliff
       - name: Generate changelog
@@ -579,6 +650,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release-gate.outputs.version }}
+      - name: Calculate source checksum
+        run: |
+          VERSION="${{ needs.release-gate.outputs.version }}"
+          URL="https://github.com/RAprogramm/logi-mx/archive/v${VERSION}.tar.gz"
+          ARCHIVE=$(mktemp)
+          trap 'rm -f "$ARCHIVE"' EXIT
+          curl -fsSL "$URL" -o "$ARCHIVE"
+          SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+          sed -i "s/^sha256sums=.*/sha256sums=('${SHA}')/" PKGBUILD
       - name: Generate .SRCINFO
         run: |
           docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "

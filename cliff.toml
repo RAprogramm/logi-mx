@@ -24,7 +24,7 @@ body = """
     {% for commit in commits %}
         - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
             {% if commit.breaking %}[**breaking**] {% endif %}\
-            {{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}]({{ commit.id }}))\
+            {{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/RAprogramm/logi-mx/commit/{{ commit.id }}))\
     {% endfor %}
 {% endfor %}\n
 """
@@ -44,6 +44,9 @@ filter_unconventional = false
 split_commits = false
 # Commit preprocessors
 commit_preprocessors = [
+    # Strip the leading issue-number prefix ("#58 feat: …" → "feat: …") so
+    # per-issue commits still parse as conventional and group correctly
+    { pattern = '^#[0-9]+ ', replace = "" },
     # Remove issue numbers from commit messages
     { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](https://github.com/RAprogramm/logi-mx/issues/${2}))"},
 ]
@@ -61,6 +64,9 @@ commit_parsers = [
     { message = "^chore\\(deps.*\\)", skip = true },
     { message = "^chore\\(pr\\)", skip = true },
     { message = "^chore\\(pull\\)", skip = true },
+    # Automation bookkeeping: the release pipeline regenerates these itself
+    { message = "^docs: update changelog", skip = true },
+    { message = "^chore: update PKGBUILD checksum", skip = true },
     { message = "^chore", group = "<!-- 8 -->Miscellaneous" },
     { message = "^build", group = "<!-- 9 -->Build System" },
     { message = "^revert", group = "<!-- 10 -->Reverts" },

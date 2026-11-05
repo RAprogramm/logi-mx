@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
 use logi_mx_driver::prelude::*;
@@ -91,7 +91,7 @@ fn test_gesture_direction() {
 fn test_device_config_validation() {
     let config = DeviceConfig::default();
 
-    assert!(!config.name.is_empty());
+    assert_ne!(config.name, "");
     assert!(config.dpi > 0);
     assert!(config.dpi <= 8000);
 }
@@ -118,17 +118,22 @@ fn test_empty_config_devices() {
 fn test_multiple_devices_config() {
     let mut config = Config::default();
     config.devices.push(DeviceConfig {
-        name:        "Second Device".to_string(),
-        dpi:         2000,
-        smartshift:  SmartShiftConfig {
+        name:             "Second Device".to_string(),
+        dpi:              2000,
+        smartshift:       SmartShiftConfig {
             enabled:   true,
             threshold: 30
         },
-        hiresscroll: HiResScrollConfig {
+        hiresscroll:      HiResScrollConfig {
             enabled:  false,
             inverted: true
         },
-        buttons:     std::collections::HashMap::new()
+        buttons:          std::collections::HashMap::new(),
+        pie_profiles:     std::collections::HashMap::new(),
+        gestures_enabled: false,
+        gesture_profiles: std::collections::HashMap::new(),
+        button_profiles:  std::collections::HashMap::new(),
+        pie:              PieConfig::default()
     });
 
     assert_eq!(config.devices.len(), 2);

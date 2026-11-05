@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{DeviceErrorKind, Result};
 
 /// Battery charge snapshot reported by the device.
 ///
@@ -48,6 +48,20 @@ pub struct SmartShiftConfig {
     pub threshold: u8
 }
 
+/// Physical ratchet state of the main scroll wheel.
+///
+/// The mode-shift button flips between the two, mirroring the firmware's
+/// native behaviour; the [`SmartShiftConfig`] auto-disengage threshold only
+/// applies while the wheel is in [`WheelMode::Ratchet`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WheelMode {
+    /// Clicky detents; may auto-disengage into free-spin on fast scrolls.
+    #[default]
+    Ratchet,
+    /// Frictionless free-spin (hyperfast).
+    FreeSpin
+}
+
 /// High-resolution wheel behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct HiResScrollConfig {
@@ -83,9 +97,11 @@ pub enum ButtonId {
 pub enum Action {
     /// Sends a key sequence, e.g. `["KEY_LEFTCTRL", "KEY_C"]`.
     Keypress { keys: Vec<String> },
+    /// Runs a shell command through `/bin/sh -c`.
+    Command { command: String },
     /// Runs direction-based gestures on the thumb gesture button.
     Gestures { gestures: Vec<Gesture> },
-    /// Toggles `SmartShift` ratchet mode.
+    /// Flips the wheel between ratchet and free-spin (the mode-shift button).
     ToggleSmartShift,
     /// Clears the button mapping.
     None
@@ -103,7 +119,7 @@ pub struct Gesture {
 }
 
 /// Recognised gesture direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GestureDirection {
     /// Upward drag.
     Up,
@@ -113,6 +129,14 @@ pub enum GestureDirection {
     Left,
     /// Rightward drag.
     Right,
+    /// Up-left diagonal, recognised by the radial pie menu only.
+    UpLeft,
+    /// Up-right diagonal, recognised by the radial pie menu only.
+    UpRight,
+    /// Down-left diagonal, recognised by the radial pie menu only.
+    DownLeft,
+    /// Down-right diagonal, recognised by the radial pie menu only.
+    DownRight,
     /// Press without directional movement.
     None
 }
@@ -122,7 +146,9 @@ pub enum GestureDirection {
 pub enum GestureMode {
     /// Fires when the button is released.
     OnRelease,
-    /// Fires as soon as the button is pressed.
+    /// Fires as soon as the swipe direction is recognised: mid-hold for a
+    /// deliberate swipe, at release for a quick flick or a directionless
+    /// click.
     OnPress
 }
 
@@ -260,6 +286,19 @@ pub trait MouseDevice {
     /// Returns [`masterror::AppError`] when the `SmartShift` feature is
     /// unsupported or the response cannot be parsed.
     fn smartshift(&mut self) -> Result<SmartShiftConfig>;
+
+    /// Flips the wheel between ratchet and free-spin, preserving the
+    /// `SmartShift` threshold and torque. This is the firmware's native
+    /// job for the mode-shift button once the control is diverted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`masterror::AppError`] when the `SmartShift` feature is
+    /// unsupported or a read/write command fails.
+    fn toggle_wheel_mode(&mut self) -> Result<WheelMode> {
+        let _ = self;
+        Err(DeviceErrorKind::UnsupportedFeature.into())
+    }
 
     /// Applies high-resolution wheel settings.
     ///

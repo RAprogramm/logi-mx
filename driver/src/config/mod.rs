@@ -109,7 +109,8 @@ pub fn load_config() -> Result<Config> {
 /// # Errors
 ///
 /// Returns [`masterror::AppError`] when the file cannot be read, or when
-/// its content is not valid TOML matching the [`Config`] schema.
+/// its content is not valid TOML matching the [`Config`] schema, or a
+/// device has invalid pie settings.
 ///
 /// # Examples
 ///
@@ -127,6 +128,26 @@ pub fn load_config_from_path(path: &Path) -> Result<Config> {
 
     let config: Config = toml::from_str(&content)
         .map_err(|e| AppError::bad_request("Invalid config format").with_source(e))?;
+
+    for device in &config.devices {
+        if let Some(reason) = device.pie.rejection() {
+            return Err(AppError::bad_request(format!(
+                "Invalid pie config for device {:?}: {reason}",
+                device.name
+            )));
+        }
+        for (app, profile) in &device.pie_profiles {
+            if profile.sectors.len() > PieConfig::MAX_SLOTS {
+                return Err(AppError::bad_request(format!(
+                    "Invalid pie config for device {:?} app {:?}: pie profiles carry at most {} \
+                     sectors",
+                    device.name,
+                    app,
+                    PieConfig::MAX_SLOTS
+                )));
+            }
+        }
+    }
 
     debug!("Loaded config from {:?}", path);
     Ok(config)
@@ -174,9 +195,10 @@ pub fn save_config(config: &Config) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use std::{collections::HashMap, env};
 
     use super::*;
+    use crate::devices::{Action, ButtonId};
 
     #[test]
     fn test_default_config() {
@@ -190,6 +212,234 @@ mod tests {
         let toml_str = toml::to_string(&config).unwrap();
         let deserialized: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(config.devices.len(), deserialized.devices.len());
+    }
+
+    #[test]
+    fn test_button_profiles_round_trip() {
+        let mut config = Config::default();
+        let mut profile = HashMap::new();
+        profile.insert(
+            ButtonId::Back,
+            Action::Keypress {
+                keys: vec!["KEY_LEFTALT".to_string(), "KEY_LEFT".to_string()]
+            }
+        );
+        profile.insert(
+            ButtonId::Forward,
+            Action::Command {
+                command: "xdg-forward".to_string()
+            }
+        );
+        config.devices[0]
+            .button_profiles
+            .insert("firefox".to_string(), profile);
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let loaded =
+            load_config_from_path(write_temp("button_profiles.toml", &toml_str).as_path())
+                .unwrap();
+
+        let restored = loaded.devices[0].button_profiles.get("firefox").unwrap();
+        assert_eq!(
+            restored.get(&ButtonId::Back),
+            Some(&Action::Keypress {
+                keys: vec!["KEY_LEFTALT".to_string(), "KEY_LEFT".to_string()]
+            })
+        );
+        assert_eq!(
+            restored.get(&ButtonId::Forward),
+            Some(&Action::Command {
+                command: "xdg-forward".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn test_button_profiles_default_absent() {
+        let config: Config = toml::from_str("[[devices]]\nname = \"MX Master 3S\"\n").unwrap();
+        assert!(config.devices[0].button_profiles.is_empty());
+    }
+
+    #[test]
+    fn test_pie_config_round_trip() {
+        let mut config = Config::default();
+        config.devices[0].pie = PieConfig {
+            enabled: true,
+            activation_radius: 60,
+            dead_zone: 20,
+            ..PieConfig::default()
+        };
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let loaded =
+            load_config_from_path(write_temp("pie_round_trip.toml", &toml_str).as_path()).unwrap();
+
+        assert_eq!(loaded.devices[0].pie, config.devices[0].pie);
+    }
+
+    #[test]
+    fn test_pie_explicit_layout_round_trip() {
+        let mut config = Config::default();
+        config.devices[0].pie = PieConfig {
+            enabled:           true,
+            activation_radius: 80,
+            dead_zone:         10,
+            sectors:           vec![
+                PieSlot {
+                    action: Some(Action::Command {
+                        command: "firefox".to_string()
+                    }),
+                    label:  Some("Web".to_string())
+                },
+                PieSlot::default(),
+            ]
+        };
+        config.devices[0].pie_profiles.insert(
+            "minecraft".to_string(),
+            PieProfile {
+                sectors: vec![PieSlot::default(); 6]
+            }
+        );
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let loaded =
+            load_config_from_path(write_temp("pie_explicit.toml", &toml_str).as_path()).unwrap();
+        assert_eq!(loaded.devices[0].pie, config.devices[0].pie);
+        assert_eq!(
+            loaded.devices[0]
+                .pie_profiles
+                .get("minecraft")
+                .map(|p| p.sectors.len()),
+            Some(6),
+            "per-app pie profiles survive the round trip"
+        );
+    }
+
+    #[test]
+    fn test_load_rejects_oversized_pie_profile() {
+        let mut config = Config::default();
+        config.devices[0].pie_profiles.insert(
+            "firefox".to_string(),
+            PieProfile {
+                sectors: vec![PieSlot::default(); PieConfig::MAX_SLOTS + 1]
+            }
+        );
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let path = write_temp("pie_profile_oversized.toml", &toml_str);
+        let error = load_config_from_path(path.as_path())
+            .expect_err("an oversized per-app ring must be rejected");
+        let text = error.to_string();
+        assert!(
+            text.contains("firefox") && text.contains("sectors"),
+            "the rejection must name the offending app and field, got: {text}"
+        );
+
+        config.devices[0].pie_profiles.insert(
+            "firefox".to_string(),
+            PieProfile {
+                sectors: vec![PieSlot::default(); PieConfig::MAX_SLOTS]
+            }
+        );
+        let toml_str = toml::to_string(&config).unwrap();
+        assert!(
+            load_config_from_path(write_temp("pie_profile_legal.toml", &toml_str).as_path())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_pie_rejection_covers_every_invalid_shape() {
+        let legal = || PieConfig {
+            enabled:           true,
+            activation_radius: 40,
+            dead_zone:         12,
+            sectors:           vec![PieSlot::default(); 4]
+        };
+        assert_eq!(legal().rejection(), None);
+        assert!(legal().ring_ready());
+
+        let too_many_slots = PieConfig {
+            sectors: vec![PieSlot::default(); 9],
+            ..legal()
+        };
+        assert!(
+            too_many_slots.rejection().is_some(),
+            "a ring carries at most eight wedges"
+        );
+
+        let thin_ring = PieConfig {
+            sectors: vec![PieSlot::default()],
+            ..legal()
+        };
+        assert!(
+            !thin_ring.ring_ready(),
+            "one slot is nothing to choose from, the ring stays closed"
+        );
+
+        let gate_over_ring = PieConfig {
+            activation_radius: 10,
+            dead_zone: 11,
+            ..legal()
+        };
+        assert!(gate_over_ring.rejection().is_some());
+
+        let zero_radius = PieConfig {
+            activation_radius: 0,
+            ..legal()
+        };
+        assert!(zero_radius.rejection().is_some());
+
+        assert_eq!(PieConfig::default().rejection(), None, "defaults are legal");
+    }
+
+    #[test]
+    fn load_rejects_invalid_pie_settings_for_each_device() {
+        for (field, value) in [
+            ("activation_radius", "0"),
+            ("dead_zone", "-1"),
+            ("dead_zone", "41"),
+            ("sectors", "[{},{},{},{},{},{},{},{},{}]")
+        ] {
+            let content = format!(
+                "[[devices]]\nname = \"valid\"\n[[devices]]\nname = \"invalid mouse\"\n[devices.pie]\n{field} = {value}\n"
+            );
+            let path = write_temp("invalid_pie.toml", &content);
+            let error = load_config_from_path(&path).unwrap_err().to_string();
+            assert!(error.contains("invalid mouse"), "{error}");
+            assert!(error.contains(field), "{error}");
+        }
+        let content = "[[devices]]\nname = \"valid\"\n[devices.pie]\nsectors = [{}]\n";
+        assert!(load_config_from_path(&write_temp("valid_pie.toml", content)).is_ok());
+    }
+
+    #[test]
+    fn test_pie_config_defaults_when_absent() {
+        let config: Config = toml::from_str("[[devices]]\nname = \"MX Master 3S\"\n").unwrap();
+        let pie = &config.devices[0].pie;
+        assert!(!pie.enabled);
+        assert_eq!(pie.activation_radius, 40);
+        assert_eq!(pie.dead_zone, 12);
+    }
+
+    #[test]
+    fn test_pie_config_partial_section_fills_defaults() {
+        let config: Config = toml::from_str(
+            "[[devices]]\nname = \"MX Master 3S\"\n[devices.pie]\nenabled = true\n"
+        )
+        .unwrap();
+        let pie = &config.devices[0].pie;
+        assert!(pie.enabled);
+        assert_eq!(pie.activation_radius, 40);
+        assert_eq!(pie.dead_zone, 12);
+    }
+
+    fn write_temp(name: &str, content: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("logi-mx-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
     }
 
     #[test]

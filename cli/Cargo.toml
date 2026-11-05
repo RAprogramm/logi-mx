@@ -6,10 +6,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [dependencies]
 logi-mx-driver.workspace = true
-logi-mx-daemon = { path = "../daemon", version = "0.5.0" }
+logi-mx-daemon = { path = "../daemon" }
 masterror.workspace = true
 clap.workspace = true
 tracing.workspace = true

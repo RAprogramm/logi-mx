@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
 use std::{
@@ -319,8 +319,10 @@ impl HidppDevice {
                 .unwrap_or(DEFAULT_TIMEOUT_MS)
                 .clamp(1, DEFAULT_TIMEOUT_MS);
 
-            if let Some(bytes) = self.read_raw(remaining_ms)
-                && let Ok(response) = HidppPacket::from_bytes(&bytes)
+            let mut buf = [0u8; 64];
+            if let Ok(size) = self.device.read_timeout(&mut buf, remaining_ms)
+                && size > 0
+                && let Ok(response) = HidppPacket::from_bytes(&buf[..size])
             {
                 if response.matches_request(request) {
                     return Ok(response);
@@ -544,13 +546,13 @@ mod tests {
 
         for code in error_codes {
             let err = HidppDevice::map_hidpp_error(code);
-            assert!(!err.to_string().is_empty());
+            assert_ne!(err.to_string(), "");
         }
     }
 
     #[test]
     fn test_unknown_error_code() {
         let err = HidppDevice::map_hidpp_error(0xFF);
-        assert!(!err.to_string().is_empty());
+        assert_ne!(err.to_string(), "");
     }
 }

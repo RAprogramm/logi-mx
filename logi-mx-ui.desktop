@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Logitech MX Configuration
+Comment=Configuration UI for Logitech MX mice
+Exec=logi-mx-ui
+Icon=input-mouse
+Categories=Settings;HardwareSettings;
+Terminal=false
+StartupNotify=true

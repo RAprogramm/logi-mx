@@ -4,21 +4,18 @@
 # Then logout and login for group changes to take effect
 
 # HID++ device access (for configuration)
-# Logitech Bolt Receiver
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c548", MODE="0666", TAG+="uaccess"
+# Every Logitech vendor node is opened to the active seat through uaccess,
+# so new receivers and Bluetooth pairings work without a rule update.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="uaccess"
 
-# Logitech MX Master 3S USB
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="4082", MODE="0666", TAG+="uaccess"
-
-# Logitech MX Master 3S Bluetooth
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="b034", MODE="0666", TAG+="uaccess"
-
-# Logitech Unifying Receiver (for compatibility)
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c52b", MODE="0666", TAG+="uaccess"
-
-# Input device access (for scroll speed multiplier in daemon)
+# Input device access (for live telemetry and scroll handling in daemon)
 # Users must be in the 'input' group to access /dev/input/event* devices
 KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0660"
+
+# uinput access (for gesture key injection and virtual devices)
+# The daemon creates a virtual keyboard through /dev/uinput; load the module
+# at boot with the bundled modules-load.d file.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660"
 
 # Virtual device for scroll speed control (required for Wayland/libinput recognition)
 ACTION=="add|change", SUBSYSTEM=="input", ATTRS{name}=="MX Master 3S Virtual", ENV{ID_INPUT}="1", ENV{ID_INPUT_MOUSE}="1", ENV{LIBINPUT_DEVICE_GROUP}="logi-mx-virtual"

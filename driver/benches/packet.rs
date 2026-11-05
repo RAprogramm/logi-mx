@@ -5,9 +5,20 @@
 //!
 //! The codec sits on the hot path of every device command, so encode and
 //! decode costs are tracked explicitly.
+//!
+//! The `codspeed` feature path allows `clippy::significant_drop_tightening`
+//! because the compatibility layer's `criterion_group!` macro keeps the
+//! harness temporary alive across benchmark targets, which is outside our
+//! code.
+#![cfg_attr(feature = "codspeed", allow(clippy::significant_drop_tightening))]
 
 use std::hint::black_box;
 
+#[cfg(feature = "codspeed")]
+use codspeed_criterion_compat::{
+    BenchmarkId, Criterion, Throughput, criterion_group, criterion_main
+};
+#[cfg(not(feature = "codspeed"))]
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use logi_mx_driver::hidpp::{HidppPacket, SHORT_PACKET_SIZE};
 

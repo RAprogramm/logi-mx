@@ -1,0 +1,25 @@
+[package]
+name = "logi-mx-overlay"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "logi_mx_overlay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "logi-mx-overlay"
+path = "src/main.rs"
+
+[dependencies]
+logi-mx-driver.workspace = true
+logi-mx-daemon = { path = "../daemon", default-features = false }
+gtk4.workspace = true
+gtk4-layer-shell = "0.8"
+serde_json.workspace = true
+gio-unix = "0.22"
