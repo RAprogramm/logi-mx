@@ -5,6 +5,12 @@ All notable changes to logi-mx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-05
+
+### CI/CD
+
+- Bump the github-actions group with 6 updates ([e6bd52d](https://github.com/RAprogramm/logi-mx/commit/e6bd52db1f30ec0795932326280e1305c49e4d26))
+
 ## [0.7.0] - 2026-11-05
 
 ### Features
@@ -135,6 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update README, INSTALL and ARCHITECTURE for new features ([df5d926](https://github.com/RAprogramm/logi-mx/commit/df5d926818424cef061a7df2e550e81b4503f1d3))
 - Update Hyprland config section for Lua (0.55+) ([676c1cb](https://github.com/RAprogramm/logi-mx/commit/676c1cb4141ab645f3b0c3852df87f60ead5cef9))
 - Describe the in-app Hyprland integration button in README ([c4cd02a](https://github.com/RAprogramm/logi-mx/commit/c4cd02af58daa021036cc3a38c26b784d296cdfb))
+- Update changelog for 0.7.0 [skip ci] ([716d82c](https://github.com/RAprogramm/logi-mx/commit/716d82c5e6670fa96564ecedf999d3fcdd713d3e))
 
 ### Refactoring
 
