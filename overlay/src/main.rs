@@ -65,6 +65,23 @@ const INDEX_WARM_MS: u64 = 250;
 /// Exponential smoothing time constant of the aim needle, seconds.
 const NEEDLE_TAU: f64 = 0.04;
 
+/// Whether the desktop asked to reduce motion; every animation then settles
+/// to its final state instantly instead of sliding, blooming or fading.
+/// Mirrors the GNOME `gtk-enable-animations` setting libadwaita honours.
+static REDUCED_MOTION: AtomicBool = AtomicBool::new(false);
+
+/// Reads the reduced-motion preference and keeps it current while running.
+fn init_reduced_motion() {
+    if let Some(settings) = gtk4::Settings::default() {
+        sync_reduced_motion(&settings);
+        settings.connect_gtk_enable_animations_notify(sync_reduced_motion);
+    }
+}
+
+fn sync_reduced_motion(settings: &gtk4::Settings) {
+    REDUCED_MOTION.store(!settings.is_gtk_enable_animations(), Ordering::Relaxed);
+}
+
 /// Renderer state shared by the draw callbacks and the wake hook.
 #[derive(Default)]
 struct Stage {
@@ -95,6 +112,10 @@ impl Stage {
         let now = Instant::now();
         let target = self.scene.aim.or_else(|| self.hl_angle());
         let needle = match (self.needle, target) {
+            (Some((_, previous)), Some(target)) if REDUCED_MOTION.load(Ordering::Relaxed) => {
+                self.needle = Some((target, previous));
+                Some(target)
+            }
             (Some((current, previous)), Some(target)) => {
                 let dt = now.duration_since(previous).as_secs_f64().clamp(0.0, 0.1);
                 let step = 1.0 - (-dt / NEEDLE_TAU).exp();
@@ -196,6 +217,7 @@ fn build_overlay(app: &Application) {
     if !app.windows().is_empty() {
         return;
     }
+    init_reduced_motion();
     if !gtk4_layer_shell::is_supported() {
         eprintln!(
             "overlay: the compositor does not advertise wlr-layer-shell; \
@@ -551,7 +573,7 @@ fn make_wake() -> stream::Wake {
 
 /// Linear `0..=1` fraction of `elapsed` inside `total`.
 fn fraction(elapsed: Duration, total: Duration) -> f64 {
-    if total.is_zero() {
+    if total.is_zero() || REDUCED_MOTION.load(Ordering::Relaxed) {
         return 1.0;
     }
     (elapsed.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0)

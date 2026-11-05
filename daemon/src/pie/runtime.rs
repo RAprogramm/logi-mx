@@ -177,6 +177,10 @@ impl PieRuntime {
     /// Whether a press may open the pie: enabled and a ring of at least
     /// [`PieConfig::MIN_SLOTS`] wedges resolved for the current scope.
     #[must_use]
+    #[allow(
+        dead_code,
+        reason = "public predicate for tests and library consumers; the daemon binary drives on_press, which resolves the ring once"
+    )]
     pub fn should_open(&self) -> bool {
         self.config.enabled && self.resolve_ring().len() >= PieConfig::MIN_SLOTS
     }
@@ -206,12 +210,17 @@ impl PieRuntime {
     ///
     /// * `now` - Monotonic time of the press edge.
     pub fn on_press(&mut self, now: Instant) {
+        let ring = if self.config.enabled {
+            self.resolve_ring()
+        } else {
+            Vec::new()
+        };
         debug!(
             enabled = self.config.enabled,
-            should_open = self.should_open(),
+            wedges = ring.len(),
             "pie: press"
         );
-        if !self.should_open() {
+        if ring.len() < PieConfig::MIN_SLOTS {
             return;
         }
         let Some(anchor) = (self.fetch_anchor)() else {
@@ -219,7 +228,7 @@ impl PieRuntime {
             return;
         };
         self.anchor = Some(anchor);
-        self.ring = self.resolve_ring();
+        self.ring = ring;
         let double_click = self
             .last_tap
             .is_some_and(|tap| now.saturating_duration_since(tap) <= DOUBLE_CLICK_WINDOW);
