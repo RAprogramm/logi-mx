@@ -52,6 +52,10 @@ commit_preprocessors = [
 ]
 # Commit parsers
 commit_parsers = [
+    # Automation bookkeeping: the release pipeline itself must be invisible
+    # to the pipeline, or its commits leak into the changelog and the bump
+    { message = "^Merge ", skip = true },
+    { message = "^chore: bump version to", skip = true },
     { message = "^feat", group = "<!-- 0 -->Features" },
     { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
     { message = "^perf", group = "<!-- 2 -->Performance" },
