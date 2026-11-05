@@ -269,8 +269,8 @@ impl Default for DeviceConfig {
                     crate::devices::Gesture {
                         direction: GestureDirection::None,
                         mode:      GestureMode::OnRelease,
-                        action:    Box::new(Action::Keypress {
-                            keys: vec!["KEY_LEFTMETA".to_string()]
+                        action:    Box::new(Action::Command {
+                            command: "logi-mx-ui".to_string()
                         })
                     },
                 ]
@@ -287,7 +287,7 @@ impl Default for DeviceConfig {
                 threshold: 20
             },
             hiresscroll: HiResScrollConfig {
-                enabled:  true,
+                enabled:  false,
                 inverted: false
             },
             buttons,

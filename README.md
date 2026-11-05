@@ -84,6 +84,7 @@ The MX Master 3S features 7 programmable buttons and 2 scroll wheels:
 <summary><b>Gesture System</b></summary>
 
 The Gesture Button enables directional gestures:
+- Gesture Button click - Toggle the HUD overlay (default)
 - Up gesture - Configurable action
 - Down gesture - Configurable action
 - Left gesture - Configurable action (default: browser back)
@@ -528,7 +529,7 @@ enabled = true
 threshold = 20
 
 [devices.hiresscroll]
-enabled = true
+enabled = false
 inverted = false
 
 [devices.buttons.ThumbGesture]
