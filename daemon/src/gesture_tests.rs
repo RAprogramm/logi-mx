@@ -166,3 +166,49 @@ fn test_runtime_ignores_other_diverted_controls() {
         "only the gesture button starts a hold"
     );
 }
+
+#[test]
+fn press_discards_wheel_input_from_before_the_hold() {
+    use std::sync::atomic::Ordering;
+
+    let mut runtime = GestureRuntime {
+        pie: PieRuntime::with_fetch(|| Some((0, 0))),
+        ..GestureRuntime::default()
+    };
+    runtime.pie.set_config(PieConfig {
+        enabled: true,
+        sectors: vec![logi_mx_driver::config::PieSlot::default(); 2],
+        ..PieConfig::default()
+    });
+    let hub = PieHub::new(16);
+    let mut events = hub.subscribe();
+    runtime.pie.attach_hub(hub);
+    let wheel = crate::live::new_wheel_tap();
+    runtime.attach_wheel(std::sync::Arc::clone(&wheel));
+    wheel.store(60, Ordering::Relaxed);
+    runtime.on_pie_tick(Instant::now());
+    assert_eq!(runtime.wheel_left, 60);
+    wheel.store(120, Ordering::Relaxed);
+    runtime.on_gesture_edge(true);
+    assert_eq!(wheel.load(Ordering::Relaxed), 0);
+    assert_eq!(runtime.wheel_left, 0);
+    wheel.store(60, Ordering::Relaxed);
+    runtime.on_pie_tick(Instant::now());
+    assert_eq!(runtime.wheel_left, 60);
+    runtime.on_gesture_edge(false);
+    while events.try_recv().is_ok() {}
+    wheel.store(120, Ordering::Relaxed);
+    runtime.on_gesture_edge(true);
+    assert!(runtime.pie.is_open());
+    runtime.on_pie_tick(Instant::now());
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, crate::pie::PieEvent::Highlight { .. }))
+    );
+    wheel.store(120, Ordering::Relaxed);
+    runtime.on_pie_tick(Instant::now());
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, crate::pie::PieEvent::Highlight { .. }))
+    );
+}

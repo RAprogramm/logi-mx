@@ -221,3 +221,38 @@ fn scene_open_outside_all_monitors_stays_inactive() {
     assert!(!scene.is_active());
     assert_eq!(scene.sectors, Vec::new());
 }
+
+#[test]
+fn duplicate_open_preserves_selection_and_new_open_resets_it() {
+    let monitors = monitors();
+    let mut scene = PieScene::default();
+    let open = PieEvent::Open {
+        anchor:  (100, 200),
+        sectors: vec![sector(0, "A", true), sector(1, "B", true)]
+    };
+    scene.apply(&open, &monitors);
+    scene.apply(
+        &PieEvent::Highlight {
+            index: Some(1)
+        },
+        &monitors
+    );
+    scene.apply(
+        &PieEvent::Aim {
+            angle: 1.0
+        },
+        &monitors
+    );
+    assert!(scene.is_same_open(&open, &monitors));
+    scene.apply(&open, &monitors);
+    assert_eq!(scene.highlight, Some(1));
+    assert_eq!(scene.aim, Some(1.0));
+    let new_open = PieEvent::Open {
+        anchor:  (101, 200),
+        sectors: vec![sector(0, "A", true), sector(1, "B", true)]
+    };
+    assert!(!scene.is_same_open(&new_open, &monitors));
+    scene.apply(&new_open, &monitors);
+    assert_eq!(scene.highlight, None);
+    assert_eq!(scene.aim, None);
+}

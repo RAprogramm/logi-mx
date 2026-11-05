@@ -300,7 +300,11 @@ impl DiagView {
             self.buffer.insert_with_tags(&mut end, &line, &[tag]);
         }
         let end = self.buffer.end_iter();
-        let mark = self.buffer.create_mark(None, &end, false);
+        let mark = self.buffer.mark("diagnostics-end").unwrap_or_else(|| {
+            self.buffer
+                .create_mark(Some("diagnostics-end"), &end, false)
+        });
+        self.buffer.move_mark(&mark, &end);
         self.view.scroll_mark_onscreen(&mark);
     }
 }
