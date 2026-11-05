@@ -142,10 +142,14 @@ jobs:
       - name: Determine MSRV
         id: msrv
         run: |
-          VERSION=$(grep '^rust-version' Cargo.toml \
-            | sed 's/.*"\(.*\)".*/\1/')
+          set -euo pipefail
+          VERSION=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ -z "${VERSION}" ]; then
+            echo "::error::rust-version not found in Cargo.toml"
+            exit 1
+          fi
           echo "MSRV from Cargo.toml: ${VERSION}"
-          echo "version=${VERSION}" >> ""
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
       - name: Install MSRV toolchain
         run: |
           rustup toolchain install "${{ steps.msrv.outputs.version }}" \
@@ -558,7 +562,7 @@ jobs:
           else
             VER="${GITHUB_REF#refs/tags/v}"
           fi
-          echo "version=${VER}" >> ""
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v6
         with:
@@ -737,7 +741,7 @@ jobs:
           URL="${BASE}/download/v${VERSION}/${FILE}"
           curl -sSL -o archive.tar.gz "${URL}"
           SHA=$(sha256sum archive.tar.gz | cut -d' ' -f1)
-          echo "sha256sum=${SHA}" >> ""
+          echo "sha256sum=${SHA}" >> "$GITHUB_ENV"
       - name: Generate PKGBUILD
         run: |
           VERSION="${{ needs.release-gate.outputs.version }}"
@@ -797,7 +801,7 @@ jobs:
           CURRENT=$(grep '^version' Cargo.toml | head -1 \
             | sed 's/.*"\(.*\)".*/\1/')
           echo "Current version: ${CURRENT}"
-          echo "current_version=${CURRENT}" >> ""
+          echo "current_version=${CURRENT}" >> "$GITHUB_OUTPUT"
 
           AUR_VER=$(curl -s \
             "https://aur.archlinux.org/rpc/?v=5&type=info&arg=logi-mx" \
@@ -806,10 +810,10 @@ jobs:
 
           if [ "${AUR_VER}" != "${CURRENT}" ]; then
             echo "AUR is behind, needs publish"
-            echo "needs_publish=true" >> ""
+            echo "needs_publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "AUR is up to date"
-            echo "needs_publish=false" >> ""
+            echo "needs_publish=false" >> "$GITHUB_OUTPUT"
           fi
 
   sync-aur:
@@ -876,7 +880,7 @@ jobs:
           URL="${BASE}/download/v${VERSION}/${FILE}"
           curl -sSL -o archive.tar.gz "${URL}"
           SHA=$(sha256sum archive.tar.gz | cut -d' ' -f1)
-          echo "sha256sum=${SHA}" >> ""
+          echo "sha256sum=${SHA}" >> "$GITHUB_ENV"
       - name: Generate PKGBUILD
         run: |
           VERSION="${{ needs.check-aur-sync.outputs.current_version }}"
