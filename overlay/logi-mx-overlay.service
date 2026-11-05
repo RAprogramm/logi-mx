@@ -1,0 +1,12 @@
+[Unit]
+Description=Logitech MX radial pie menu overlay
+Documentation=https://github.com/RAprogramm/logi-mx
+After=default.target
+
+[Service]
+ExecStart=%h/.local/bin/logi-mx-overlay
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

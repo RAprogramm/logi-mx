@@ -13,6 +13,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ============================================================================
   # QUALITY CHECKS - run on every push/PR
@@ -35,6 +39,14 @@ jobs:
       - uses: actions/checkout@v7
       - name: REUSE Compliance Check
         uses: fsfe/reuse-action@v6
+
+  readme-badges:
+    name: README Badges
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check static badges against the manifest
+        run: bash scripts/check-readme-badges.sh
 
   format:
     name: Format
@@ -63,8 +75,9 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v7
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: >-
@@ -87,7 +100,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+            base-devel rustup gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
           rustup default stable
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
@@ -120,17 +134,22 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+            base-devel rustup gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
           rustup default stable
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Determine MSRV
         id: msrv
         run: |
-          VERSION=$(grep '^rust-version' Cargo.toml \
-            | sed 's/.*"\(.*\)".*/\1/')
+          set -euo pipefail
+          VERSION=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ -z "${VERSION}" ]; then
+            echo "::error::rust-version not found in Cargo.toml"
+            exit 1
+          fi
           echo "MSRV from Cargo.toml: ${VERSION}"
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
       - name: Install MSRV toolchain
         run: |
           rustup toolchain install "${{ steps.msrv.outputs.version }}" \
@@ -156,14 +175,15 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v7
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release --all-features --workspace
 
   bench:
-    name: Benchmarks
+    name: Benchmarks (compile)
     needs: [clippy]
     runs-on: ubuntu-latest
     container:
@@ -178,11 +198,12 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v7
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
-      - name: Run benchmarks
-        run: cargo bench --all-features --workspace --no-fail-fast
+      - name: Compile benchmarks
+        run: cargo bench --all-features --workspace --no-run
 
   test:
     name: Test
@@ -200,8 +221,9 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v7
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
         uses: actions/cache@v6
@@ -240,7 +262,8 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rustup gtk4 libadwaita hidapi systemd dbus git
+            base-devel rustup gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
           rustup default stable
           rustup component add llvm-tools-preview
       - uses: actions/checkout@v7
@@ -326,8 +349,9 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v7
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --all-features --workspace
       - uses: actions/upload-artifact@v7
@@ -357,6 +381,7 @@ jobs:
       - audit
       - docs
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     outputs:
@@ -368,68 +393,120 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Analyze commits and bump version
+      - name: Install git-cliff
+        # baptiste0928/cargo-install v3.5.0
+        uses: >-
+          baptiste0928/cargo-install@8195d4f734a149db85385bb4102b42efcd373759
+        with:
+          crate: git-cliff
+
+      - name: Compute next version
         id: bump
         run: |
+          set -euo pipefail
+
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null \
             || echo "v0.0.0")
-          echo "Latest tag: $LATEST_TAG"
+          echo "Latest tag: ${LATEST_TAG}"
 
-          COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"%s")
+          NEXT=$(git-cliff --config cliff.toml --bumped-version \
+            | tr -d '[:space:]')
+          NEXT="${NEXT#v}"
+          echo "Computed next version: ${NEXT}"
 
-          HAS_BREAKING=false
-          HAS_FEAT=false
-          HAS_FIX=false
-
-          while IFS= read -r commit; do
-            if echo "$commit" | grep -qE "^[^:]+!:|BREAKING CHANGE"; then
-              HAS_BREAKING=true
-            elif echo "$commit" | grep -qE "^(feat|#[0-9]+ feat):"; then
-              HAS_FEAT=true
-            elif echo "$commit" | grep -qE "^(fix|#[0-9]+ fix):"; then
-              HAS_FIX=true
-            fi
-          done <<< "$COMMITS"
-
-          CURRENT="${LATEST_TAG#v}"
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-
-          if [ "$HAS_BREAKING" = true ]; then
-            NEW_VERSION="$((MAJOR + 1)).0.0"
-          elif [ "$HAS_FEAT" = true ]; then
-            NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
-          elif [ "$HAS_FIX" = true ]; then
-            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-          else
-            echo "version_bumped=false" >> $GITHUB_OUTPUT
-            echo "No version bump needed"
+          if [ "${NEXT}" = "${LATEST_TAG#v}" ]; then
+            echo "version_bumped=false" >> "$GITHUB_OUTPUT"
+            echo "No releasable commits since ${LATEST_TAG}"
             exit 0
           fi
 
-          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-          echo "version_bumped=true" >> $GITHUB_OUTPUT
-          echo "New version: $NEW_VERSION"
+          if git tag --list "v${NEXT}" | grep -qx "v${NEXT}"; then
+            echo "Tag v${NEXT} already exists; release pipeline converges"
+            echo "new_version=${NEXT}" >> "$GITHUB_OUTPUT"
+            echo "version_bumped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "new_version=${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "version_bumped=true" >> "$GITHUB_OUTPUT"
 
       - name: Update files and create tag
         if: steps.bump.outputs.version_bumped == 'true'
         run: |
+          set -euo pipefail
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
 
+          if git tag --list "v${NEW_VERSION}" | grep -qx "v${NEW_VERSION}"; then
+            echo "Tag v${NEW_VERSION} already exists, nothing to bump"
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" Cargo.toml
-          DEP_PREFIX="logi-mx-driver = { path = \"driver\", version = "
-          sed -i \
-            "s|^${DEP_PREFIX}.*|${DEP_PREFIX}\"${NEW_VERSION}\" }|" \
-            Cargo.toml
           sed -i "s/^pkgver=.*/pkgver=${NEW_VERSION}/" PKGBUILD
 
-          git add Cargo.toml PKGBUILD
-          git commit -m "chore: bump version to ${NEW_VERSION}"
+          python3 - "$NEW_VERSION" <<'PYEOF'
+          import re, sys
+          new = sys.argv[1]
+          names = ("logi-mx", "logi-mx-driver", "logi-mx-daemon",
+                   "logi-mx-ui", "logi-mx-overlay")
+          text = open("Cargo.lock").read()
+          for name in names:
+              pat = r'(name = "%s"\nversion = ")[^"]*(")' % name
+              text = re.sub(pat, r"\g<1>" + new + r"\g<2>", text)
+          open("Cargo.lock", "w").write(text)
+          PYEOF
+
+          git add Cargo.toml Cargo.lock PKGBUILD
+          git diff --cached --quiet || \
+            git commit -m "chore: bump version to ${NEW_VERSION} [skip ci]"
+
           git tag "v${NEW_VERSION}"
+
+          git-cliff --config cliff.toml -o CHANGELOG.md
+          git add CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "docs: update changelog for ${NEW_VERSION} [skip ci]"
+            git tag -f "v${NEW_VERSION}"
+          fi
+
           git push origin main
           git push origin "v${NEW_VERSION}"
+
+      - name: Pin the release archive checksum
+        if: steps.bump.outputs.version_bumped == 'true'
+        run: |
+          set -euo pipefail
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          REPO="${GITHUB_REPOSITORY}"
+          URL="https://github.com/${REPO}/archive/v${NEW_VERSION}.tar.gz"
+          SHA=""
+          ARCHIVE=$(mktemp)
+          trap 'rm -f "$ARCHIVE"' EXIT
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsSL "$URL" -o "$ARCHIVE"; then
+              SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "$SHA" ]; then
+            echo "::warning::could not fetch ${URL};"
+            echo "PKGBUILD keeps its placeholder checksum"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          sed -i "s/^sha256sums=.*/sha256sums=('${SHA}')/" PKGBUILD
+          git add PKGBUILD
+          git diff --cached --quiet || \
+            git commit -m \
+              "chore: update PKGBUILD checksum for v${NEW_VERSION} [skip ci]"
+          git push origin main
 
   # ============================================================================
   # RELEASE PIPELINE - runs after version bump OR on tag push
@@ -473,6 +550,7 @@ jobs:
         needs.version-bump.outputs.version_bumped == 'true'
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -484,12 +562,29 @@ jobs:
           else
             VER="${GITHUB_REF#refs/tags/v}"
           fi
-          echo "version=${VER}" >> $GITHUB_OUTPUT
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          ref: "v${{ steps.version.outputs.version }}"
+
+      - name: Verify tag matches manifest version
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          MANIFEST=$(grep -m1 '^version' Cargo.toml \
+            | sed 's/.*"\(.*\)".*/\1/')
+          if [ "${MANIFEST}" != "${VERSION}" ]; then
+            echo "::error::tag v${VERSION} != Cargo.toml ${MANIFEST}"
+            exit 1
+          fi
+          echo "Tag v${VERSION} matches Cargo.toml"
 
   build-release:
     name: Build Release
     needs: [release-gate]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: archlinux:latest
     steps:
@@ -502,8 +597,9 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm \
-            base-devel rust gtk4 libadwaita hidapi systemd dbus git
-      - uses: actions/checkout@v7
+            base-devel rust gtk4 libadwaita gtk4-layer-shell \
+          hidapi systemd dbus git
+      - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release-gate.outputs.version }}
       - uses: Swatinem/rust-cache@v2
@@ -523,6 +619,8 @@ jobs:
           cp target/release/logi-mx-ui release/
           cp 90-logi-mx.rules release/
           cp logi-mx-daemon.service release/
+          cp logi-mx-daemon.desktop release/
+          cp logi-mx-ui.desktop release/
           cp README.md LICENSE release/
           tar -czf "logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz" -C release .
       - name: Generate SHA-256 checksum
@@ -542,6 +640,7 @@ jobs:
     name: Create GitHub Release
     needs: [release-gate, build-release]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -553,7 +652,9 @@ jobs:
         with:
           name: release-archive
       - name: Install git-cliff
-        uses: baptiste0928/cargo-install@v3
+        # baptiste0928/cargo-install v3.5.0
+        uses: >-
+          baptiste0928/cargo-install@8195d4f734a149db85385bb4102b42efcd373759
         with:
           crate: git-cliff
       - name: Generate changelog
@@ -575,10 +676,20 @@ jobs:
     name: Publish to AUR
     needs: [release-gate, create-release]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
           ref: v${{ needs.release-gate.outputs.version }}
+      - name: Calculate source checksum
+        run: |
+          VERSION="${{ needs.release-gate.outputs.version }}"
+          URL="https://github.com/RAprogramm/logi-mx/archive/v${VERSION}.tar.gz"
+          ARCHIVE=$(mktemp)
+          trap 'rm -f "$ARCHIVE"' EXIT
+          curl -fsSL "$URL" -o "$ARCHIVE"
+          SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+          sed -i "s/^sha256sums=.*/sha256sums=('${SHA}')/" PKGBUILD
       - name: Generate .SRCINFO
         run: |
           docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
@@ -617,6 +728,7 @@ jobs:
     name: Publish to AUR (binary)
     needs: [release-gate, create-release]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -629,7 +741,7 @@ jobs:
           URL="${BASE}/download/v${VERSION}/${FILE}"
           curl -sSL -o archive.tar.gz "${URL}"
           SHA=$(sha256sum archive.tar.gz | cut -d' ' -f1)
-          echo "sha256sum=${SHA}" >> $GITHUB_ENV
+          echo "sha256sum=${SHA}" >> "$GITHUB_ENV"
       - name: Generate PKGBUILD
         run: |
           VERSION="${{ needs.release-gate.outputs.version }}"
@@ -689,7 +801,7 @@ jobs:
           CURRENT=$(grep '^version' Cargo.toml | head -1 \
             | sed 's/.*"\(.*\)".*/\1/')
           echo "Current version: ${CURRENT}"
-          echo "current_version=${CURRENT}" >> $GITHUB_OUTPUT
+          echo "current_version=${CURRENT}" >> "$GITHUB_OUTPUT"
 
           AUR_VER=$(curl -s \
             "https://aur.archlinux.org/rpc/?v=5&type=info&arg=logi-mx" \
@@ -698,10 +810,10 @@ jobs:
 
           if [ "${AUR_VER}" != "${CURRENT}" ]; then
             echo "AUR is behind, needs publish"
-            echo "needs_publish=true" >> $GITHUB_OUTPUT
+            echo "needs_publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "AUR is up to date"
-            echo "needs_publish=false" >> $GITHUB_OUTPUT
+            echo "needs_publish=false" >> "$GITHUB_OUTPUT"
           fi
 
   sync-aur:
@@ -712,6 +824,7 @@ jobs:
       needs.check-aur-sync.outputs.needs_publish == 'true' &&
       needs.create-release.result == 'skipped'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - name: Generate .SRCINFO
@@ -756,6 +869,7 @@ jobs:
       needs.check-aur-sync.outputs.needs_publish == 'true' &&
       needs.create-release.result == 'skipped'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - name: Download and calculate checksum
@@ -766,7 +880,7 @@ jobs:
           URL="${BASE}/download/v${VERSION}/${FILE}"
           curl -sSL -o archive.tar.gz "${URL}"
           SHA=$(sha256sum archive.tar.gz | cut -d' ' -f1)
-          echo "sha256sum=${SHA}" >> $GITHUB_ENV
+          echo "sha256sum=${SHA}" >> "$GITHUB_ENV"
       - name: Generate PKGBUILD
         run: |
           VERSION="${{ needs.check-aur-sync.outputs.current_version }}"
@@ -801,6 +915,7 @@ jobs:
       - sync-aur-bin
     if: always() && needs.check-aur-sync.outputs.needs_publish == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - name: Wait for AUR sync

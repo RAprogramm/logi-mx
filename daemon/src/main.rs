@@ -1,11 +1,24 @@
-// SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
 #[cfg(feature = "tray")]
 mod tray;
+#[cfg(feature = "tray")]
+mod tray_icon;
 
+#[cfg(feature = "notify")]
+mod notify;
+
+mod buttons;
+mod focus;
+mod gesture;
+mod hyprbind;
+mod inject;
 mod ipc;
+mod live;
+mod pie;
 mod status;
+mod systemd;
 mod worker;
 
 use std::{
@@ -33,10 +46,22 @@ use udev::MonitorBuilder;
 use crate::tray::spawn_tray;
 use crate::{
     status::{DeviceStatus, SharedStatus},
-    worker::{DeviceEvent, spawn_device_worker}
+    worker::{DeviceEvent, Telemetry, spawn_device_worker}
 };
 
 type Result<T> = std::result::Result<T, AppError>;
+
+/// Reports whether a graphical desktop session is available.
+///
+/// The tray and UI require a display server or a desktop environment. Without
+/// one the daemon still manages the device, but it must not attempt to
+/// register a `StatusNotifierItem`.
+#[cfg(feature = "tray")]
+fn has_desktop_session() -> bool {
+    std::env::var("WAYLAND_DISPLAY").is_ok()
+        || std::env::var("DISPLAY").is_ok()
+        || std::env::var("XDG_CURRENT_DESKTOP").is_ok()
+}
 
 fn lock_file_path(suffix: Option<&str>) -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
@@ -138,12 +163,78 @@ fn acquire_instance_lock(suffix: Option<&str>) -> Result<LockFile> {
     Ok(lockfile)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|e| AppError::internal("Failed to build tokio runtime").with_source(e))?;
+
+    runtime.block_on(run())
+}
+
+/// Creates the live telemetry fan-out and shared daemon-side button state.
+fn new_live_state() -> (ipc::LiveHub, ipc::SharedLiveState) {
+    let (hub, _sink) = tokio::sync::broadcast::channel::<ipc::LiveFrame>(64);
+    (hub, Arc::new(ipc::LiveState::default()))
+}
+
+/// Creates the pie event fan-out for `WatchPie` subscribers.
+fn new_pie_hub() -> pie::PieHub {
+    pie::PieHub::new(64)
+}
+
+/// Attaches the evdev tap thread to an existing fan-out.
+fn spawn_live_tap(
+    hub: &ipc::LiveHub,
+    state: &ipc::SharedLiveState,
+    anchor: &live::SharedAnchor,
+    wheel: &live::SharedWheelTap
+) {
+    if let Err(e) = std::thread::Builder::new()
+        .name("logi-mx-live".to_string())
+        .spawn({
+            let hub = hub.clone();
+            let state = Arc::clone(state);
+            let anchor = Arc::clone(anchor);
+            let wheel = Arc::clone(wheel);
+            move || live::run(&hub, &state, &anchor, &wheel)
+        })
+    {
+        warn!("Failed to spawn live telemetry thread: {e}. Live HUD disabled.");
+    }
+}
+
+/// Installs the process-wide tracing subscriber.
+fn init_tracing() {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
+}
+
+/// Starts the tray when a desktop session is present and reopens the UI a
+/// full restart found open.
+#[cfg(feature = "tray")]
+async fn init_tray(status: &SharedStatus, tray_handle: &worker::TraySlot) {
+    if !has_desktop_session() {
+        info!("No desktop session detected, skipping tray");
+        return;
+    }
+    match spawn_tray(Arc::clone(status)).await {
+        Ok(handle) => {
+            *tray_handle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
+            info!("System tray initialized");
+        }
+        Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
+    }
+    tray::restore_ui_after_restart();
+}
+
+async fn run() -> Result<()> {
+    init_tracing();
 
     let _lock = acquire_instance_lock(None)?;
     info!("Acquired instance lock");
@@ -156,28 +247,53 @@ async fn main() -> Result<()> {
     });
 
     let status: SharedStatus = Arc::new(Mutex::new(DeviceStatus::default()));
-    let (device_tx, rpc_tx, worker_handle) = spawn_device_worker(config, Arc::clone(&status))?;
+
+    #[cfg(feature = "tray")]
+    {
+        crate::worker::set_runtime_handle(tokio::runtime::Handle::current());
+    }
+
+    let tray_handle: worker::TraySlot = Arc::new(Mutex::new(None));
+
+    let (live_hub, live_state) = new_live_state();
+    let live_anchor = live::new_anchor();
+    let wheel_tap = live::new_wheel_tap();
+    let pie_hub = new_pie_hub();
+
+    let telemetry = Telemetry {
+        live:    Arc::clone(&live_state),
+        hub:     live_hub.clone(),
+        pie_hub: pie_hub.clone(),
+        anchor:  Arc::clone(&live_anchor),
+        wheel:   Arc::clone(&wheel_tap)
+    };
+    let (device_tx, rpc_tx, worker_handle) =
+        spawn_device_worker(config, Arc::clone(&status), tray_handle.clone(), telemetry)?;
+
+    spawn_live_tap(&live_hub, &live_state, &live_anchor, &wheel_tap);
 
     let ipc_rpc_tx = rpc_tx.clone();
     let ipc_handle = tokio::spawn(async move {
-        if let Err(e) = crate::ipc::run_server(ipc_rpc_tx).await {
+        if let Err(e) = crate::ipc::run_server(ipc_rpc_tx, live_hub, pie_hub).await {
             error!("IPC server error: {e}");
         }
     });
 
     #[cfg(feature = "tray")]
-    match spawn_tray(Arc::clone(&status)).await {
-        Ok(()) => info!("System tray initialized"),
-        Err(e) => warn!("Failed to initialize tray: {e}. Continuing without tray.")
-    }
+    init_tray(&status, &tray_handle).await;
 
     let (tx, mut rx) = mpsc::channel::<UdevEvent>(32);
 
-    std::thread::spawn(move || {
-        if let Err(e) = monitor_udev_events_sync(&tx) {
-            error!("Udev monitor error: {e}");
-        }
-    });
+    if let Err(e) = std::thread::Builder::new()
+        .name("logi-mx-udev-monitor".to_string())
+        .spawn(move || {
+            if let Err(e) = monitor_udev_events_sync(&tx) {
+                error!("Udev monitor error: {e}");
+            }
+        })
+    {
+        error!("Failed to spawn udev monitor thread: {e}. Hotplug disabled.");
+    }
 
     let mut sigterm = signal(SignalKind::terminate())
         .map_err(|e| AppError::internal("Failed to setup SIGTERM handler").with_source(e))?;
@@ -185,6 +301,8 @@ async fn main() -> Result<()> {
         .map_err(|e| AppError::internal("Failed to setup SIGINT handler").with_source(e))?;
 
     info!("Daemon started successfully");
+    systemd::notify_ready();
+    tokio::spawn(systemd::run_watchdog());
 
     loop {
         select! {
@@ -215,7 +333,9 @@ async fn main() -> Result<()> {
     drop(rpc_tx);
 
     let _ = worker_handle.join();
-    let _ = std::fs::remove_file(crate::ipc::socket_path());
+    if !ipc::is_socket_activated() {
+        let _ = std::fs::remove_file(crate::ipc::socket_path());
+    }
 
     info!("Daemon stopped");
     Ok(())

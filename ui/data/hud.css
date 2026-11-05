@@ -1,0 +1,176 @@
+/* Logi MX HUD — panel design system.
+   Dark glass surfaces, one accent (#edaa75), 8 px spacing rhythm. */
+
+window.transparent-overlay {
+    background: none;
+    background-color: transparent;
+}
+
+window.hud-dim {
+    background: rgba(0, 0, 0, 0.45);
+}
+
+window.hud-tint {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+/* Compositor blur: GTK 4.24+ translates backdrop-filter into an
+   ext-background-effect blur region for the compositor; on older GTK only
+   the faint tint shows through, so the UI gates this mode at runtime. */
+window.hud-blur {
+    backdrop-filter: blur(30px);
+}
+
+/* Panel shell */
+.hud-panel.card {
+    border-radius: 18px;
+    border: 1px solid alpha(#ffffff, 0.08);
+}
+
+button.hud-close {
+    border-radius: 999px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0;
+}
+
+label.hud-status-ok {
+    color: #9ece6a;
+}
+
+label.hud-status-bad {
+    color: #f7768e;
+}
+
+/* Top toast pill */
+box.hud-toast {
+    background-color: alpha(#000000, 0.78);
+    border: 1px solid alpha(#ffffff, 0.10);
+    border-radius: 999px;
+    padding: 8px 8px 8px 16px;
+    box-shadow: 0 8px 28px alpha(#000000, 0.45);
+}
+
+box.hud-toast button {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px;
+}
+
+/* Segmented page switcher */
+box.hud-tabs {
+    background-color: alpha(#000000, 0.22);
+    border: 1px solid alpha(#ffffff, 0.06);
+    border-radius: 14px;
+    padding: 3px;
+}
+
+box.hud-tabs button.hud-tab {
+    border: none;
+    box-shadow: none;
+    background-color: transparent;
+    background-image: none;
+    border-radius: 11px;
+    min-height: 0;
+    padding: 6px 4px;
+}
+
+box.hud-tabs button.hud-tab:hover {
+    background-color: alpha(#ffffff, 0.06);
+    background-image: none;
+}
+
+box.hud-tabs button.hud-tab:checked,
+box.hud-tabs button.hud-tab:checked:hover {
+    background-color: alpha(#edaa75, 0.16);
+    background-image: none;
+    box-shadow: none;
+    color: #edaa75;
+}
+
+/* Setting tiles */
+flowbox.hud-tiles {
+    padding: 0;
+}
+
+flowbox.hud-tiles flowboxchild {
+    padding: 10px 14px;
+    border-radius: 14px;
+    background-color: alpha(#ffffff, 0.04);
+    border: 1px solid alpha(#ffffff, 0.07);
+}
+
+flowbox.hud-tiles flowboxchild:hover {
+    background-color: alpha(#ffffff, 0.08);
+}
+
+flowbox.hud-tiles flowboxchild.hud-focus {
+    background-color: alpha(#edaa75, 0.16);
+    border-color: alpha(#edaa75, 0.45);
+}
+
+/* Key binding chips */
+label.hud-chip {
+    font-family: monospace;
+    font-size: 0.8rem;
+    background: alpha(#ffffff, 0.08);
+    border: 1px solid alpha(#ffffff, 0.14);
+    border-radius: 999px;
+    padding: 2px 10px;
+    margin: 0;
+}
+
+label.hud-chip-sep {
+    color: alpha(#ffffff, 0.35);
+    margin: 0 2px;
+}
+
+entry.hud-command {
+    font-family: monospace;
+    font-size: 0.85rem;
+    background-color: alpha(#000000, 0.25);
+    border: 1px solid alpha(#ffffff, 0.12);
+    border-radius: 10px;
+}
+
+dropdown.hud-assign button {
+    min-width: 120px;
+}
+
+/* Page scroller */
+scrolledwindow.hud-page scrollbar {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+}
+
+scrolledwindow.hud-page scrollbar slider {
+    min-width: 6px;
+    min-height: 6px;
+    margin: 2px 4px;
+    border: none;
+    border-radius: 99px;
+    background-color: alpha(#ffffff, 0.16);
+}
+
+scrolledwindow.hud-page scrollbar slider:hover {
+    background-color: alpha(#ffffff, 0.32);
+}
+
+scrolledwindow.hud-page undershoot,
+scrolledwindow.hud-page overshoot {
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+}
+
+textview.diag-log,
+textview.diag-log text {
+    background-color: alpha(#0d1117, 0.55);
+    color: #c9d1d9;
+    caret-color: #58a6ff;
+}
+
+textview.diag-log text {
+    padding: 10px 12px;
+}

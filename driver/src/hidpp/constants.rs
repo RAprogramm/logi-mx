@@ -27,8 +27,13 @@ pub const FEATURE_UNIFIED_BATTERY: u16 = 0x1004;
 pub const FEATURE_CHANGE_HOST: u16 = 0x1814;
 /// Feature ID of the Reprogrammable Controls feature (0x1B04).
 pub const FEATURE_REPROG_CONTROLS: u16 = 0x1B04;
-/// Feature ID of the `SmartShift` feature (0x2110).
+/// Feature ID of the legacy `SmartShift` feature (0x2110).
 pub const FEATURE_SMART_SHIFT: u16 = 0x2110;
+/// Feature ID of the `SmartShift Enhanced` feature (0x2111).
+///
+/// The MX Master 3 / 3S / 4 expose this variant; writes to the legacy
+/// 0x2110 are acknowledged but silently ignored by that hardware.
+pub const FEATURE_SMART_SHIFT_ENHANCED: u16 = 0x2111;
 /// Feature ID of the Hi-Res Wheel feature (0x2121).
 pub const FEATURE_HIRES_WHEEL: u16 = 0x2121;
 /// Feature ID of the Thumb Wheel feature (0x2150).

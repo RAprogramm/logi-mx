@@ -1,18 +1,20 @@
 [Unit]
 Description=Logitech MX Master 3S Configuration Daemon
 Documentation=https://github.com/RAprogramm/logi-mx
-After=graphical-session.target
+After=graphical-session.target logi-mx-daemon.socket
+Requires=logi-mx-daemon.socket
 PartOf=graphical-session.target
 
 [Service]
-Type=simple
+Type=notify
 Environment="RUST_LOG=info"
 ExecStart=/usr/bin/logi-mx-daemon
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=2
+WatchdogSec=30
 MemoryMax=256M
 MemoryHigh=192M
-TasksMax=64
+TasksMax=256
 
 [Install]
 WantedBy=graphical-session.target

@@ -1,18 +1,19 @@
 [workspace]
 resolver = "3"
-members = ["driver", "daemon", "cli", "ui"]
+members = ["driver", "daemon", "cli", "ui", "overlay"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["RAprogramm <andrey.rozanov.vl@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/RAprogramm/logi-mx"
-rust-version = "1.98"
+rust-version = "1.99"
+publish = false
 
 [workspace.dependencies]
-logi-mx-driver = { path = "driver", version = "0.6.0" }
-masterror = { version = "0.31", default-features = false, features = ["std"] }
+logi-mx-driver = { path = "driver" }
+masterror = { version = "0.32", default-features = false, features = ["std"] }
 hidapi = { version = "2", default-features = false, features = [
   "linux-native",
 ] }
@@ -27,8 +28,12 @@ evdev = "0.13"
 clap = { version = "4", features = ["derive"] }
 proptest = "1"
 criterion = "0.8"
-gtk4 = { version = "0.11", features = ["v4_14"] }
-libadwaita = { version = "0.9", features = ["v1_6"] }
+codspeed-criterion-compat = "6"
+gtk4 = { version = "0.11", features = ["v4_14", "v4_24"] }
+libadwaita = { version = "0.9", features = ["v1_6", "v1_10"] }
+notify-rust = { version = "4", default-features = false, features = ["z"] }
+resvg = { version = "0.49", default-features = false }
+usvg = { version = "0.49", default-features = false }
 
 [profile.dev]
 opt-level = 0

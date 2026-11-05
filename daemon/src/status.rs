@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 RAprogramm <andrey.rozanov.vl@gmail.com>
+// SPDX-FileCopyrightText: 2025-2026 RAprogramm <andrey.rozanov.vl@gmail.com>
 // SPDX-License-Identifier: MIT
 
 //! Shared device status snapshot.
@@ -10,6 +10,16 @@ use std::sync::{Arc, Mutex};
 
 use logi_mx_driver::prelude::*;
 use tracing::debug;
+
+/// Battery percentage at or below which the tray and notifications warn.
+#[cfg(any(feature = "tray", feature = "notify"))]
+pub const BATTERY_LOW_PERCENT: u8 = 20;
+/// Battery percentage at or below which the tray and notifications alert.
+#[cfg(any(feature = "tray", feature = "notify"))]
+pub const BATTERY_CRITICAL_PERCENT: u8 = 10;
+/// Battery status string that makes charge alerts meaningful.
+#[cfg(any(feature = "tray", feature = "notify"))]
+pub const BATTERY_DISCHARGING: &str = "Discharging";
 
 /// Snapshot of device state shared between the worker and UI surfaces.
 ///
@@ -37,6 +47,20 @@ pub struct DeviceStatus {
     pub error:                Option<String>
 }
 
+impl DeviceStatus {
+    /// Human-readable battery text for tray titles and menus: omits the
+    /// retained percentage when the latest read failed, so a stale number
+    /// never rides along an `Unknown` status.
+    #[must_use]
+    pub fn battery_display(&self) -> String {
+        if self.battery_status == "Unknown" {
+            "Battery: unknown".to_string()
+        } else {
+            format!("Battery: {}% ({})", self.battery_level, self.battery_status)
+        }
+    }
+}
+
 impl Default for DeviceStatus {
     fn default() -> Self {
         Self {
@@ -54,48 +78,61 @@ impl Default for DeviceStatus {
 /// Shared handle around [`DeviceStatus`].
 pub type SharedStatus = Arc<Mutex<DeviceStatus>>;
 
-/// Refreshes the shared status by querying the device once.
+/// Device readings folded into a status refresh.
 ///
-/// Opens the bolt receiver, reads battery, DPI and `SmartShift`, and
-/// publishes the snapshot. Runs on the worker thread; blocking I/O is
-/// expected.
-pub fn refresh_from_device(status: &SharedStatus) {
-    match MxMaster3s::open_bolt_receiver_discovered() {
-        Ok(mut device) => {
-            let (battery_level, dpi) = {
-                let mut guard = status
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.connected = true;
+/// The worker owns exactly one HID++ handle per device; every surface reads
+/// through it. A second handle on the same hidraw node would split the HID++
+/// response stream between the two readers, so opening one per consumer is
+/// forbidden by design.
+#[derive(Debug, Default)]
+pub struct DeviceReadings {
+    /// Battery report, when the device answered.
+    pub battery:    Option<BatteryInfo>,
+    /// DPI setting, when the device answered.
+    pub dpi:        Option<u16>,
+    /// `SmartShift` configuration, when the device answered.
+    pub smartshift: Option<SmartShiftConfig>
+}
 
-                if let Ok(battery) = device.battery_info() {
-                    guard.battery_level = battery.level;
-                    guard.battery_status = format!("{:?}", battery.status);
-                }
+/// Refreshes the shared status from one device reading.
+///
+/// Publishes the snapshot built from the worker's single device handle.
+/// `None` marks the device unreachable.
+pub fn refresh(status: &SharedStatus, readings: Option<DeviceReadings>) {
+    if let Some(readings) = readings {
+        let (battery_level, dpi_value) = {
+            let mut guard = status
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.connected = true;
+            guard.error = None;
 
-                if let Ok(current_dpi) = device.dpi() {
-                    guard.dpi = current_dpi;
-                }
-
-                if let Ok(ss_config) = device.smartshift() {
-                    guard.smartshift = ss_config.enabled;
-                    guard.smartshift_threshold = ss_config.threshold;
-                }
-
-                (guard.battery_level, guard.dpi)
-            };
-
-            debug!("Tray status refreshed: battery={battery_level}%, dpi={dpi}");
-        }
-        Err(e) => {
-            {
-                let mut guard = status
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                guard.connected = false;
+            if let Some(battery) = readings.battery {
+                guard.battery_level = battery.level;
+                guard.battery_status = format!("{:?}", battery.status);
+            } else {
+                guard.battery_status = "Unknown".to_string();
             }
-            debug!("Device not connected: {e}");
-        }
+            if let Some(current_dpi) = readings.dpi {
+                guard.dpi = current_dpi;
+            }
+            if let Some(ss_config) = readings.smartshift {
+                guard.smartshift = ss_config.enabled;
+                guard.smartshift_threshold = ss_config.threshold;
+            }
+
+            (guard.battery_level, guard.dpi)
+        };
+
+        debug!("Tray status refreshed: battery={battery_level}%, dpi={dpi_value}");
+    } else {
+        let mut guard = status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.connected = false;
+        guard.error = Some("device not reachable".to_string());
+        drop(guard);
+        debug!("Device not connected");
     }
 }
 
