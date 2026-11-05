@@ -105,7 +105,8 @@ Each gesture can trigger:
 Automatic ratchet-to-free-spin transition:
 - **Ratchet Mode**: Precise line-by-line scrolling for documents
 - **Free-Spin Mode**: Fast navigation through long pages
-- **Auto-disengage threshold**: 1-255; higher values need more scroll force to switch to free-spin mode
+- **Mode-Shift Button**: Instantly toggles between ratchet and free-spin (default binding)
+- **Auto-disengage threshold**: 1-50; higher values need more scroll force to switch to free-spin mode
   - Lower values: Easier transition to free-spin
   - Higher values: More force required for free-spin
 
@@ -144,7 +145,7 @@ Automatic ratchet-to-free-spin transition:
 
 **Rich Functionality**
 - DPI configuration (200-8000 in 50 DPI increments)
-- SmartShift auto-disengage tuning (threshold 1-255)
+- SmartShift auto-disengage tuning (threshold 1-50)
 - Hi-res scroll control
 - Battery monitoring with charge level and level bar
 - Easy-Switch host switching (`logi-mx set host <index>`)
@@ -567,7 +568,8 @@ This driver implements the Logitech HID++ 2.0 protocol:
 | 0x1000 | Battery Status | Legacy battery info |
 | 0x1004 | Unified Battery | Modern battery interface |
 | 0x2201 | Adjustable DPI | Sensor DPI control |
-| 0x2110 | SmartShift | Ratchet/free-spin control |
+| 0x2110 | SmartShift | Ratchet/free-spin control (legacy) |
+| 0x2111 | SmartShift Enhanced | MagSpeed wheel control (MX Master 3/3S/4) |
 | 0x2121 | Hi-Res Wheel | High-resolution scrolling |
 
 </details>

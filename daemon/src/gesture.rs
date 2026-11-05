@@ -55,8 +55,9 @@ const WHEEL_DETENT: i32 = 120;
 /// arrives with gestures enabled and undiverted on removal or shutdown, so a
 /// daemon exit never leaves the button stranded in diverted mode. The
 /// wheel-mode button is always diverted: the kernel never sees it, so the
-/// daemon toggles `SmartShift` itself and reports the press on live
-/// telemetry, which is the only way the HUD can light the button up.
+/// daemon flips the wheel between ratchet and free-spin itself and reports
+/// the press on live telemetry, which is the only way the HUD can light the
+/// button up.
 #[derive(Default)]
 pub struct GestureRuntime {
     bindings:           Vec<Gesture>,
@@ -64,7 +65,6 @@ pub struct GestureRuntime {
     focus:              SharedFocus,
     diverted:           bool,
     dpi:                DpiButton,
-    smartshift:         SmartShiftConfig,
     live:               SharedLiveState,
     hub:                Option<LiveHub>,
     pie:                PieRuntime,
@@ -75,8 +75,7 @@ pub struct GestureRuntime {
     last_commit:        Option<GestureDirection>,
     pending_click:      Option<Instant>,
     injection_warned:   bool,
-    unsupported_warned: bool,
-    pending_smartshift: Option<SmartShiftConfig>
+    unsupported_warned: bool
 }
 
 impl GestureRuntime {
@@ -106,7 +105,6 @@ impl GestureRuntime {
         Self {
             bindings,
             profiles,
-            smartshift: device.smartshift,
             pie,
             ..Self::default()
         }
@@ -399,12 +397,11 @@ impl GestureRuntime {
         }
     }
 
-    /// Tracks the wheel-mode button edge: press toggles `SmartShift` (the
-    /// firmware's native job once the control is diverted) and raises the
-    /// live bit so the HUD lights the button up. The toggle reads the live
-    /// device state first, so an `SetSmartShift` request between presses is
-    /// never overwritten by a stale copy, and a successful toggle is handed
-    /// to [`Self::take_smartshift_persist`] so the caller can persist it.
+    /// Tracks the wheel-mode button edge: press flips the wheel between
+    /// ratchet and free-spin (the firmware's native job once the control is
+    /// diverted) and raises the live bit so the HUD lights the button up.
+    /// The flip reads the live device state first, so a `SetSmartShift`
+    /// request between presses is never overwritten by a stale copy.
     fn on_wheel_mode_edge(&mut self, pressed: bool, device: &mut MxMaster3s) {
         if pressed == self.dpi.held {
             return;
@@ -414,32 +411,10 @@ impl GestureRuntime {
         if !pressed {
             return;
         }
-        let base = device.smartshift().unwrap_or(self.smartshift);
-        let target = SmartShiftConfig {
-            enabled:   !base.enabled,
-            threshold: base.threshold
-        };
-        match device.set_smartshift(target) {
-            Ok(()) => {
-                self.smartshift = target;
-                self.pending_smartshift = Some(target);
-                info!(
-                    "wheel-mode button: SmartShift {}",
-                    if target.enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                );
-            }
-            Err(e) => warn!("failed to toggle SmartShift: {e}")
+        match device.toggle_wheel_mode() {
+            Ok(mode) => info!("wheel-mode button: wheel mode now {mode:?}"),
+            Err(e) => warn!("failed to toggle the wheel mode: {e}")
         }
-    }
-
-    /// Takes the `SmartShift` state a wheel-mode toggle wrote to the device,
-    /// so the caller can mirror it into the stored configuration.
-    pub const fn take_smartshift_persist(&mut self) -> Option<SmartShiftConfig> {
-        self.pending_smartshift.take()
     }
 
     /// Raises or lowers a daemon-side button bit and publishes an immediate

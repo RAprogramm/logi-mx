@@ -49,6 +49,16 @@ fn test_validate_smartshift_rejects_out_of_range_threshold() {
         error.to_string().contains("50"),
         "the error names the limit"
     );
+
+    let zero = validate_smartshift(&SmartShiftConfig {
+        enabled:   true,
+        threshold: 0
+    })
+    .expect_err("an enabled config cannot carry the do-not-change sentinel");
+    assert!(
+        zero.to_string().contains("1..=50"),
+        "the error names the accepted range"
+    );
 }
 
 #[test]
@@ -68,35 +78,79 @@ fn test_parse_smartshift() {
     assert!(config.enabled);
     assert_eq!(config.threshold, 10);
 
-    let disabled = parse_smartshift(&[0x02, 0x00, 0x0A]);
-    assert!(!disabled.enabled);
+    let never = parse_smartshift(&[0x02, 0xFF, 0x0A]);
+    assert!(!never.enabled);
+    assert_eq!(never.threshold, 0);
+
+    let sentinel = parse_smartshift(&[0x02, 0x00, 0x0A]);
+    assert!(!sentinel.enabled);
 
     let freespin = parse_smartshift(&[0x01, 0x0A, 0x0A]);
-    assert!(!freespin.enabled);
+    assert!(freespin.enabled);
+    assert_eq!(freespin.threshold, 10);
 
     let empty = parse_smartshift(&[]);
     assert!(!empty.enabled);
 }
 
 #[test]
+fn test_wheel_mode_codec() {
+    assert_eq!(parse_wheel_mode(0x01), WheelMode::FreeSpin);
+    assert_eq!(parse_wheel_mode(0x02), WheelMode::Ratchet);
+    assert_eq!(parse_wheel_mode(0x00), WheelMode::Ratchet);
+    assert_eq!(encode_wheel_mode(WheelMode::FreeSpin), 0x01);
+    assert_eq!(encode_wheel_mode(WheelMode::Ratchet), 0x02);
+}
+
+#[test]
 fn test_encode_smartshift() {
-    let params = encode_smartshift(SmartShiftConfig {
-        enabled:   true,
-        threshold: 10
-    });
-    assert_eq!(params, [0x02, 0x0A, 0x00]);
+    let params = encode_smartshift(
+        &[0x02, 0xFF, 0x05],
+        SmartShiftConfig {
+            enabled:   true,
+            threshold: 10
+        }
+    );
+    assert_eq!(params, [0x02, 0x0A, 0x05]);
 
-    let disabled = encode_smartshift(SmartShiftConfig {
-        enabled:   false,
-        threshold: 10
-    });
-    assert_eq!(disabled, [0x02, 0x00, 0x00]);
+    let disabled = encode_smartshift(
+        &[0x02, 0x0A, 0x05],
+        SmartShiftConfig {
+            enabled:   false,
+            threshold: 10
+        }
+    );
+    assert_eq!(disabled, [0x02, 0xFF, 0x05]);
 
-    let zero_threshold = encode_smartshift(SmartShiftConfig {
-        enabled:   true,
-        threshold: 0
-    });
-    assert_eq!(zero_threshold, [0x02, 0x00, 0x00]);
+    let freespin = encode_smartshift(
+        &[0x01, 0x0A, 0x00],
+        SmartShiftConfig {
+            enabled:   true,
+            threshold: 10
+        }
+    );
+    assert_eq!(freespin, [0x01, 0x0A, 0x00]);
+
+    let empty = encode_smartshift(
+        &[],
+        SmartShiftConfig {
+            enabled:   true,
+            threshold: 0
+        }
+    );
+    assert_eq!(empty, [0x02, 0x01, 0x00]);
+}
+
+#[test]
+fn test_encode_wheel_mode_flip() {
+    let to_free = encode_wheel_mode_flip(&[0x02, 0x0A, 0x05], WheelMode::FreeSpin);
+    assert_eq!(to_free, [0x01, 0x0A, 0x05]);
+
+    let to_ratchet = encode_wheel_mode_flip(&[0x01, 0xFF, 0x00], WheelMode::Ratchet);
+    assert_eq!(to_ratchet, [0x02, 0xFF, 0x00]);
+
+    let sentinel = encode_wheel_mode_flip(&[0x02, 0x00, 0x00], WheelMode::FreeSpin);
+    assert_eq!(sentinel, [0x01, 0xFF, 0x00]);
 }
 
 #[test]

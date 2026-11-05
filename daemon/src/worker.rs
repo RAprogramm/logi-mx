@@ -205,12 +205,6 @@ fn run_device_worker(
 
         pump_notifications(&mut gestures, &mut buttons, &manager);
         sync_anchor(&anchor, &manager);
-        if let Some(smartshift) = gestures.take_smartshift_persist() {
-            manager.persist_setting(&ipc::Request::SetSmartShift {
-                enabled:   smartshift.enabled,
-                threshold: smartshift.threshold
-            });
-        }
         if gestures.is_holding() {
             gestures.on_pie_tick(std::time::Instant::now());
         }

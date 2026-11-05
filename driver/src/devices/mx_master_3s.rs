@@ -13,13 +13,14 @@ use masterror::prelude::*;
 use tracing::{debug, info};
 
 use super::traits::{
-    Action, BatteryInfo, ButtonId, HiResScrollConfig, MouseDevice, SmartShiftConfig
+    Action, BatteryInfo, ButtonId, HiResScrollConfig, MouseDevice, SmartShiftConfig, WheelMode
 };
 use crate::{
     error::{DeviceErrorKind, Result},
     hidpp::{
         DpiFunction, FEATURE_ADJUSTABLE_DPI, FEATURE_DEVICE_NAME, FEATURE_HIRES_WHEEL,
-        FEATURE_SMART_SHIFT, HidppDevice, HiresWheelFunction, SmartShiftFunction
+        FEATURE_SMART_SHIFT, FEATURE_SMART_SHIFT_ENHANCED, HidppDevice, HiresWheelFunction,
+        SmartShiftEnhancedFunction, SmartShiftFunction
     }
 };
 
@@ -33,8 +34,9 @@ mod reprog;
 mod tests;
 
 pub use codec::{
-    append_name_chunk, encode_hires_mode, encode_smartshift, parse_battery_status,
-    parse_hires_mode, parse_smartshift, validate_smartshift
+    append_name_chunk, encode_hires_mode, encode_smartshift, encode_wheel_mode,
+    encode_wheel_mode_flip, parse_battery_status, parse_hires_mode, parse_smartshift,
+    parse_wheel_mode, validate_smartshift
 };
 
 /// Control IDs reported by the Reprogrammable Controls feature.
@@ -114,6 +116,47 @@ impl MxMaster3s {
     pub const fn hidpp(&mut self) -> &mut HidppDevice {
         &mut self.hidpp
     }
+
+    /// Resolves the `SmartShift` feature slot: Enhanced (0x2111) first,
+    /// legacy (0x2110) as fallback.
+    ///
+    /// The MX Master 3 / 3S / 4 acknowledge writes to the legacy feature
+    /// but silently ignore them, so the Enhanced slot must win whenever the
+    /// device exposes it. Returns the feature index and whether the
+    /// Enhanced variant answered.
+    fn smartshift_feature(&mut self) -> Result<(u8, bool)> {
+        if let Ok(index) = self.hidpp.feature_index(FEATURE_SMART_SHIFT_ENHANCED) {
+            return Ok((index, true));
+        }
+        let index = self.hidpp.feature_index(FEATURE_SMART_SHIFT)?;
+        Ok((index, false))
+    }
+
+    /// Reads the raw `[wheelMode, autoDisengage, torque]` status bytes from
+    /// whichever `SmartShift` feature the device exposes.
+    fn smartshift_status(&mut self) -> Result<Vec<u8>> {
+        let (index, enhanced) = self.smartshift_feature()?;
+        let function = if enhanced {
+            SmartShiftEnhancedFunction::GetStatus as u8
+        } else {
+            SmartShiftFunction::GetStatus as u8
+        };
+        let response = self.hidpp.send_command(index, function, &[])?;
+        Ok(response.parameters().to_vec())
+    }
+
+    /// Writes a `SetStatus` payload to whichever `SmartShift` feature the
+    /// device exposes.
+    fn smartshift_set(&mut self, params: &[u8]) -> Result<()> {
+        let (index, enhanced) = self.smartshift_feature()?;
+        let function = if enhanced {
+            SmartShiftEnhancedFunction::SetStatus as u8
+        } else {
+            SmartShiftFunction::SetStatus as u8
+        };
+        self.hidpp.send_command(index, function, params)?;
+        Ok(())
+    }
 }
 
 impl MouseDevice for MxMaster3s {
@@ -191,12 +234,10 @@ impl MouseDevice for MxMaster3s {
 
     fn set_smartshift(&mut self, config: SmartShiftConfig) -> Result<()> {
         validate_smartshift(&config)?;
-        let feature_index = self.hidpp.feature_index(FEATURE_SMART_SHIFT)?;
 
-        let params = encode_smartshift(config);
-
-        self.hidpp
-            .send_command(feature_index, SmartShiftFunction::SetStatus as u8, &params)?;
+        let current = self.smartshift_status()?;
+        let params = encode_smartshift(&current, config);
+        self.smartshift_set(&params)?;
 
         info!(
             "SmartShift configured: enabled={}, threshold={}",
@@ -206,13 +247,22 @@ impl MouseDevice for MxMaster3s {
     }
 
     fn smartshift(&mut self) -> Result<SmartShiftConfig> {
-        let feature_index = self.hidpp.feature_index(FEATURE_SMART_SHIFT)?;
+        let status = self.smartshift_status()?;
+        Ok(parse_smartshift(&status))
+    }
 
-        let response =
-            self.hidpp
-                .send_command(feature_index, SmartShiftFunction::GetStatus as u8, &[])?;
+    fn toggle_wheel_mode(&mut self) -> Result<WheelMode> {
+        let current = self.smartshift_status()?;
+        let next = match parse_wheel_mode(current.first().copied().unwrap_or(0)) {
+            WheelMode::Ratchet => WheelMode::FreeSpin,
+            WheelMode::FreeSpin => WheelMode::Ratchet
+        };
 
-        Ok(parse_smartshift(response.parameters()))
+        let params = encode_wheel_mode_flip(&current, next);
+        self.smartshift_set(&params)?;
+
+        info!("wheel mode toggled to {next:?}");
+        Ok(next)
     }
 
     fn set_hires_scroll(&mut self, config: HiResScrollConfig) -> Result<()> {

@@ -7,7 +7,7 @@
 use masterror::prelude::*;
 
 use crate::{
-    devices::traits::{BatteryStatus, HiResScrollConfig, SmartShiftConfig},
+    devices::traits::{BatteryStatus, HiResScrollConfig, SmartShiftConfig, WheelMode},
     error::Result
 };
 
@@ -16,9 +16,13 @@ const HIRES_MODE_HIRES_BIT: u8 = 0x02;
 /// Hi-res wheel mode byte: inverted direction bit.
 const HIRES_MODE_INVERT_BIT: u8 = 0x04;
 
-/// `SmartShift` ratchet mode with automatic disengage.
-const SMARTSHIFT_MODE_RATCHET_AUTO: u8 = 0x02;
-/// Largest scroll-speed threshold the `SmartShift` feature accepts (0-50).
+/// `SmartShift` wheel mode byte: frictionless free-spin.
+const WHEEL_MODE_FREESPIN: u8 = 0x01;
+/// `SmartShift` wheel mode byte: clicky ratchet.
+const WHEEL_MODE_RATCHET: u8 = 0x02;
+/// `SmartShift` auto-disengage byte that keeps the ratchet engaged forever.
+const SMARTSHIFT_DISENGAGE_NEVER: u8 = 0xFF;
+/// Largest scroll-speed threshold the `SmartShift` feature accepts (1-50).
 const SMARTSHIFT_THRESHOLD_MAX: u8 = 50;
 
 /// Maps a battery status byte to the [`BatteryStatus`] enum.
@@ -37,15 +41,15 @@ pub const fn parse_battery_status(status_byte: u8) -> BatteryStatus {
 
 /// Parses a `SmartShift` status response into a [`SmartShiftConfig`].
 ///
-/// Response layout: `[mode, autoDisengage, default]`; mode `2` means the
-/// ratchet mode with automatic disengage, and a non-zero auto-disengage
-/// threshold enables the automatic switching behaviour.
+/// Response layout: `[wheelMode, autoDisengage, torque]`. The
+/// auto-disengage byte carries the threshold in `1..=0xFE`; `0x00` is the
+/// "do not change" sentinel and `0xFF` keeps the ratchet engaged
+/// permanently, so only `1..=0xFE` means the automatic switching is active.
 #[must_use]
 pub fn parse_smartshift(parameters: &[u8]) -> SmartShiftConfig {
-    let mode = parameters.first().copied().unwrap_or(0);
     let auto_disengage = parameters.get(1).copied().unwrap_or(0);
 
-    if mode != SMARTSHIFT_MODE_RATCHET_AUTO || auto_disengage == 0 {
+    if auto_disengage == 0 || auto_disengage == SMARTSHIFT_DISENGAGE_NEVER {
         return SmartShiftConfig {
             enabled:   false,
             threshold: 0
@@ -58,19 +62,65 @@ pub fn parse_smartshift(parameters: &[u8]) -> SmartShiftConfig {
     }
 }
 
-/// Encodes a `SmartShift` `SetStatus` payload.
+/// Maps a `SmartShift` wheel mode byte to a [`WheelMode`].
 ///
-/// The wheel always stays in ratchet mode; `enabled` toggles the automatic
-/// disengage threshold.
+/// Anything other than the free-spin byte is treated as ratchet, the
+/// firmware's safe clicky default.
 #[must_use]
-pub const fn encode_smartshift(config: SmartShiftConfig) -> [u8; 3] {
-    let auto_disengage = if config.enabled && config.threshold > 0 {
-        config.threshold
+pub const fn parse_wheel_mode(mode_byte: u8) -> WheelMode {
+    if mode_byte == WHEEL_MODE_FREESPIN {
+        WheelMode::FreeSpin
     } else {
-        0
+        WheelMode::Ratchet
+    }
+}
+
+/// Encodes a [`WheelMode`] as the `SmartShift` wheel mode byte.
+#[must_use]
+pub const fn encode_wheel_mode(mode: WheelMode) -> u8 {
+    match mode {
+        WheelMode::FreeSpin => WHEEL_MODE_FREESPIN,
+        WheelMode::Ratchet => WHEEL_MODE_RATCHET
+    }
+}
+
+/// Encodes a `SmartShift` `SetStatus` payload from a config.
+///
+/// The wheel mode and tunable torque bytes of the current status are
+/// preserved so applying a threshold never disturbs the physical ratchet
+/// state; disabling writes the permanent-ratchet byte instead of the
+/// "do not change" sentinel `0`, which the device would silently ignore.
+#[must_use]
+pub fn encode_smartshift(current: &[u8], config: SmartShiftConfig) -> [u8; 3] {
+    let mode = match current.first().copied() {
+        Some(WHEEL_MODE_FREESPIN) => WHEEL_MODE_FREESPIN,
+        _ => WHEEL_MODE_RATCHET
+    };
+    let torque = current.get(2).copied().unwrap_or(0);
+    let auto_disengage = if config.enabled {
+        config.threshold.max(1)
+    } else {
+        SMARTSHIFT_DISENGAGE_NEVER
     };
 
-    [SMARTSHIFT_MODE_RATCHET_AUTO, auto_disengage, 0x00]
+    [mode, auto_disengage, torque]
+}
+
+/// Encodes a wheel-mode flip, preserving the auto-disengage and torque
+/// bytes of the current status.
+///
+/// A zero auto-disengage read back is the "do not change" sentinel and
+/// cannot be re-sent as a target, so it is normalised to the
+/// permanent-ratchet byte.
+#[must_use]
+pub fn encode_wheel_mode_flip(current: &[u8], mode: WheelMode) -> [u8; 3] {
+    let auto_disengage = match current.get(1).copied().unwrap_or(0) {
+        0 => SMARTSHIFT_DISENGAGE_NEVER,
+        value => value
+    };
+    let torque = current.get(2).copied().unwrap_or(0);
+
+    [encode_wheel_mode(mode), auto_disengage, torque]
 }
 
 /// Rejects a `SmartShift` configuration the device firmware cannot accept.
@@ -81,17 +131,18 @@ pub const fn encode_smartshift(config: SmartShiftConfig) -> [u8; 3] {
 ///
 /// # Returns
 ///
-/// `Ok(())` when the threshold is within the documented `0..=50` range,
-/// a validation error naming the limit otherwise.
+/// `Ok(())` when the threshold is within the documented `1..=50` range
+/// while enabled, a validation error naming the limit otherwise.
 ///
 /// # Errors
 ///
-/// [`AppError::validation`] when `config.threshold` exceeds the device
-/// maximum.
+/// [`AppError::validation`] when an enabled config carries a threshold
+/// outside the device limits; a disabled config accepts any threshold
+/// because the byte is not sent.
 pub fn validate_smartshift(config: &SmartShiftConfig) -> Result<()> {
-    if config.threshold > SMARTSHIFT_THRESHOLD_MAX {
+    if config.enabled && (config.threshold == 0 || config.threshold > SMARTSHIFT_THRESHOLD_MAX) {
         return Err(AppError::validation(format!(
-            "SmartShift threshold {} exceeds the device maximum {SMARTSHIFT_THRESHOLD_MAX}",
+            "SmartShift threshold {} is outside the device range 1..={SMARTSHIFT_THRESHOLD_MAX}",
             config.threshold
         )));
     }
