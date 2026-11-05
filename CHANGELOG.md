@@ -1,7 +1,3 @@
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:09f9ea35a622140773be4ff2269888d4efb64ba0f6a2ca5f726b8602932b9f33 -->
-
 # Changelog
 
 All notable changes to logi-mx will be documented in this file.
@@ -9,7 +5,7 @@ All notable changes to logi-mx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-11-05
 
 ### Features
 
@@ -67,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Diagnostics page with a journal log viewer ([f9fd05f](https://github.com/RAprogramm/logi-mx/commit/f9fd05f782b9535b4a9f683afbfe1720848d4dbd))
 - Schema for command-driven pie rings and per-app profiles ([f2d0ed8](https://github.com/RAprogramm/logi-mx/commit/f2d0ed89ab374047b60b4fcd4ccba575e6812b36))
 - Command-driven pie ring with per-app profiles ([4526933](https://github.com/RAprogramm/logi-mx/commit/45269330636605e76866a5c71ec76c7b4d19f953))
+- Toggle the HUD on gesture button click and ship hi-res scroll off by default ([dc8685f](https://github.com/RAprogramm/logi-mx/commit/dc8685f1b6fc5b4f4a444b7c27e592c7cfd59e87))
 
 ### Bug Fixes
 
@@ -122,6 +119,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Honest autostart lifecycle, installer ownership and CLI reporting ([9cc3952](https://github.com/RAprogramm/logi-mx/commit/9cc3952f8970554bc52798ec1abc4e765d5ca748))
 - Reject pie tuning that would make the menu unusable ([bc138f1](https://github.com/RAprogramm/logi-mx/commit/bc138f134f8258acdbf421b77701fcf7ad299e35))
 - Stop the tab icons spamming GTK baseline warnings ([daad941](https://github.com/RAprogramm/logi-mx/commit/daad9414035c59814d788bb7630ac881d9e049cd))
+- Validate pie settings, preserve overlay state, and correct release checksums and changelog links ([162caa0](https://github.com/RAprogramm/logi-mx/commit/162caa08cc0b62b12974e4bd0c9da3d8b62ba06b))
+- Drive the MagSpeed wheel through SmartShift Enhanced (0x2111) ([b52054c](https://github.com/RAprogramm/logi-mx/commit/b52054c6a8d44ec7b6da6b135525915063e7f6c0))
+- Mark workspace members unpublished so path deps are not wildcards ([68db682](https://github.com/RAprogramm/logi-mx/commit/68db6829eba133810fa16a935fbfebc2a3715e3f))
+- Address review findings on divert flags, alloc budgets, pie resync and HUD guards ([2b78b6f](https://github.com/RAprogramm/logi-mx/commit/2b78b6fc382d707b0e60bf450dd888e8f8bef858))
+- *(ci)* Make release pipeline idempotent and git-cliff driven ([6413a2f](https://github.com/RAprogramm/logi-mx/commit/6413a2f4c389da8db2c413de7284a7c12172170c))
+- *(ci)* Restore GITHUB_OUTPUT/GITHUB_ENV redirection and harden MSRV step ([5277da2](https://github.com/RAprogramm/logi-mx/commit/5277da2cb0bff92f5f506c13ae04c99dc3d68742))
+
+### Performance
+
+- Resolve the pie ring once per press and honour reduced motion ([ef958f1](https://github.com/RAprogramm/logi-mx/commit/ef958f1be58696a08ecb12feb7e1715e0e6813be))
 
 ### Documentation
 
@@ -137,6 +144,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Drop the live telemetry line from the panel ([5d80547](https://github.com/RAprogramm/logi-mx/commit/5d80547aad8b65eb5671d0f86241dd70a70be374))
 - Split oversized modules into focused submodules ([3f3e662](https://github.com/RAprogramm/logi-mx/commit/3f3e6624ddcc3fa4170034c3f89d302101977fc3))
 - Uniform tray types across feature combinations ([6dc1470](https://github.com/RAprogramm/logi-mx/commit/6dc14705f97dbaf216eb8755bf1ee3342abc6435))
+- Split the IPC module into protocol, transport, and client submodules ([fac4e8f](https://github.com/RAprogramm/logi-mx/commit/fac4e8faeeb2e577cab9aea372a397a2641bc692))
+- Split the worker RPC module into validation, gesture, button, settings and device handlers ([0cb8830](https://github.com/RAprogramm/logi-mx/commit/0cb883030b71cff04777ba27a33e92c825a48bea))
+- Split the MX Master 3S driver into codec, open, hosts, reprog and battery modules ([6b1e71b](https://github.com/RAprogramm/logi-mx/commit/6b1e71b4aa52e10d0b83fbfe506f09ced505eefb))
+- Split the CLI into args, queries, settings, service, bindings and setup modules ([fdaf1bb](https://github.com/RAprogramm/logi-mx/commit/fdaf1bb10669b36b958c9fbf3f747bf977e066b7))
+- Split the HUD root into background, live, panel and window modules ([68d0ddd](https://github.com/RAprogramm/logi-mx/commit/68d0ddd72cd1a57b8be0beb5b62e3cb1c079c68b))
+- Split the buttons page into firmware tiles and thumb remap modules ([39a2bfa](https://github.com/RAprogramm/logi-mx/commit/39a2bfa10e0eb06921c5afd5dcc7b4e30c276f7f))
+- Split the gestures page into store, tile and scope modules ([ec316cc](https://github.com/RAprogramm/logi-mx/commit/ec316cc6ba7e08e70eec6c8914e878a6e810c6a0))
 
 ### Styling
 
@@ -145,6 +159,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### CI/CD
 
 - Automate changelog, lockfile and checksum on every release bump ([0974805](https://github.com/RAprogramm/logi-mx/commit/0974805bf4139ae9effd64e90cd72d4012048dec))
+- Verify the static README badges against the workspace manifest ([2c1499b](https://github.com/RAprogramm/logi-mx/commit/2c1499b83a33ae5659ce39a4188200e98a4f4b96))
+- Install gtk4-layer-shell in jobs that build the full workspace ([be49b91](https://github.com/RAprogramm/logi-mx/commit/be49b91a55e2e2effc3ba5f7ff0a1dc9320e5bd1))
 
 ### Miscellaneous
 
@@ -152,8 +168,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add justfile for professional local workflows ([4e3cf07](https://github.com/RAprogramm/logi-mx/commit/4e3cf07174d7a9bb7eff7a3390132f2d0ccaaa20))
 - Bump SPDX copyright year to 2025-2026 in touched files ([25adfe7](https://github.com/RAprogramm/logi-mx/commit/25adfe770d4fb15ee93734e273a486bc9dc73978))
 - Bump workspace version to 0.6.0 ([d339b17](https://github.com/RAprogramm/logi-mx/commit/d339b1769fc8e981df07f38aea218d840ad000b6))
-- Bump version to 0.7.0 and track the lockfile ([22ec348](https://github.com/RAprogramm/logi-mx/commit/22ec3482ca2a9278c291feb285d68cfd4adc1e20))
 - Up deps ([e8d4dd6](https://github.com/RAprogramm/logi-mx/commit/e8d4dd696414f9be3e763556d93c59de173bf193))
+
+### Bench
+
+- Add criterion suites, allocation budgets and CodSpeed integration ([81b49e2](https://github.com/RAprogramm/logi-mx/commit/81b49e22858086a7723ce7c672612935598d4eb8))
 
 ### Debug
 
@@ -187,7 +206,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Miscellaneous
 
 - Bump masterror 0.30 -> 0.31 ([47f56df](https://github.com/RAprogramm/logi-mx/commit/47f56df89c2db0fc4e6074b3c85170e8c0102242))
-- Bump version to 0.6.0 ([8d51ed8](https://github.com/RAprogramm/logi-mx/commit/8d51ed8d9e2cb385349ac156f5d94a24b34adc77))
 
 ## [0.5.0] - 2026-09-01
 
@@ -230,7 +248,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Up deps ([a5f5c01](https://github.com/RAprogramm/logi-mx/commit/a5f5c0193fb649f11f3a455c35b1df2a87827dd7))
 - Remove unused dependencies detected by cargo-udeps ([817f43b](https://github.com/RAprogramm/logi-mx/commit/817f43b7bd7067a07f61028db2e5264c85d9a1dd))
-- Bump version to 0.5.0 ([13a6343](https://github.com/RAprogramm/logi-mx/commit/13a63439caf2a04335ff62128c23451bfd783fe4))
 
 ### Bench
 
@@ -256,19 +273,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bump the github-actions group with 4 updates ([#48](https://github.com/RAprogramm/logi-mx/issues/48)) ([d8fdb7c](https://github.com/RAprogramm/logi-mx/commit/d8fdb7c6b575ac03d73c5c7cecc64e56c394e41f))
 
-### Miscellaneous
-
-- Bump version to 0.4.6 ([2da8f9c](https://github.com/RAprogramm/logi-mx/commit/2da8f9cfd45c33265864500e0fa21fb5567d3c81))
-
 ## [0.4.5] - 2025-12-04
 
 ### Bug Fixes
 
 - Auto-restart scroll handler on device disconnection ([9861601](https://github.com/RAprogramm/logi-mx/commit/98616014c62655fc115370f4d3c67b94a4b526e8))
-
-### Miscellaneous
-
-- Bump version to 0.4.5 ([1508f32](https://github.com/RAprogramm/logi-mx/commit/1508f32b1b41e48605df5eab5bd0f64c1c96fc58))
 
 ## [0.4.4] - 2025-12-02
 
@@ -276,19 +285,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Correct archive name in PKGBUILD.bin (x86_64-linux-gnu) ([9d8f86b](https://github.com/RAprogramm/logi-mx/commit/9d8f86bc1d4e0f828396f6393a2030a03d567392))
 
-### Miscellaneous
-
-- Bump version to 0.4.4 ([51cf2ea](https://github.com/RAprogramm/logi-mx/commit/51cf2eaf0415fb4523f44a93367cb221d939e56b))
-
 ## [0.4.3] - 2025-12-02
 
 ### Bug Fixes
 
 - Use custom script for logi-mx AUR push (handle detached HEAD) ([83f1f12](https://github.com/RAprogramm/logi-mx/commit/83f1f12c48cc2b00f9cf837c3c2a60dae526af9e))
-
-### Miscellaneous
-
-- Bump version to 0.4.3 ([cd565c3](https://github.com/RAprogramm/logi-mx/commit/cd565c34a0acd974746ea557d1b5e99352e7ee01))
 
 ## [0.4.2] - 2025-12-02
 
@@ -299,17 +300,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Miscellaneous
 
 - Trigger CI for AUR sync ([30657c6](https://github.com/RAprogramm/logi-mx/commit/30657c61f538e2778f70e42e6c2e8f9921878efb))
-- Bump version to 0.4.2 ([7ef7614](https://github.com/RAprogramm/logi-mx/commit/7ef76147f9aa5374c3ccbc05a4d65f47d0d4c571))
 
 ## [0.4.1] - 2025-12-02
 
 ### Bug Fixes
 
 - Prevent race condition between publish and sync AUR jobs ([#47](https://github.com/RAprogramm/logi-mx/issues/47)) ([2b2fb1b](https://github.com/RAprogramm/logi-mx/commit/2b2fb1bf51e98393cd79ee5781078882e656b77b))
-
-### Miscellaneous
-
-- Bump version to 0.4.1 ([ab32e7b](https://github.com/RAprogramm/logi-mx/commit/ab32e7b72216760285c704e080df7a6385b701dd))
 
 ## [0.4.0] - 2025-12-02
 
@@ -323,10 +319,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump actions/checkout from 5 to 6 in the github-actions group ([#39](https://github.com/RAprogramm/logi-mx/issues/39)) ([0ddbbcb](https://github.com/RAprogramm/logi-mx/commit/0ddbbcb7b24bd8e3d20722d3b2f0eecbd3853134))
 - Fix release jobs to run after version-bump creates tag ([994b957](https://github.com/RAprogramm/logi-mx/commit/994b957012de5112b12ce2e96bafd491fa69e562))
 - Fix checkout ref and add explicit tag_name to releases ([938d8fd](https://github.com/RAprogramm/logi-mx/commit/938d8fdee5c9e81b640102479b722c6e169f00b4))
-
-### Miscellaneous
-
-- Bump version to 0.4.0 ([ffa3869](https://github.com/RAprogramm/logi-mx/commit/ffa386990465c320d2925d719754f51a78fe4d55))
 
 ### Deps
 
@@ -350,10 +342,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Auto-update PKGBUILD version and sha256sum in version bump workflow ([b17e7f0](https://github.com/RAprogramm/logi-mx/commit/b17e7f008538b465a5583858959192d9a06cd9f2))
 - Consolidate version bumps into single commit ([1fdbb48](https://github.com/RAprogramm/logi-mx/commit/1fdbb485800a447692e435af771d6701617f9bbd))
-
-### Miscellaneous
-
-- Bump version to 0.3.1 ([29bebda](https://github.com/RAprogramm/logi-mx/commit/29bebdab137df23848957d94cfb10d194e66ae65))
 
 ## [0.3.0] - 2025-11-13
 
@@ -379,10 +367,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### CI/CD
 
 - Add automatic version bumping based on conventional commits ([74c706a](https://github.com/RAprogramm/logi-mx/commit/74c706ab443b29bbb190215f6fc25d62ed559006))
-
-### Miscellaneous
-
-- Bump version to 0.3.0 ([9162f5e](https://github.com/RAprogramm/logi-mx/commit/9162f5e71463603cacb97f6cb611324220d0a446))
 
 ### Build System
 
@@ -445,9 +429,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Miscellaneous
 
-- Bump version to 0.1.1 ([199e641](https://github.com/RAprogramm/logi-mx/commit/199e6419e55081de2acfa6a8f65047c4ef285d19))
 - Update PKGBUILD sha256sum for v0.1.1 ([860157c](https://github.com/RAprogramm/logi-mx/commit/860157c9a2928c608e0c358074407da58cf3c2da))
-- Bump version to 0.2.0 ([9f73bb1](https://github.com/RAprogramm/logi-mx/commit/9f73bb1db846b80774cc39b05fc9c419d0fcc9bc))
 
 ### Build System
 
@@ -464,6 +446,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial implementation of logi-mx driver ([7bfc806](https://github.com/RAprogramm/logi-mx/commit/7bfc806cfd4ef9afc4cc92e97d68665df8546e14))
 
 <!-- generated by git-cliff -->
-
-
-<!-- /coderabbit-ai-generated:v1 -->
