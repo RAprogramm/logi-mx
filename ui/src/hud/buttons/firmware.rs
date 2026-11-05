@@ -182,32 +182,15 @@ pub(super) fn spawn_remap_loader(tiles: &RowMap) {
     }
 }
 
-/// Builds one button tile: a card with the button name and its assignment
-/// dropdown; picking an entry writes the remap into the mouse firmware
-/// instantly and reverts the choice when the daemon refuses.
-fn button_tile(
+/// Wires a tile's focus interaction: activating selects the button, hovering
+/// highlights it on the diagram, and both states mirror onto the button list
+/// rows; leaders are re-queued whenever the tile maps.
+fn wire_tile_focus(
+    child: &FlowBoxChild,
     state: &Rc<RefCell<HudState>>,
     drawing: &gtk4::DrawingArea,
-    toast: &Toasts,
-    rows: &RowMap,
     button: MouseButton
-) -> Tile {
-    let child = FlowBoxChild::new();
-    child.add_css_class("hud-tile");
-    child.set_hexpand(true);
-    let inner = GtkBox::new(Orientation::Horizontal, 12);
-    let name = Label::new(Some(button.label()));
-    name.add_css_class("title");
-    name.set_xalign(0.0);
-    name.set_hexpand(true);
-    name.set_valign(gtk4::Align::Center);
-    let dropdown = DropDown::from_strings(&ASSIGNMENT_CHOICES);
-    dropdown.add_css_class("hud-assign");
-    dropdown.set_valign(gtk4::Align::Center);
-    inner.append(&name);
-    inner.append(&dropdown);
-    child.set_child(Some(&inner));
-
+) {
     let state_row = Rc::clone(state);
     let drawing_row = drawing.clone();
     child.connect_activate(move |_| {
@@ -240,6 +223,35 @@ fn button_tile(
     });
     child.add_controller(motion);
     child.connect_map(|_| queue_leaders());
+}
+
+/// Builds one button tile: a card with the button name and its assignment
+/// dropdown; picking an entry writes the remap into the mouse firmware
+/// instantly and reverts the choice when the daemon refuses.
+fn button_tile(
+    state: &Rc<RefCell<HudState>>,
+    drawing: &gtk4::DrawingArea,
+    toast: &Toasts,
+    rows: &RowMap,
+    button: MouseButton
+) -> Tile {
+    let child = FlowBoxChild::new();
+    child.add_css_class("hud-tile");
+    child.set_hexpand(true);
+    let inner = GtkBox::new(Orientation::Horizontal, 12);
+    let name = Label::new(Some(button.label()));
+    name.add_css_class("title");
+    name.set_xalign(0.0);
+    name.set_hexpand(true);
+    name.set_valign(gtk4::Align::Center);
+    let dropdown = DropDown::from_strings(&ASSIGNMENT_CHOICES);
+    dropdown.add_css_class("hud-assign");
+    dropdown.set_valign(gtk4::Align::Center);
+    inner.append(&name);
+    inner.append(&dropdown);
+    child.set_child(Some(&inner));
+
+    wire_tile_focus(&child, state, drawing, button);
 
     let state_assign = Rc::clone(state);
     let rows_assign = Rc::clone(rows);
@@ -247,7 +259,12 @@ fn button_tile(
     let toast_assign = toast.clone();
     let applied = Rc::new(Cell::new(UNKNOWN_APPLIED));
     let applied_notify = Rc::clone(&applied);
+    let loading = Rc::new(Cell::new(false));
+    let loading_notify = Rc::clone(&loading);
     dropdown.connect_selected_notify(move |picker| {
+        if loading_notify.get() {
+            return;
+        }
         let index = picker.selected();
         if index == applied_notify.get() {
             return;
@@ -279,8 +296,15 @@ fn button_tile(
             toast_assign.show(&message);
         } else {
             let revert = applied_notify.get();
+            loading_notify.set(true);
             picker.set_selected(if revert == UNKNOWN_APPLIED { 0 } else { revert });
-            toast_assign.show("Daemon unavailable — change not applied");
+            loading_notify.set(false);
+            match response {
+                Some(Response::Error {
+                    message
+                }) => toast_assign.show(&message),
+                _ => toast_assign.show("Daemon unavailable — change not applied")
+            }
         }
     });
 

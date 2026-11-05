@@ -141,8 +141,8 @@ fn bench_swipe(c: &mut Criterion) {
     });
     group.bench_function("accumulator_hold_64_reports", |b| {
         let mut accumulator = SwipeAccumulator::default();
+        let now = Instant::now();
         b.iter(|| {
-            let now = Instant::now();
             accumulator.begin(now);
             for step in 0..64_i32 {
                 black_box(accumulator.accumulate(black_box(step * 4), black_box(0), now));

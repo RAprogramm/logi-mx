@@ -15,7 +15,7 @@ use super::{
     rpc::{RpcRequest, RpcSender},
     socket::{inherited_listener_fd, socket_path}
 };
-use crate::pie::PieHub;
+use crate::pie::{PieEvent, PieHub};
 
 /// Runs the async IPC server, forwarding requests to the worker.
 ///
@@ -196,7 +196,20 @@ async fn stream_pie(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    let resync = match hub.replay() {
+                        Some(state) => write_line(&mut writer, &Response::Pie(state)).await,
+                        None => {
+                            write_line(&mut writer, &Response::Pie(PieEvent::Close {
+                                committed: None,
+                            }))
+                            .await
+                        }
+                    };
+                    if resync.is_err() {
+                        break;
+                    }
+                }
             }
         }
     }

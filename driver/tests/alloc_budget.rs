@@ -11,8 +11,8 @@
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
-    hint::black_box,
-    sync::atomic::{AtomicUsize, Ordering}
+    cell::Cell,
+    hint::black_box
 };
 
 use logi_mx_driver::{
@@ -24,14 +24,24 @@ use logi_mx_driver::{
     hidpp::HidppPacket
 };
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static MEASURING: Cell<bool> = const { Cell::new(false) };
+    static COUNT: Cell<usize> = const { Cell::new(0) };
+}
 
 /// Forwards every request to the system allocator while counting it.
+///
+/// Only the thread that armed its `MEASURING` flag is counted, so tests
+/// running in parallel cannot perturb each other's budgets.
 struct Counting;
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        COUNT.with(|count| {
+            if MEASURING.get() {
+                count.set(count.get() + 1);
+            }
+        });
         unsafe { System.alloc(layout) }
     }
 
@@ -43,18 +53,22 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static COUNTING: Counting = Counting;
 
-/// Counts the heap allocations one operation performs.
+/// Counts the heap allocations one operation performs on this thread.
 ///
 /// The operation runs eight times and the smallest observed count wins, so
 /// a stray allocation from the test harness can never fail a budget that
-/// the code itself does not spend.
+/// the code itself does not spend. Counting is armed only around the
+/// measured call and only for this thread, so concurrent tests neither
+/// pollute a budget nor hide an allocation.
 fn allocations_of<T>(operation: impl Fn() -> T) -> usize {
     let mut best = usize::MAX;
     for _ in 0..8 {
         drop(operation());
-        ALLOCATIONS.store(0, Ordering::Relaxed);
+        COUNT.with(|count| count.set(0));
+        MEASURING.with(|measuring| measuring.set(true));
         let measured = black_box(operation());
-        let count = ALLOCATIONS.load(Ordering::Relaxed);
+        let count = COUNT.with(Cell::get);
+        MEASURING.with(|measuring| measuring.set(false));
         drop(black_box(measured));
         best = best.min(count);
     }

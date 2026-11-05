@@ -136,6 +136,12 @@ impl MxMaster3s {
     /// restores native behaviour. Raw XY diversion additionally streams raw
     /// pointer deltas for gesture support.
     ///
+    /// `SetControlReporting` only applies a bit whose valid flag accompanies
+    /// it, so the divert valid flag is always sent and the raw XY valid flag
+    /// is sent whenever raw XY is set or a diverted raw XY state must be
+    /// cleared; a clear sent without its valid flag is silently ignored by
+    /// the device.
+    ///
     /// Diverted controls produce no normal HID events until the diversion is
     /// cleared; callers must own the event pump that consumes them.
     ///
@@ -157,15 +163,17 @@ impl MxMaster3s {
     ) -> Result<()> {
         let feature_index = self.hidpp.feature_index(FEATURE_REPROG_CONTROLS)?;
 
-        let mut flags = 0u8;
+        let (current, remap_to) = self.control_divert(control_id)?;
+
+        let mut flags = 0x02u8;
         if divert {
-            flags |= 0x03;
+            flags |= 0x01;
         }
         if raw_xy {
             flags |= 0x30;
+        } else if current & 0x20 != 0 {
+            flags |= 0x20;
         }
-
-        let (_, remap_to) = self.control_divert(control_id).unwrap_or((0, 0x0000));
 
         self.hidpp.send_command(
             feature_index,

@@ -5,7 +5,7 @@
 //! and pointer hit testing over the diagram.
 
 use std::{
-    cell::{OnceCell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     rc::Rc,
     sync::{Arc, Mutex, atomic::Ordering},
     thread,
@@ -94,6 +94,7 @@ fn build_hud(app: &Application) {
         });
         LIVE_HOOK.with(|hook| *hook.borrow_mut() = None);
         SNAPSHOT_HOOK.with(|hook| *hook.borrow_mut() = None);
+        next_snapshot_generation();
         buttons::clear_remap_hook();
         diagnostics::clear_diag_hook();
         ROWS_REGISTRY.with(|rows| *rows.borrow_mut() = None);
@@ -103,7 +104,8 @@ fn build_hud(app: &Application) {
     });
 
     window.present();
-    spawn_snapshot_loader(&widgets);
+    let generation = next_snapshot_generation();
+    spawn_snapshot_loader(&widgets, generation);
 }
 
 fn create_window(app: &Application) -> ApplicationWindow {
@@ -267,6 +269,24 @@ fn apply_snapshot(widgets: &Rc<RefCell<PanelWidgets>>, snapshot: Option<&DeviceS
 /// still be starting or the mouse may be out of radio range.
 const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 
+thread_local! {
+    /// Generation token of the open HUD window, bumped whenever a window is
+    /// built or closed so a stale snapshot loader can never re-arm against a
+    /// window that is gone or has been replaced.
+    static SNAPSHOT_GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Retires the previous window's snapshot loader and returns the new
+/// generation token. Every loader — hook and retry alike — stops as soon as
+/// the token it captured no longer matches the current one.
+fn next_snapshot_generation() -> u64 {
+    SNAPSHOT_GENERATION.with(|cell| {
+        let next = cell.get() + 1;
+        cell.set(next);
+        next
+    })
+}
+
 /// Loads the device snapshot off the main thread and applies it to the panel.
 ///
 /// Device I/O can take seconds (daemon round-trips, direct fallback scans),
@@ -274,20 +294,28 @@ const SNAPSHOT_RETRY: Duration = Duration::from_secs(5);
 /// shared slot and wakes the main context, where the registered hook applies
 /// it; a failed load marks the device unavailable and re-arms this loader
 /// after [`SNAPSHOT_RETRY`], so the panel recovers on its own once the
-/// daemon answers again.
-fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
+/// daemon answers again. A loader carrying a stale `generation` — the window
+/// closed or a newer HUD took over while its thread was reading — exits
+/// without touching the hooks or re-arming.
+fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>, generation: u64) {
+    if SNAPSHOT_GENERATION.with(Cell::get) != generation {
+        return;
+    }
     let slot = Arc::new(Mutex::new(None::<Option<DeviceSnapshot>>));
     let slot_thread = Arc::clone(&slot);
     let slot_hook = Arc::clone(&slot);
     let widgets_hook = Rc::clone(widgets);
     let hook: Rc<dyn Fn()> = Rc::new(move || {
+        if SNAPSHOT_GENERATION.with(Cell::get) != generation {
+            return;
+        }
         let snapshot = slot_hook.lock().ok().and_then(|mut guard| guard.take());
         if let Some(snapshot) = snapshot {
             apply_snapshot(&widgets_hook, snapshot.as_ref());
             if !widgets_hook.borrow().applied {
                 let widgets_retry = Rc::clone(&widgets_hook);
                 glib::timeout_add_local_once(SNAPSHOT_RETRY, move || {
-                    spawn_snapshot_loader(&widgets_retry);
+                    spawn_snapshot_loader(&widgets_retry, generation);
                 });
             }
         }
@@ -314,7 +342,7 @@ fn spawn_snapshot_loader(widgets: &Rc<RefCell<PanelWidgets>>) {
         apply_snapshot(widgets, None);
         let widgets_retry = Rc::clone(widgets);
         glib::timeout_add_local_once(SNAPSHOT_RETRY, move || {
-            spawn_snapshot_loader(&widgets_retry);
+            spawn_snapshot_loader(&widgets_retry, generation);
         });
     }
 }

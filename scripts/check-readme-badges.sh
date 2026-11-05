@@ -8,8 +8,8 @@ set -euo pipefail
 MANIFEST="${1:-Cargo.toml}"
 README="${2:-README.md}"
 
-rust_version=$(grep '^rust-version' "$MANIFEST" | head -1 | sed 's/.*"\(.*\)".*/\1/')
-license=$(grep '^license' "$MANIFEST" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+rust_version=$(grep '^rust-version' "$MANIFEST" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+license=$(grep '^license' "$MANIFEST" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
 
 if [[ -z "$rust_version" ]] || [[ -z "$license" ]]; then
     echo "error: could not read rust-version/license from ${MANIFEST}"

@@ -136,6 +136,17 @@ pub fn load_config_from_path(path: &Path) -> Result<Config> {
                 device.name
             )));
         }
+        for (app, profile) in &device.pie_profiles {
+            if profile.sectors.len() > PieConfig::MAX_SLOTS {
+                return Err(AppError::bad_request(format!(
+                    "Invalid pie config for device {:?} app {:?}: pie profiles carry at most {} \
+                     sectors",
+                    device.name,
+                    app,
+                    PieConfig::MAX_SLOTS
+                )));
+            }
+        }
     }
 
     debug!("Loaded config from {:?}", path);
@@ -301,6 +312,39 @@ mod tests {
                 .map(|p| p.sectors.len()),
             Some(6),
             "per-app pie profiles survive the round trip"
+        );
+    }
+
+    #[test]
+    fn test_load_rejects_oversized_pie_profile() {
+        let mut config = Config::default();
+        config.devices[0].pie_profiles.insert(
+            "firefox".to_string(),
+            PieProfile {
+                sectors: vec![PieSlot::default(); PieConfig::MAX_SLOTS + 1]
+            }
+        );
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let path = write_temp("pie_profile_oversized.toml", &toml_str);
+        let error = load_config_from_path(path.as_path())
+            .expect_err("an oversized per-app ring must be rejected");
+        let text = error.to_string();
+        assert!(
+            text.contains("firefox") && text.contains("sectors"),
+            "the rejection must name the offending app and field, got: {text}"
+        );
+
+        config.devices[0].pie_profiles.insert(
+            "firefox".to_string(),
+            PieProfile {
+                sectors: vec![PieSlot::default(); PieConfig::MAX_SLOTS]
+            }
+        );
+        let toml_str = toml::to_string(&config).unwrap();
+        assert!(
+            load_config_from_path(write_temp("pie_profile_legal.toml", &toml_str).as_path())
+                .is_ok()
         );
     }
 
