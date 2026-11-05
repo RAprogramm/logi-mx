@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/RAprogramm/logi-mx/workflows/CI/badge.svg)](https://github.com/RAprogramm/logi-mx/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/RAprogramm/logi-mx/branch/main/graph/badge.svg)](https://codecov.io/gh/RAprogramm/logi-mx)
+[![CodSpeed Badge](https://img.shields.io/endpoint?url=https://app.codspeed.io//badge.json)](https://app.codspeed.io//RAprogramm/logi-mx?utm_source=badge)
 [![AUR version](https://img.shields.io/aur/version/logi-mx)](https://aur.archlinux.org/packages/logi-mx)
 [![AUR votes](https://img.shields.io/aur/votes/logi-mx)](https://aur.archlinux.org/packages/logi-mx)
 [![AUR version (bin)](https://img.shields.io/aur/version/logi-mx-bin)](https://aur.archlinux.org/packages/logi-mx-bin)
@@ -573,6 +574,15 @@ This driver implements the Logitech HID++ 2.0 protocol:
 | 0x2121 | Hi-Res Wheel | High-resolution scrolling |
 
 </details>
+
+## Benchmarks
+
+Performance is tracked continuously with
+[CodSpeed](https://app.codspeed.io/RAprogramm/logi-mx?utm_source=badge): CPU
+instruction counts and heap allocations are measured on every pull request and
+on `main`, with a regression report on each PR. Allocation budgets run as
+deterministic tests. See [BENCHMARKS.md](BENCHMARKS.md) for local runs,
+comparison workflow and CI policy.
 
 ## Acknowledgments
 

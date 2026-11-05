@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+codspeed = []
+
 [dependencies]
 masterror.workspace = true
 hidapi.workspace = true
@@ -18,7 +21,16 @@ toml.workspace = true
 serde_json = "1"
 proptest.workspace = true
 criterion.workspace = true
+codspeed-criterion-compat.workspace = true
 
 [[bench]]
 name = "packet"
+harness = false
+
+[[bench]]
+name = "codec"
+harness = false
+
+[[bench]]
+name = "config"
 harness = false

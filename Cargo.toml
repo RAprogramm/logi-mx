@@ -27,6 +27,7 @@ evdev = "0.13"
 clap = { version = "4", features = ["derive"] }
 proptest = "1"
 criterion = "0.8"
+codspeed-criterion-compat = "6"
 gtk4 = { version = "0.11", features = ["v4_14", "v4_24"] }
 libadwaita = { version = "0.9", features = ["v1_6", "v1_10"] }
 notify-rust = { version = "4", default-features = false, features = ["z"] }

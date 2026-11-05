@@ -11,6 +11,7 @@ rust-version.workspace = true
 default = ["tray", "notify"]
 tray = ["dep:ksni", "dep:resvg", "dep:usvg"]
 notify = ["dep:notify-rust"]
+codspeed = []
 
 [dependencies]
 logi-mx-driver.workspace = true
@@ -34,3 +35,11 @@ sd-notify = "0.5"
 [lib]
 name = "logi_mx_daemon"
 path = "src/lib.rs"
+
+[dev-dependencies]
+criterion.workspace = true
+codspeed-criterion-compat.workspace = true
+
+[[bench]]
+name = "hot"
+harness = false

@@ -171,7 +171,7 @@ jobs:
         run: cargo build --release --all-features --workspace
 
   bench:
-    name: Benchmarks
+    name: Benchmarks (compile)
     needs: [clippy]
     runs-on: ubuntu-latest
     container:
@@ -189,8 +189,8 @@ jobs:
             base-devel rust gtk4 libadwaita hidapi systemd dbus git
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
-      - name: Run benchmarks
-        run: cargo bench --all-features --workspace --no-fail-fast
+      - name: Compile benchmarks
+        run: cargo bench --all-features --workspace --no-run
 
   test:
     name: Test
