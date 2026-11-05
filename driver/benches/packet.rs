@@ -6,6 +6,10 @@
 //! The codec sits on the hot path of every device command, so encode and
 //! decode costs are tracked explicitly.
 
+// `criterion_group!` from the CodSpeed compat layer holds a guard that trips
+// this nursery lint inside the generated function.
+#![allow(clippy::significant_drop_tightening)]
+
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};

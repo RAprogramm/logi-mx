@@ -22,3 +22,7 @@ criterion.workspace = true
 [[bench]]
 name = "packet"
 harness = false
+
+[[bench]]
+name = "config"
+harness = false
