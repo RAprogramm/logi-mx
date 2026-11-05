@@ -26,7 +26,7 @@ jobs:
     name: YAML Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install yamllint
         run: pip install yamllint
       - name: Lint YAML files
@@ -36,7 +36,7 @@ jobs:
     name: REUSE Compliance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: REUSE Compliance Check
         uses: fsfe/reuse-action@v6
 
@@ -53,7 +53,7 @@ jobs:
     needs: [yaml-lint, reuse]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
@@ -67,7 +67,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -92,7 +92,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -103,10 +103,10 @@ jobs:
             base-devel rustup gtk4 libadwaita gtk4-layer-shell \
           hidapi systemd dbus git
           rustup default stable
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin
           key: cargo-bin-deny
@@ -126,7 +126,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -137,7 +137,7 @@ jobs:
             base-devel rustup gtk4 libadwaita gtk4-layer-shell \
           hidapi systemd dbus git
           rustup default stable
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Determine MSRV
         id: msrv
@@ -167,7 +167,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -190,7 +190,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -213,7 +213,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -226,7 +226,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin
           key: cargo-bin-nextest
@@ -241,7 +241,7 @@ jobs:
         run: cargo test --doc --all-features --workspace
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-results
           path: target/nextest/ci/junit.xml
@@ -254,7 +254,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -266,10 +266,10 @@ jobs:
           hidapi systemd dbus git
           rustup default stable
           rustup component add llvm-tools-preview
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin
           key: cargo-bin-llvm-cov
@@ -283,7 +283,7 @@ jobs:
           cargo llvm-cov --all-features --workspace
           --lcov --output-path lcov.info
       - name: Upload coverage data
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-data
           path: lcov.info
@@ -294,12 +294,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download test results
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: test-results
           path: ./artifacts
       - name: Download coverage data
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: coverage-data
           path: ./artifacts
@@ -309,7 +309,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./artifacts/junit.xml
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./artifacts/lcov.info
@@ -319,10 +319,10 @@ jobs:
     needs: [clippy]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo binaries
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin
           key: cargo-bin-audit
@@ -341,7 +341,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -354,7 +354,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --all-features --workspace
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: docs
           path: target/doc/
@@ -388,7 +388,7 @@ jobs:
       new_version: ${{ steps.bump.outputs.new_version }}
       version_bumped: ${{ steps.bump.outputs.version_bumped }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -589,7 +589,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Cache pacman packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /var/cache/pacman/pkg
           key: pacman-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -629,7 +629,7 @@ jobs:
           FILE="logi-mx-${VERSION}-x86_64-linux-gnu.tar.gz"
           sha256sum "${FILE}" > "${FILE}.sha256"
           cat "${FILE}.sha256"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: release-archive
           path: |
@@ -644,11 +644,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: v${{ needs.release-gate.outputs.version }}
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: release-archive
       - name: Install git-cliff
@@ -678,7 +678,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: v${{ needs.release-gate.outputs.version }}
       - name: Calculate source checksum
@@ -730,7 +730,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: v${{ needs.release-gate.outputs.version }}
       - name: Download and calculate checksum
@@ -758,7 +758,7 @@ jobs:
               -p PKGBUILD.bin > .SRCINFO.bin
           "
       - name: Publish
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: logi-mx-bin
           pkgbuild: ./PKGBUILD.bin
@@ -794,7 +794,7 @@ jobs:
       needs_publish: ${{ steps.check.outputs.needs_publish }}
       current_version: ${{ steps.check.outputs.current_version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Check versions
         id: check
         run: |
@@ -826,7 +826,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Generate .SRCINFO
         run: |
           docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
@@ -871,7 +871,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Download and calculate checksum
         run: |
           VERSION="${{ needs.check-aur-sync.outputs.current_version }}"
@@ -897,7 +897,7 @@ jobs:
               -p PKGBUILD.bin > .SRCINFO.bin
           "
       - name: Publish logi-mx-bin
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: logi-mx-bin
           pkgbuild: ./PKGBUILD.bin
@@ -917,7 +917,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Wait for AUR sync
         run: sleep 30
       - name: Check AUR versions
