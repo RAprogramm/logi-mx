@@ -36,6 +36,14 @@ jobs:
       - name: REUSE Compliance Check
         uses: fsfe/reuse-action@v6
 
+  readme-badges:
+    name: README Badges
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check static badges against the manifest
+        run: bash scripts/check-readme-badges.sh
+
   format:
     name: Format
     needs: [yaml-lint, reuse]
