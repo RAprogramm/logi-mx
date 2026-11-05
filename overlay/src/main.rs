@@ -226,10 +226,10 @@ fn build_overlay(app: &Application) {
     let areas: Rc<RefCell<Vec<DrawingArea>>> =
         Rc::new(RefCell::new(Vec::with_capacity(monitors.len())));
     let tracked: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    for (index, (monitor, geom)) in monitors.iter().enumerate() {
+    for (monitor, geom) in &monitors {
         areas
             .borrow_mut()
-            .push(monitor_window(app, monitor, *geom, index, &stage));
+            .push(monitor_window(app, monitor, *geom, &stage, &tracked));
         tracked
             .borrow_mut()
             .push(monitor.connector().unwrap_or_default().to_string());
@@ -264,24 +264,67 @@ fn watch_monitors(
     let tracked = Rc::clone(tracked);
     display.monitors().connect_items_changed(move |_, _, _, _| {
         let geometries = monitor_geometries();
-        stage.borrow_mut().monitors = geometries.iter().map(|(_, geom)| *geom).collect();
+        let new_keys: Vec<String> = geometries
+            .iter()
+            .map(|(monitor, _)| monitor.connector().unwrap_or_default().to_string())
+            .collect();
         let mut keys = tracked.borrow_mut();
-        keys.retain(|key| {
-            geometries
-                .iter()
-                .any(|(monitor, _)| &monitor.connector().unwrap_or_default() == key)
-        });
+        let mut stage_state = stage.borrow_mut();
+        let new_monitors: Vec<_> = geometries.iter().map(|(_, geom)| *geom).collect();
+        reindex_scene(&mut stage_state.scene, &keys, &new_keys, &new_monitors);
+        if let Some((scene, _)) = &mut stage_state.fading {
+            reindex_scene(scene, &keys, &new_keys, &new_monitors);
+        }
+        stage_state.monitors = new_monitors;
+        drop(stage_state);
+
+        let mut old: Vec<_> = std::mem::take(&mut *keys)
+            .into_iter()
+            .zip(std::mem::take(&mut *areas.borrow_mut()))
+            .collect();
+        keys.clone_from(&new_keys);
+        drop(keys);
+        let mut current = areas.borrow_mut();
         for (index, (monitor, geom)) in geometries.iter().enumerate() {
-            let key = monitor.connector().unwrap_or_default().to_string();
-            if keys.contains(&key) {
-                continue;
+            if let Some(pos) = old.iter().position(|(key, _)| key == &new_keys[index]) {
+                current.push(old.remove(pos).1);
+            } else {
+                current.push(monitor_window(&app, monitor, *geom, &stage, &tracked));
             }
-            areas
-                .borrow_mut()
-                .push(monitor_window(&app, monitor, *geom, index, &stage));
-            keys.push(key);
+        }
+        for (_, area) in old {
+            if let Some(window) = area
+                .root()
+                .and_then(|root| root.downcast::<ApplicationWindow>().ok())
+            {
+                window.close();
+            }
+        }
+        for area in current.iter() {
+            area.queue_draw();
         }
     });
+}
+
+/// Updates a scene's monitor index after the monitor list changes.
+fn reindex_scene(
+    scene: &mut PieScene,
+    old_keys: &[String],
+    new_keys: &[String],
+    monitors: &[MonitorGeom]
+) {
+    if !scene.is_active() {
+        return;
+    }
+    if let Some(index) = old_keys
+        .get(scene.monitor)
+        .and_then(|key| new_keys.iter().position(|current| current == key))
+    {
+        scene.monitor = index;
+        scene.scale = monitors[index].scale.max(1);
+    } else {
+        scene.reset();
+    }
 }
 
 /// Creates the layer-shell window and drawing surface for one monitor.
@@ -289,8 +332,8 @@ fn monitor_window(
     app: &Application,
     monitor: &gdk::Monitor,
     geom: MonitorGeom,
-    index: usize,
-    stage: &Rc<RefCell<Stage>>
+    stage: &Rc<RefCell<Stage>>,
+    tracked: &Rc<RefCell<Vec<String>>>
 ) -> DrawingArea {
     let window = ApplicationWindow::builder().application(app).build();
     window.add_css_class("logi-mx-pie");
@@ -314,7 +357,16 @@ fn monitor_window(
     let area = DrawingArea::builder().hexpand(true).vexpand(true).build();
     area.set_can_target(false);
     let draw_stage = Rc::clone(stage);
+    let draw_tracked = Rc::clone(tracked);
+    let key = monitor.connector().unwrap_or_default().to_string();
     area.set_draw_func(move |_area, cr, _width, _height| {
+        let Some(index) = draw_tracked
+            .borrow()
+            .iter()
+            .position(|current| current == &key)
+        else {
+            return;
+        };
         let mut stage = draw_stage.borrow_mut();
         if stage.scene.is_active() {
             let progress = if stage.scene.charging {
@@ -409,6 +461,9 @@ fn install_hook(
                 icons
             } = stage_ref;
             for event in &events {
+                if scene.is_same_open(event, monitors) {
+                    continue;
+                }
                 match event {
                     PieEvent::Charge {
                         ..
@@ -566,4 +621,38 @@ fn ease_out(progress: f64) -> f64 {
 /// Wraps an angle difference into `-π..=π`, the shorter way around.
 fn wrap_diff(delta: f64) -> f64 {
     (delta + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reindex_scene_tracks_surviving_monitors_and_clears_removed_ones() {
+        let old_keys = vec!["left".to_string(), "right".to_string()];
+        let new_keys = vec!["right".to_string()];
+        let monitors = vec![MonitorGeom {
+            x:      100,
+            y:      0,
+            width:  100,
+            height: 100,
+            scale:  2
+        }];
+        let mut retained = PieScene {
+            active: true,
+            monitor: 1,
+            ..PieScene::default()
+        };
+        reindex_scene(&mut retained, &old_keys, &new_keys, &monitors);
+        assert!(retained.active);
+        assert_eq!(retained.monitor, 0);
+        assert_eq!(retained.scale, 2);
+        let mut removed = PieScene {
+            active: true,
+            monitor: 0,
+            ..PieScene::default()
+        };
+        reindex_scene(&mut removed, &old_keys, &new_keys, &monitors);
+        assert!(!removed.active);
+    }
 }

@@ -247,11 +247,31 @@ impl Default for PieScene {
 }
 
 impl PieScene {
+    /// Whether an open event describes the currently active menu.
+    #[must_use]
+    pub fn is_same_open(&self, event: &PieEvent, monitors: &[MonitorGeom]) -> bool {
+        let PieEvent::Open {
+            anchor,
+            sectors
+        } = event
+        else {
+            return false;
+        };
+        self.active
+            && !self.charging
+            && anchor_monitor(*anchor, monitors).is_some_and(|index| {
+                self.monitor == index
+                    && self.anchor == logical_anchor(*anchor, &monitors[index])
+                    && self.sectors == *sectors
+            })
+    }
+
     /// Folds one daemon event into the scene.
     ///
     /// `Charge` activates the thin ring on the monitor containing the
     /// anchor; `Open` replaces the charge with the full menu and resets the
-    /// highlight. An anchor outside every monitor keeps the scene inactive.
+    /// highlight for a new menu. Repeated identical opens preserve it.
+    /// An anchor outside every monitor keeps the scene inactive.
     /// `Highlight` only moves the highlight while a menu is open, and
     /// `Close` always clears everything.
     ///
@@ -260,6 +280,9 @@ impl PieScene {
     /// * `event` - Event decoded from the daemon stream.
     /// * `monitors` - Logical geometries used to map the anchor.
     pub fn apply(&mut self, event: &PieEvent, monitors: &[MonitorGeom]) {
+        if self.is_same_open(event, monitors) {
+            return;
+        }
         match event {
             PieEvent::Charge {
                 anchor

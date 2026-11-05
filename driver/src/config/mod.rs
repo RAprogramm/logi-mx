@@ -109,7 +109,8 @@ pub fn load_config() -> Result<Config> {
 /// # Errors
 ///
 /// Returns [`masterror::AppError`] when the file cannot be read, or when
-/// its content is not valid TOML matching the [`Config`] schema.
+/// its content is not valid TOML matching the [`Config`] schema, or a
+/// device has invalid pie settings.
 ///
 /// # Examples
 ///
@@ -127,6 +128,15 @@ pub fn load_config_from_path(path: &Path) -> Result<Config> {
 
     let config: Config = toml::from_str(&content)
         .map_err(|e| AppError::bad_request("Invalid config format").with_source(e))?;
+
+    for device in &config.devices {
+        if let Some(reason) = device.pie.rejection() {
+            return Err(AppError::bad_request(format!(
+                "Invalid pie config for device {:?}: {reason}",
+                device.name
+            )));
+        }
+    }
 
     debug!("Loaded config from {:?}", path);
     Ok(config)
@@ -337,6 +347,26 @@ mod tests {
         assert!(zero_radius.rejection().is_some());
 
         assert_eq!(PieConfig::default().rejection(), None, "defaults are legal");
+    }
+
+    #[test]
+    fn load_rejects_invalid_pie_settings_for_each_device() {
+        for (field, value) in [
+            ("activation_radius", "0"),
+            ("dead_zone", "-1"),
+            ("dead_zone", "41"),
+            ("sectors", "[{},{},{},{},{},{},{},{},{}]")
+        ] {
+            let content = format!(
+                "[[devices]]\nname = \"valid\"\n[[devices]]\nname = \"invalid mouse\"\n[devices.pie]\n{field} = {value}\n"
+            );
+            let path = write_temp("invalid_pie.toml", &content);
+            let error = load_config_from_path(&path).unwrap_err().to_string();
+            assert!(error.contains("invalid mouse"), "{error}");
+            assert!(error.contains(field), "{error}");
+        }
+        let content = "[[devices]]\nname = \"valid\"\n[devices.pie]\nsectors = [{}]\n";
+        assert!(load_config_from_path(&write_temp("valid_pie.toml", content)).is_ok());
     }
 
     #[test]

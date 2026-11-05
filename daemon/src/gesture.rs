@@ -387,6 +387,10 @@ impl GestureRuntime {
             self.accumulator.begin(now);
             self.last_commit = None;
             self.set_live_bit(BTN_BIT_GESTURE, true);
+            if let Some(wheel) = &self.wheel {
+                wheel.swap(0, Ordering::Relaxed);
+            }
+            self.wheel_left = 0;
             self.pie.on_press(now);
         } else if !held && self.accumulator.is_holding() {
             debug!(pie_open = self.pie.is_open(), "gesture button released");

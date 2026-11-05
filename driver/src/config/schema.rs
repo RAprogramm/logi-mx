@@ -142,18 +142,18 @@ impl PieConfig {
     /// more slots than [`Self::MAX_SLOTS`].
     #[must_use]
     pub fn rejection(&self) -> Option<String> {
-        if self.activation_radius < 1 || self.dead_zone < 0 {
-            return Some(
-                "pie activation radius must be positive and the dead zone not negative"
-                    .to_string()
-            );
+        if self.activation_radius < 1 {
+            return Some("pie activation_radius must be positive".to_string());
+        }
+        if self.dead_zone < 0 {
+            return Some("pie dead_zone must not be negative".to_string());
         }
         if self.dead_zone > self.activation_radius {
-            return Some("pie dead zone must not exceed the activation radius".to_string());
+            return Some("pie dead_zone must not exceed activation_radius".to_string());
         }
         if self.sectors.len() > Self::MAX_SLOTS {
             return Some(format!(
-                "a pie ring carries at most {} slots",
+                "pie sectors carries at most {} slots",
                 Self::MAX_SLOTS
             ));
         }

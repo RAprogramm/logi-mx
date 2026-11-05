@@ -412,7 +412,9 @@ jobs:
 
       - name: Install git-cliff
         if: steps.bump.outputs.version_bumped == 'true'
-        uses: baptiste0928/cargo-install@v3
+        # baptiste0928/cargo-install v3.5.0
+        uses: >-
+          baptiste0928/cargo-install@8195d4f734a149db85385bb4102b42efcd373759
         with:
           crate: git-cliff
 
@@ -458,9 +460,13 @@ jobs:
           REPO="${GITHUB_REPOSITORY}"
           URL="https://github.com/${REPO}/archive/v${NEW_VERSION}.tar.gz"
           SHA=""
+          ARCHIVE=$(mktemp)
+          trap 'rm -f "$ARCHIVE"' EXIT
           for _ in 1 2 3 4 5 6 7 8 9 10; do
-            SHA=$(curl -fsSL "$URL" | sha256sum | cut -d' ' -f1 || true)
-            [ -n "$SHA" ] && break
+            if curl -fsSL "$URL" -o "$ARCHIVE"; then
+              SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+              break
+            fi
             sleep 5
           done
           if [ -z "$SHA" ]; then
@@ -599,7 +605,9 @@ jobs:
         with:
           name: release-archive
       - name: Install git-cliff
-        uses: baptiste0928/cargo-install@v3
+        # baptiste0928/cargo-install v3.5.0
+        uses: >-
+          baptiste0928/cargo-install@8195d4f734a149db85385bb4102b42efcd373759
         with:
           crate: git-cliff
       - name: Generate changelog
@@ -625,6 +633,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release-gate.outputs.version }}
+      - name: Calculate source checksum
+        run: |
+          VERSION="${{ needs.release-gate.outputs.version }}"
+          URL="https://github.com/RAprogramm/logi-mx/archive/v${VERSION}.tar.gz"
+          ARCHIVE=$(mktemp)
+          trap 'rm -f "$ARCHIVE"' EXIT
+          curl -fsSL "$URL" -o "$ARCHIVE"
+          SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+          sed -i "s/^sha256sums=.*/sha256sums=('${SHA}')/" PKGBUILD
       - name: Generate .SRCINFO
         run: |
           docker run --rm -v "$PWD:/pkg" archlinux:latest bash -c "
