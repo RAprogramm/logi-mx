@@ -44,7 +44,7 @@ jobs:
     name: README Badges
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Check static badges against the manifest
         run: bash scripts/check-readme-badges.sh
 
@@ -77,7 +77,7 @@ jobs:
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita gtk4-layer-shell \
           hidapi systemd dbus git
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: >-
@@ -177,7 +177,7 @@ jobs:
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita gtk4-layer-shell \
           hidapi systemd dbus git
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release --all-features --workspace
@@ -200,7 +200,7 @@ jobs:
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita gtk4-layer-shell \
           hidapi systemd dbus git
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Compile benchmarks
         run: cargo bench --all-features --workspace --no-run
@@ -223,7 +223,7 @@ jobs:
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita gtk4-layer-shell \
           hidapi systemd dbus git
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Cache cargo binaries
         uses: actions/cache@v6
@@ -351,7 +351,7 @@ jobs:
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita gtk4-layer-shell \
           hidapi systemd dbus git
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --all-features --workspace
       - uses: actions/upload-artifact@v7
@@ -564,7 +564,7 @@ jobs:
           fi
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: "v${{ steps.version.outputs.version }}"
 
@@ -599,7 +599,7 @@ jobs:
           pacman -S --noconfirm \
             base-devel rust gtk4 libadwaita gtk4-layer-shell \
           hidapi systemd dbus git
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: v${{ needs.release-gate.outputs.version }}
       - uses: Swatinem/rust-cache@v2
